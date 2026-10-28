@@ -1,0 +1,76 @@
+# TAGLINE
+
+Cryptographically sign SIF container images
+
+# TLDR
+
+Sign an image with the **default PGP key**
+
+```apptainer sign [path/to/image.sif]```
+
+Choose **which key in the keyring** to sign with
+
+```apptainer sign --keyidx [1] [path/to/image.sif]```
+
+Sign with a **PEM private key** rather than PGP
+
+```apptainer sign --key [path/to/private.pem] [path/to/image.sif]```
+
+Sign **every object** the image contains
+
+```apptainer sign --all [path/to/image.sif]```
+
+Sign one **object group**
+
+```apptainer sign --group-id [1] [path/to/image.sif]```
+
+Sign a **single object** by its SIF id
+
+```apptainer sign --sif-id [3] [path/to/image.sif]```
+
+# SYNOPSIS
+
+**apptainer sign** [_options_] _image.sif_
+
+# DESCRIPTION
+
+**apptainer sign** adds digital signatures to SIF container images, enabling verification of image integrity and authenticity. Signatures can use PGP keys or X.509 certificates.
+
+Signing containers is essential for establishing trust in shared container images and meeting security requirements in production environments.
+
+# PARAMETERS
+
+**--key** _file_
+> Path to a private key file for signing
+
+**-k, --keyidx** _index_
+> Index of the PGP key to use from the keyring
+
+**-g, --group-id** _id_
+> Sign only a specific object group within the SIF
+
+**-i, --sif-id** _id_
+> Sign only a specific object by ID within the SIF
+
+# CAVEATS
+
+A PGP key pair or X.509 certificate must be configured before signing. The private key must be kept secure; compromised keys should be revoked immediately.
+
+# INSTALL
+
+```dnf: sudo dnf install apptainer```
+
+```pacman: sudo pacman -S apptainer```
+
+```apk: sudo apk add apptainer```
+
+```zypper: sudo zypper install apptainer```
+
+```brew: brew install apptainer```
+
+```nix: nix profile install nixpkgs#apptainer```
+
+<!-- packages: 2026-07-22 -->
+# SEE ALSO
+
+[apptainer](/man/apptainer)(1), [apptainer-verify](/man/apptainer-verify)(1), [apptainer-pull](/man/apptainer-pull)(1), [gpg](/man/gpg)(1)

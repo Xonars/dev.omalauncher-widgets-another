@@ -1,0 +1,74 @@
+# TAGLINE
+
+Convert GIF images to PNM format
+
+# TLDR
+
+**Convert GIF to PNM**
+
+```giftopnm [input.gif] > [output.pnm]```
+
+**Convert specific frame**
+
+```giftopnm --image [2] [input.gif] > [output.pnm]```
+
+**Show comments**
+
+```giftopnm --comments [input.gif]```
+
+**Output all frames** of an animated GIF
+
+```giftopnm --all-images [input.gif] > [output.pnm]```
+
+**Verbose** output showing image details
+
+```giftopnm --verbose [input.gif] > [output.pnm]```
+
+# SYNOPSIS
+
+**giftopnm** [_options_] [_file_]
+
+# PARAMETERS
+
+**--image** _num_
+> Select specific image/frame.
+
+**--comments**
+> Print image comments.
+
+**--all-images**
+> Output all frames.
+
+**--verbose**
+> Display information about the GIF input.
+
+**--repair**
+> Try to recover corrupted GIF data.
+
+# DESCRIPTION
+
+**giftopnm** converts GIF images into the Portable Any Map (PNM) format family, which includes PBM (bitmap), PGM (grayscale), and PPM (color) formats. It is a core component of the Netpbm image processing toolkit.
+
+The tool automatically selects the appropriate output format based on the input GIF's color characteristics. For animated GIFs, it can extract individual frames or output all frames sequentially. PNM formats are uncompressed, making them ideal intermediate formats for image processing pipelines.
+
+# INSTALL
+
+```apt: sudo apt install netpbm```
+
+```dnf: sudo dnf install netpbm```
+
+```pacman: sudo pacman -S netpbm```
+
+```apk: sudo apk add netpbm```
+
+```zypper: sudo zypper install netpbm```
+
+```brew: brew install netpbm```
+
+```nix: nix profile install nixpkgs#netpbm```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[ppmtogif](/man/ppmtogif)(1), [pamtogif](/man/pamtogif)(1), [pnmtopng](/man/pnmtopng)(1), [pnmtojpeg](/man/pnmtojpeg)(1), [gifsicle](/man/gifsicle)(1), [convert](/man/convert)(1)

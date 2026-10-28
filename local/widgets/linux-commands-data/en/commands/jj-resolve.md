@@ -1,0 +1,74 @@
+# TAGLINE
+
+helps resolve merge conflicts
+
+# TLDR
+
+**Resolve conflicts**
+
+```jj resolve```
+
+**Resolve specific file**
+
+```jj resolve [path/to/file]```
+
+**List conflicted files**
+
+```jj resolve --list```
+
+**Resolve with specific tool**
+
+```jj resolve --tool [meld]```
+
+# SYNOPSIS
+
+**jj resolve** [_options_] [_path_]
+
+# PARAMETERS
+
+_PATH_
+> Specific file to resolve.
+
+**-l**, **--list**
+> List files with conflicts instead of launching a merge tool.
+
+**--tool** _NAME_
+> Merge tool to use. The tool must be configured in `ui.merge-editor` or `merge-tools.<name>`. Mutually exclusive with **--list**.
+
+**-r**, **--revision** _REVSET_
+> Revision whose conflicts should be resolved (default `@`).
+
+**--help**
+> Display help information.
+
+# DESCRIPTION
+
+**jj resolve** helps resolve merge conflicts. It launches a merge tool for conflicted files.
+
+The command identifies and processes files with conflict markers. Jujutsu tracks conflicts as first-class states.
+
+# CAVEATS
+
+Subcommand of jj. Requires configured merge tool. Conflicts persist until resolved.
+
+# HISTORY
+
+jj resolve is part of **Jujutsu**, supporting its unique approach to treating conflicts as normal repository states.
+
+# INSTALL
+
+```pacman: sudo pacman -S jujutsu```
+
+```apk: sudo apk add jujutsu```
+
+```zypper: sudo zypper install jujutsu```
+
+```brew: brew install jujutsu```
+
+```nix: nix profile install nixpkgs#jujutsu```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[jj](/man/jj)(1), [jj-squash](/man/jj-squash)(1), [jj-status](/man/jj-status)(1), [jj-new](/man/jj-new)(1), [jj-describe](/man/jj-describe)(1)

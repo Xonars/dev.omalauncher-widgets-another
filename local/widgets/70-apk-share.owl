@@ -1,0 +1,81 @@
+app "APK Share" {
+  title: "APK Share"
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 17 24 7l18 10v23H6zM6 17l18 10 18-10M24 27v13"/><path d="M24 3v14m-5-5 5 5 5-5"/></svg>"""
+  meta { owl: 8; description: "Install local APK files directly on Android; optional APK-only HTTP sharing."; version: "2.0"; license: "MIT"; category: "dev" }
+  requires { pacman: ["python"] }
+  state directory = "~/APK" persist
+  state bindAddress = "127.0.0.1" persist
+  state operation = ""
+  source server = cmd("python ~/.config/omalauncher/widgets/apk-share/backend.py status --directory ${sh(directory)}") every 2s json timeout 30s
+  source listing = cmd("python ~/.config/omalauncher/widgets/apk-share/backend.py list --directory ${sh(directory)}") every 60s json timeout 30s
+  let address = server.url ?? "http://127.0.0.1:8765/"
+  let running = server.status == "Running"
+  let statusColor = running ? green : server.status == "Error" ? red : muted
+
+  component Rule() {
+    Spacer { height: 1; fill: width; background: alpha(muted, 0.25) }
+  }
+  component Heading(label) {
+    Text { text: label; style: label; color: accent }
+  }
+  component Controls() {
+    Row {
+      gap: 6
+      wrap: true
+      Button { text: "Start"; onTap: { operation = run("python ~/.config/omalauncher/widgets/apk-share/backend.py start --directory ${sh(directory)} --bind ${sh(bindAddress)}"); refresh() } }
+      Button { text: "Stop"; color: muted; onTap: { operation = run("python ~/.config/omalauncher/widgets/apk-share/backend.py stop"); refresh() } }
+      Button { text: "Refresh"; color: muted; onTap: refresh() }
+      Button { text: "Copy URL"; color: accent; onTap: copy(address) }
+    }
+  }
+  component FileList(limit = 4, details = true) {
+    Column {
+      gap: 10
+      if len(listing.files ?? []) == 0 {
+        Text { text: listing.error != "" && listing.error != null ? listing.error : "APK не найдены · укажите каталог"; style: small; color: muted }
+      }
+      for apk in take(listing.files ?? [], limit) {
+        Column {
+          gap: 3
+          Text { text: apk.name; style: body; color: foreground; maxLines: 1 }
+          Text { text: "${fmtBytes(apk.size)} · ${fmtTime(apk.mtime, "dd MMM yyyy HH:mm")}"; style: small; color: muted; maxLines: 1 }
+          if details {
+            Text { text: apk.path; style: small; color: muted; maxLines: 1 }
+          }
+          if running && listing.directory == server.directory {
+            Button { text: "Download"; onTap: url(address + sub(apk.url, 1, len(apk.url))) }
+          }
+          Rule { }
+        }
+      }
+    }
+  }
+    Column {
+      fill: true
+      padding: 12
+      scroll: true
+      gap: 12
+      Text { text: "Нажмите Start в разделе раздачи, затем Download у APK. Откройте скачанный файл в Android и подтвердите установку."; style: small; color: muted }
+      Button { text: "Обновить список"; onTap: refresh() }
+      Heading { label: "КАТАЛОГ APK" }
+      Text { text: "Путь к каталогу (абсолютный или ~/...)"; style: small; color: muted }
+      Input { color: foreground; text: directory; placeholder: "~/projects/my-app"; onChange: directory = value; onSubmit: { directory = trim(value); refresh() } }
+      Rule { }
+      Text { text: "${server.status ?? "…"} · port 8765"; style: small; color: statusColor }
+      Text { text: address; color: accent; onTap: url(address) }
+      Controls { }
+      if server.error != "" && server.error != null { Text { text: server.error; style: small; color: red } }
+      Text { text: "Listen address · default 127.0.0.1"; style: small; color: muted }
+      Input { color: foreground; text: bindAddress; placeholder: "127.0.0.1"; onChange: bindAddress = value; onSubmit: bindAddress = trim(value) }
+      Text { text: "Press Start to apply changes and enable file links. A different address may expose APKs to your network. For 0.0.0.0 use the Linux host IP in Android's browser."; style: small; color: muted }
+      Text { text: "Serving: ${server.directory ?? "—"}"; style: small; color: muted }
+      Button { text: "Open in Android browser"; onTap: url(address) }
+      Rule { }
+      Heading { label: "APK ФАЙЛЫ" }
+      Text { text: "${listing.count ?? 0} APK · сначала новые"; style: small; color: muted }
+      FileList { limit: 150 }
+      if (listing.count ?? 0) > 150 {
+        Text { text: "Показаны последние 150 файлов. Укажите более точный каталог или откройте весь список через браузер."; style: small; color: muted }
+      }
+    }
+}

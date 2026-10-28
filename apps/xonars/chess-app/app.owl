@@ -1,0 +1,1144 @@
+app "Шахматы" {
+  // Adapted from widgets/vitalii-khomenko/chess, MIT, version 1.7.
+  title: "Шахматы"
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M24 4v10m-5-5h10M18 18h12l3 9-4 9H19l-4-9 3-9ZM17 36h14l4 7H13l4-7Z"/></svg>"""
+  meta { description: "Full chess in a terminal tile: all rules, picture board, tap and keyboard play, six computer levels or two players, hints, undo, clock, pause and a saved game. Node.js only."; version: "1.7"; license: "MIT"; category: "games"; owl: 8 }
+  requires { pacman: ["nodejs"] }
+
+  // The game is one Node.js file that this command writes to ~/.cache/owl-chess/chess.js and starts.
+  // The board is a sixel picture sized from the terminal's real cell size; the small font keeps the text and buttons compact.
+  // The engine searches in a worker thread, so the screen stays responsive while it thinks.
+  Terminal {
+    fontSize: 14
+    command: """
+mkdir -p ~/.cache/owl-chess && cat > ~/.cache/owl-chess/chess.js <<'CHESS_JS_EOF'
+/* ================= chess engine: rules, move generation, search ================= */
+// Pieces: white 1..6 (P N B R Q K), black = white | 8. Squares: a1 = 0 ... h8 = 63.
+const PW = 1, NW = 2, BW = 3, RW = 4, QW = 5, KW = 6;
+const CR_WK = 1, CR_WQ = 2, CR_BK = 4, CR_BQ = 8;
+const bd = new Int8Array(64);
+let side = 0, castle = 0, ep = -1, half = 0, full = 1, h1 = 0, h2 = 0;
+const kingSq = [4, 60];
+const sqName = s => 'abcdefgh'[s & 7] + ((s >> 3) + 1);
+
+// ---- precomputed tables
+const knightT = [], kingT = [], pawnAtk = [[], []], rays = [[], [], [], [], [], [], [], []];
+const DIRS = [[1, 1], [1, -1], [-1, 1], [-1, -1], [1, 0], [-1, 0], [0, 1], [0, -1]];
+for (let s = 0; s < 64; s++) {
+  const f = s & 7, r = s >> 3;
+  knightT[s] = []; kingT[s] = []; pawnAtk[0][s] = []; pawnAtk[1][s] = [];
+  for (const [df, dr] of [[1, 2], [2, 1], [2, -1], [1, -2], [-1, -2], [-2, -1], [-2, 1], [-1, 2]]) {
+    const nf = f + df, nr = r + dr; if (nf >= 0 && nf < 8 && nr >= 0 && nr < 8) knightT[s].push(nr * 8 + nf);
+  }
+  for (let df = -1; df <= 1; df++) for (let dr = -1; dr <= 1; dr++) {
+    if (!df && !dr) continue; const nf = f + df, nr = r + dr; if (nf >= 0 && nf < 8 && nr >= 0 && nr < 8) kingT[s].push(nr * 8 + nf);
+  }
+  for (const df of [-1, 1]) {
+    if (f + df >= 0 && f + df < 8) { if (r < 7) pawnAtk[0][s].push((r + 1) * 8 + f + df); if (r > 0) pawnAtk[1][s].push((r - 1) * 8 + f + df); }
+  }
+  for (let d = 0; d < 8; d++) {
+    const list = []; let nf = f + DIRS[d][0], nr = r + DIRS[d][1];
+    while (nf >= 0 && nf < 8 && nr >= 0 && nr < 8) { list.push(nr * 8 + nf); nf += DIRS[d][0]; nr += DIRS[d][1]; }
+    rays[d][s] = list;
+  }
+}
+const cMask = new Uint8Array(64).fill(15);
+cMask[0] = 15 & ~CR_WQ; cMask[4] = 15 & ~(CR_WK | CR_WQ); cMask[7] = 15 & ~CR_WK;
+cMask[56] = 15 & ~CR_BQ; cMask[60] = 15 & ~(CR_BK | CR_BQ); cMask[63] = 15 & ~CR_BK;
+
+// ---- zobrist (two independent 32-bit halves)
+let seed = 0x2545F491;
+const rnd = () => { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; return seed | 0; };
+const zP1 = new Int32Array(16 * 64), zP2 = new Int32Array(16 * 64), zC1 = new Int32Array(16), zC2 = new Int32Array(16), zE1 = new Int32Array(8), zE2 = new Int32Array(8);
+for (let i = 0; i < zP1.length; i++) { zP1[i] = rnd(); zP2[i] = rnd(); }
+for (let i = 0; i < 16; i++) { zC1[i] = rnd(); zC2[i] = rnd(); }
+for (let i = 0; i < 8; i++) { zE1[i] = rnd(); zE2[i] = rnd(); }
+const zS1 = rnd(), zS2 = rnd();
+
+function computeHash() {
+  h1 = 0; h2 = 0;
+  for (let s = 0; s < 64; s++) if (bd[s]) { h1 ^= zP1[bd[s] * 64 + s]; h2 ^= zP2[bd[s] * 64 + s]; }
+  h1 ^= zC1[castle]; h2 ^= zC2[castle];
+  if (ep >= 0) { h1 ^= zE1[ep & 7]; h2 ^= zE2[ep & 7]; }
+  if (side) { h1 ^= zS1; h2 ^= zS2; }
+}
+
+const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+const PCH = { P: 1, N: 2, B: 3, R: 4, Q: 5, K: 6 };
+function setFen(fen) {
+  const p = fen.trim().split(/\s+/); bd.fill(0);
+  const rows = p[0].split('/'); if (rows.length !== 8) throw new Error('bad fen');
+  for (let r = 0; r < 8; r++) {
+    let f = 0;
+    for (const ch of rows[r]) {
+      if (ch >= '1' && ch <= '8') f += +ch;
+      else { const u = ch.toUpperCase(); const t = PCH[u]; if (!t || f > 7) throw new Error('bad fen'); const sq = (7 - r) * 8 + f++; bd[sq] = t | (ch === u ? 0 : 8); if (t === 6) kingSq[ch === u ? 0 : 1] = sq; }
+    }
+  }
+  side = p[1] === 'b' ? 1 : 0; castle = 0;
+  for (const ch of (p[2] || '-')) castle |= ch === 'K' ? CR_WK : ch === 'Q' ? CR_WQ : ch === 'k' ? CR_BK : ch === 'q' ? CR_BQ : 0;
+  ep = p[3] && p[3] !== '-' ? (p[3].charCodeAt(0) - 97) + (+p[3][1] - 1) * 8 : -1;
+  half = +(p[4] || 0); full = +(p[5] || 1); sp = 0; computeHash();
+}
+function getFen() {
+  let s = '';
+  for (let r = 7; r >= 0; r--) {
+    let e = 0;
+    for (let f = 0; f < 8; f++) {
+      const p = bd[r * 8 + f];
+      if (!p) { e++; continue; } if (e) { s += e; e = 0; }
+      const c = 'PNBRQK'[(p & 7) - 1]; s += p & 8 ? c.toLowerCase() : c;
+    }
+    if (e) s += e; if (r) s += '/';
+  }
+  const c = (castle & 1 ? 'K' : '') + (castle & 2 ? 'Q' : '') + (castle & 4 ? 'k' : '') + (castle & 8 ? 'q' : '');
+  return s + ' ' + (side ? 'b' : 'w') + ' ' + (c || '-') + ' ' + (ep >= 0 ? sqName(ep) : '-') + ' ' + half + ' ' + full;
+}
+
+function attacked(sq, by) {
+  const c = by << 3;
+  const pa = pawnAtk[1 - by][sq]; for (let i = 0; i < pa.length; i++) if (bd[pa[i]] === (PW | c)) return true;
+  const kn = knightT[sq]; for (let i = 0; i < kn.length; i++) if (bd[kn[i]] === (NW | c)) return true;
+  const kg = kingT[sq]; for (let i = 0; i < kg.length; i++) if (bd[kg[i]] === (KW | c)) return true;
+  for (let d = 0; d < 4; d++) { const ray = rays[d][sq]; for (let i = 0; i < ray.length; i++) { const p = bd[ray[i]]; if (p) { if (p === (BW | c) || p === (QW | c)) return true; break; } } }
+  for (let d = 4; d < 8; d++) { const ray = rays[d][sq]; for (let i = 0; i < ray.length; i++) { const p = bd[ray[i]]; if (p) { if (p === (RW | c) || p === (QW | c)) return true; break; } } }
+  return false;
+}
+const inCheck = () => attacked(kingSq[side], 1 - side);
+
+// ---- move generation. move = from | to<<6 | promo<<12 | flags<<15 (1 capture, 2 en passant, 4 castle, 8 double push)
+const MOVES = []; for (let i = 0; i < 128; i++) MOVES.push(new Int32Array(256));
+function gen(ply, caps) {
+  const mv = MOVES[ply]; let n = 0; const us = side, cm = us << 3;
+  const promoRank = us ? 0 : 7, startRank = us ? 6 : 1, dir = us ? -8 : 8;
+  for (let s = 0; s < 64; s++) {
+    const p = bd[s]; if (!p || (p >> 3) !== us) continue; const t = p & 7;
+    if (t === 1) {
+      const to = s + dir;
+      if (!bd[to]) {
+        if ((to >> 3) === promoRank) { mv[n++] = s | to << 6 | 5 << 12; if (!caps) { mv[n++] = s | to << 6 | 4 << 12; mv[n++] = s | to << 6 | 3 << 12; mv[n++] = s | to << 6 | 2 << 12; } }
+        else if (!caps) { mv[n++] = s | to << 6; if ((s >> 3) === startRank && !bd[to + dir]) mv[n++] = s | (to + dir) << 6 | 8 << 15; }
+      }
+      const pa = pawnAtk[us][s];
+      for (let i = 0; i < pa.length; i++) {
+        const q = pa[i], tp = bd[q];
+        if (tp && (tp >> 3) !== us) {
+          if ((q >> 3) === promoRank) { mv[n++] = s | q << 6 | 5 << 12 | 1 << 15; if (!caps) { mv[n++] = s | q << 6 | 4 << 12 | 1 << 15; mv[n++] = s | q << 6 | 3 << 12 | 1 << 15; mv[n++] = s | q << 6 | 2 << 12 | 1 << 15; } }
+          else mv[n++] = s | q << 6 | 1 << 15;
+        } else if (q === ep) mv[n++] = s | q << 6 | 3 << 15;
+      }
+    } else if (t === 2 || t === 6) {
+      const tb = t === 2 ? knightT[s] : kingT[s];
+      for (let i = 0; i < tb.length; i++) {
+        const q = tb[i], tp = bd[q];
+        if (!tp) { if (!caps) mv[n++] = s | q << 6; } else if ((tp >> 3) !== us) mv[n++] = s | q << 6 | 1 << 15;
+      }
+      if (t === 6 && !caps) {
+        if (us === 0 && s === 4) {
+          if ((castle & CR_WK) && !bd[5] && !bd[6] && bd[7] === (RW) && !attacked(4, 1) && !attacked(5, 1) && !attacked(6, 1)) mv[n++] = 4 | 6 << 6 | 4 << 15;
+          if ((castle & CR_WQ) && !bd[3] && !bd[2] && !bd[1] && bd[0] === (RW) && !attacked(4, 1) && !attacked(3, 1) && !attacked(2, 1)) mv[n++] = 4 | 2 << 6 | 4 << 15;
+        } else if (us === 1 && s === 60) {
+          if ((castle & CR_BK) && !bd[61] && !bd[62] && bd[63] === (RW | 8) && !attacked(60, 0) && !attacked(61, 0) && !attacked(62, 0)) mv[n++] = 60 | 62 << 6 | 4 << 15;
+          if ((castle & CR_BQ) && !bd[59] && !bd[58] && !bd[57] && bd[56] === (RW | 8) && !attacked(60, 0) && !attacked(59, 0) && !attacked(58, 0)) mv[n++] = 60 | 58 << 6 | 4 << 15;
+        }
+      }
+    } else {
+      const d0 = t === 4 ? 4 : 0, d1 = t === 3 ? 4 : 8;
+      for (let d = d0; d < d1; d++) {
+        const ray = rays[d][s];
+        for (let i = 0; i < ray.length; i++) {
+          const q = ray[i], tp = bd[q];
+          if (!tp) { if (!caps) mv[n++] = s | q << 6; } else { if ((tp >> 3) !== us) mv[n++] = s | q << 6 | 1 << 15; break; }
+        }
+      }
+    }
+  }
+  return n;
+}
+
+// ---- make / unmake
+const sCap = new Int8Array(1024), sCas = new Uint8Array(1024), sEp = new Int8Array(1024), sHalf = new Int16Array(1024), sH1 = new Int32Array(1024), sH2 = new Int32Array(1024);
+let sp = 0;
+function make(m) {
+  const f = m & 63, t = (m >> 6) & 63, pr = (m >> 12) & 7, fl = m >> 15, pc = bd[f];
+  let cap = bd[t]; sp++;
+  sH1[sp] = h1; sH2[sp] = h2; sCas[sp] = castle; sEp[sp] = ep; sHalf[sp] = half;
+  h1 ^= zC1[castle]; h2 ^= zC2[castle]; if (ep >= 0) { h1 ^= zE1[ep & 7]; h2 ^= zE2[ep & 7]; }
+  bd[f] = 0; h1 ^= zP1[pc * 64 + f]; h2 ^= zP2[pc * 64 + f];
+  if (cap) { h1 ^= zP1[cap * 64 + t]; h2 ^= zP2[cap * 64 + t]; }
+  const np = pr ? (pr | side << 3) : pc;
+  bd[t] = np; h1 ^= zP1[np * 64 + t]; h2 ^= zP2[np * 64 + t];
+  half = (cap || (pc & 7) === 1) ? 0 : half + 1; ep = -1;
+  if (fl & 2) { const cs = side ? t + 8 : t - 8; cap = bd[cs]; h1 ^= zP1[cap * 64 + cs]; h2 ^= zP2[cap * 64 + cs]; bd[cs] = 0; }
+  else if (fl & 8) ep = (f + t) >> 1;
+  else if (fl & 4) {
+    const rf = t === 6 ? 7 : t === 2 ? 0 : t === 62 ? 63 : 56, rt = t === 6 ? 5 : t === 2 ? 3 : t === 62 ? 61 : 59, rp = bd[rf];
+    bd[rf] = 0; bd[rt] = rp; h1 ^= zP1[rp * 64 + rf] ^ zP1[rp * 64 + rt]; h2 ^= zP2[rp * 64 + rf] ^ zP2[rp * 64 + rt];
+  }
+  sCap[sp] = cap;
+  castle &= cMask[f] & cMask[t];
+  if ((pc & 7) === 6) kingSq[side] = t;
+  h1 ^= zC1[castle]; h2 ^= zC2[castle]; if (ep >= 0) { h1 ^= zE1[ep & 7]; h2 ^= zE2[ep & 7]; }
+  if (side) full++;
+  side ^= 1; h1 ^= zS1; h2 ^= zS2;
+}
+function unmake(m) {
+  const f = m & 63, t = (m >> 6) & 63, pr = (m >> 12) & 7, fl = m >> 15;
+  side ^= 1; if (side) full--;
+  const cap = sCap[sp]; const pc = pr ? (PW | side << 3) : bd[t];
+  bd[f] = pc;
+  if (fl & 2) { bd[t] = 0; bd[side ? t + 8 : t - 8] = cap; } else bd[t] = fl & 1 ? cap : 0;
+  if (fl & 4) {
+    const rf = t === 6 ? 7 : t === 2 ? 0 : t === 62 ? 63 : 56, rt = t === 6 ? 5 : t === 2 ? 3 : t === 62 ? 61 : 59;
+    bd[rf] = bd[rt]; bd[rt] = 0;
+  }
+  if ((pc & 7) === 6) kingSq[side] = f;
+  castle = sCas[sp]; ep = sEp[sp]; half = sHalf[sp]; h1 = sH1[sp]; h2 = sH2[sp]; sp--;
+}
+
+function legalMoves() {
+  const n = gen(0, false), res = [];
+  for (let i = 0; i < n; i++) { const m = MOVES[0][i]; make(m); const ok = !attacked(kingSq[side ^ 1], side); unmake(m); if (ok) res.push(m); }
+  return res;
+}
+function perft(d, ply) {
+  if (d === 0) return 1; const n = gen(ply, false); let c = 0;
+  for (let i = 0; i < n; i++) { const m = MOVES[ply][i]; make(m); if (!attacked(kingSq[side ^ 1], side)) c += d === 1 ? 1 : perft(d - 1, ply + 1); unmake(m); }
+  return c;
+}
+
+// ---- evaluation (simplified evaluation function, tapered king)
+const VAL = [0, 100, 320, 330, 500, 900, 0];
+const T = {
+  1: [0, 0, 0, 0, 0, 0, 0, 0, 50, 50, 50, 50, 50, 50, 50, 50, 10, 10, 20, 30, 30, 20, 10, 10, 5, 5, 10, 25, 25, 10, 5, 5, 0, 0, 0, 20, 20, 0, 0, 0, 5, -5, -10, 0, 0, -10, -5, 5, 5, 10, 10, -20, -20, 10, 10, 5, 0, 0, 0, 0, 0, 0, 0, 0],
+  2: [-50, -40, -30, -30, -30, -30, -40, -50, -40, -20, 0, 0, 0, 0, -20, -40, -30, 0, 10, 15, 15, 10, 0, -30, -30, 5, 15, 20, 20, 15, 5, -30, -30, 0, 15, 20, 20, 15, 0, -30, -30, 5, 10, 15, 15, 10, 5, -30, -40, -20, 0, 5, 5, 0, -20, -40, -50, -40, -30, -30, -30, -30, -40, -50],
+  3: [-20, -10, -10, -10, -10, -10, -10, -20, -10, 0, 0, 0, 0, 0, 0, -10, -10, 0, 5, 10, 10, 5, 0, -10, -10, 5, 5, 10, 10, 5, 5, -10, -10, 0, 10, 10, 10, 10, 0, -10, -10, 10, 10, 10, 10, 10, 10, -10, -10, 5, 0, 0, 0, 0, 5, -10, -20, -10, -10, -10, -10, -10, -10, -20],
+  4: [0, 0, 0, 0, 0, 0, 0, 0, 5, 10, 10, 10, 10, 10, 10, 5, -5, 0, 0, 0, 0, 0, 0, -5, -5, 0, 0, 0, 0, 0, 0, -5, -5, 0, 0, 0, 0, 0, 0, -5, -5, 0, 0, 0, 0, 0, 0, -5, -5, 0, 0, 0, 0, 0, 0, -5, 0, 0, 0, 5, 5, 0, 0, 0],
+  5: [-20, -10, -10, -5, -5, -10, -10, -20, -10, 0, 0, 0, 0, 0, 0, -10, -10, 0, 5, 5, 5, 5, 0, -10, -5, 0, 5, 5, 5, 5, 0, -5, 0, 0, 5, 5, 5, 5, 0, -5, -10, 5, 5, 5, 5, 5, 0, -10, -10, 0, 5, 0, 0, 0, 0, -10, -20, -10, -10, -5, -5, -10, -10, -20],
+  6: [-30, -40, -40, -50, -50, -40, -40, -30, -30, -40, -40, -50, -50, -40, -40, -30, -30, -40, -40, -50, -50, -40, -40, -30, -30, -40, -40, -50, -50, -40, -40, -30, -20, -30, -30, -40, -40, -30, -30, -20, -10, -20, -20, -20, -20, -20, -20, -10, 20, 20, 0, 0, 0, 0, 20, 20, 20, 30, 10, 0, 0, 10, 30, 20]
+};
+const KEG = [-50, -40, -30, -20, -20, -30, -40, -50, -30, -20, -10, 0, 0, -10, -20, -30, -30, -10, 20, 30, 30, 20, -10, -30, -30, -10, 30, 40, 40, 30, -10, -30, -30, -10, 30, 40, 40, 30, -10, -30, -30, -10, 20, 30, 30, 20, -10, -30, -30, -30, 0, 0, 0, 0, -30, -30, -50, -30, -30, -30, -30, -30, -30, -50];
+// tables are written top-down from white's view (rank 8 first); index for a white piece on sq is (sq ^ 56), black uses sq itself.
+const PHASE = [0, 0, 1, 1, 2, 4, 0];
+function evaluate() {
+  let sc = 0, kmg = 0, keg = 0, ph = 0, bw = 0, bb = 0;
+  for (let s = 0; s < 64; s++) {
+    const p = bd[s]; if (!p) continue; const t = p & 7;
+    if (p & 8) {
+      if (t === 6) { kmg -= T[6][s]; keg -= KEG[s]; } else { sc -= VAL[t] + T[t][s]; ph += PHASE[t]; if (t === 3) bb++; }
+    } else {
+      const i = s ^ 56;
+      if (t === 6) { kmg += T[6][i]; keg += KEG[i]; } else { sc += VAL[t] + T[t][i]; ph += PHASE[t]; if (t === 3) bw++; }
+    }
+  }
+  if (bw > 1) sc += 30; if (bb > 1) sc -= 30;
+  if (ph > 24) ph = 24;
+  sc += (kmg * ph + keg * (24 - ph)) / 24 | 0;
+  return side ? -sc : sc;
+}
+
+// ---- search
+const INF = 32000, MATE = 30000;
+const TT_BITS = 18, TT_MASK = (1 << TT_BITS) - 1;
+const ttK1 = new Int32Array(1 << TT_BITS), ttK2 = new Int32Array(1 << TT_BITS), ttM = new Int32Array(1 << TT_BITS), ttS = new Int16Array(1 << TT_BITS), ttD = new Int8Array(1 << TT_BITS), ttF = new Int8Array(1 << TT_BITS);
+const killers = new Int32Array(256), history = new Int32Array(2 * 64 * 64), scores = []; for (let i = 0; i < 128; i++) scores.push(new Int32Array(256));
+let nodes = 0, deadline = 0, aborted = false, lastScore = 0;
+
+function repeated() {
+  for (let i = 2; i <= half && sp - i >= 1; i += 2) if (sH1[sp - i + 1] === h1 && sH2[sp - i + 1] === h2) return true;
+  return false;
+}
+function orderMoves(ply, n, ttMove) {
+  const mv = MOVES[ply], sc = scores[ply];
+  for (let i = 0; i < n; i++) {
+    const m = mv[i], fl = m >> 15;
+    let s;
+    if (m === ttMove) s = 2000000;
+    else if (fl & 1) s = 1000000 + VAL[bd[(m >> 6) & 63] & 7] * 10 - (VAL[bd[m & 63] & 7] / 10 | 0);
+    else if (fl & 2) s = 1000100;
+    else if ((m >> 12) & 7) s = 900000 + ((m >> 12) & 7);
+    else if (m === killers[ply * 2]) s = 800000;
+    else if (m === killers[ply * 2 + 1]) s = 790000;
+    else s = history[side * 4096 + (m & 63) * 64 + ((m >> 6) & 63)];
+    sc[i] = s;
+  }
+}
+function pick(ply, i, n) {
+  const mv = MOVES[ply], sc = scores[ply]; let b = i;
+  for (let j = i + 1; j < n; j++) if (sc[j] > sc[b]) b = j;
+  if (b !== i) { const m = mv[i]; mv[i] = mv[b]; mv[b] = m; const s = sc[i]; sc[i] = sc[b]; sc[b] = s; }
+  return mv[i];
+}
+function qsearch(alpha, beta, ply) {
+  if ((++nodes & 2047) === 0 && Date.now() > deadline) aborted = true;
+  if (aborted) return 0;
+  const stand = evaluate();
+  if (ply > 60) return stand;
+  if (stand >= beta) return stand; if (stand > alpha) alpha = stand;
+  const n = gen(ply, true); orderMoves(ply, n, 0);
+  for (let i = 0; i < n; i++) {
+    const m = pick(ply, i, n);
+    if (!((m >> 12) & 7) && stand + VAL[bd[(m >> 6) & 63] & 7] + 200 < alpha && !(m >> 15 & 2)) continue;
+    make(m);
+    if (attacked(kingSq[side ^ 1], side)) { unmake(m); continue; }
+    const v = -qsearch(-beta, -alpha, ply + 1); unmake(m);
+    if (aborted) return 0;
+    if (v >= beta) return v; if (v > alpha) alpha = v;
+  }
+  return alpha;
+}
+function search(depth, alpha, beta, ply, nullOk) {
+  if ((++nodes & 2047) === 0 && Date.now() > deadline) aborted = true;
+  if (aborted) return 0;
+  const chk = inCheck();
+  if (chk) depth++;
+  if (ply > 0 && (half >= 100 || repeated())) return 0;
+  if (depth <= 0) return qsearch(alpha, beta, ply);
+  if (ply > 100) return evaluate();
+  const idx = h1 & TT_MASK, pv = beta - alpha > 1; let ttMove = 0;
+  if (ttK1[idx] === h1 && ttK2[idx] === h2) {
+    ttMove = ttM[idx];
+    if (ttD[idx] >= depth && !pv) {
+      let s = ttS[idx]; if (s > MATE - 200) s -= ply; else if (s < -MATE + 200) s += ply;
+      const f = ttF[idx];
+      if (f === 0 || (f === 1 && s >= beta) || (f === 2 && s <= alpha)) return s;
+    }
+  }
+  if (!pv && !chk && nullOk && depth >= 3) {
+    let np = 0; for (let s = 0; s < 64; s++) { const p = bd[s]; if (p && (p >> 3) === side && (p & 7) > 1 && (p & 7) < 6) np++; }
+    if (np > 0 && evaluate() >= beta) {
+      const sEp0 = ep; h1 ^= zS1; h2 ^= zS2; if (ep >= 0) { h1 ^= zE1[ep & 7]; h2 ^= zE2[ep & 7]; } ep = -1; side ^= 1; sp++; sH1[sp] = h1; sH2[sp] = h2; sHalf[sp] = half; half++;
+      const v = -search(depth - 3, -beta, -beta + 1, ply + 1, false);
+      sp--; half--; side ^= 1; ep = sEp0; h1 ^= zS1; h2 ^= zS2; if (ep >= 0) { h1 ^= zE1[ep & 7]; h2 ^= zE2[ep & 7]; }
+      if (aborted) return 0; if (v >= beta) return beta;
+    }
+  }
+  const n = gen(ply, false); orderMoves(ply, n, ttMove);
+  let best = -INF, bestM = 0, legal = 0; const a0 = alpha;
+  for (let i = 0; i < n; i++) {
+    const m = pick(ply, i, n);
+    make(m);
+    if (attacked(kingSq[side ^ 1], side)) { unmake(m); continue; }
+    legal++;
+    const quiet = !(m >> 15 & 3) && !((m >> 12) & 7);
+    let v;
+    if (legal === 1) v = -search(depth - 1, -beta, -alpha, ply + 1, true);
+    else {
+      let red = 0; if (quiet && depth >= 3 && legal > 4 && !chk) red = 1;
+      v = -search(depth - 1 - red, -alpha - 1, -alpha, ply + 1, true);
+      if (v > alpha && !aborted) v = -search(depth - 1, -beta, -alpha, ply + 1, true);
+    }
+    unmake(m);
+    if (aborted) return 0;
+    if (v > best) { best = v; bestM = m; if (v > alpha) { alpha = v; if (v >= beta) { if (quiet) { if (killers[ply * 2] !== m) { killers[ply * 2 + 1] = killers[ply * 2]; killers[ply * 2] = m; } history[side * 4096 + (m & 63) * 64 + ((m >> 6) & 63)] += depth * depth; } break; } } }
+  }
+  if (!legal) return chk ? -MATE + ply : 0;
+  let s = best; if (s > MATE - 200) s += ply; else if (s < -MATE + 200) s -= ply;
+  ttK1[idx] = h1; ttK2[idx] = h2; ttM[idx] = bestM; ttS[idx] = s; ttD[idx] = depth; ttF[idx] = best >= beta ? 1 : best <= a0 ? 2 : 0;
+  return best;
+}
+
+// Levels: depth cap, time cap (ms), root noise (centipawns)
+const LEVELS = [
+  { name: 'beginner', depth: 1, ms: 300, noise: 220 },
+  { name: 'easy', depth: 2, ms: 500, noise: 110 },
+  { name: 'casual', depth: 3, ms: 800, noise: 45 },
+  { name: 'club', depth: 7, ms: 800, noise: 0 },
+  { name: 'strong', depth: 11, ms: 2500, noise: 0 },
+  { name: 'master', depth: 18, ms: 6000, noise: 0 }
+];
+function think(level, msOverride) {
+  const L = LEVELS[level - 1], moves = legalMoves();
+  lastScore = 0; if (!moves.length) return 0; if (moves.length === 1) return moves[0];
+  const ms = msOverride || L.ms; deadline = Date.now() + ms; aborted = false; nodes = 0;
+  if (L.noise) {
+    // weak levels: score every root move at a shallow depth and blur the scores
+    let best = moves[0], bs = -Infinity; deadline = Date.now() + 4000;
+    for (const m of moves) {
+      make(m); let v = -search(L.depth - 1, -INF, INF, 1, true); unmake(m);
+      v += (Math.random() * 2 - 1) * L.noise; if (v > bs) { bs = v; best = m; }
+    }
+    lastScore = Math.round(bs);
+    return best;
+  }
+  killers.fill(0); history.fill(0);
+  let best = moves[0];
+  for (let d = 1; d <= L.depth; d++) {
+    let bm = 0, bv = -INF, alpha = -INF; const done = aborted;
+    // root move ordering: previous best first
+    moves.sort((a, b) => (b === best) - (a === best));
+    for (const m of moves) {
+      make(m);
+      let v = bm ? -search(d - 1, -alpha - 1, -alpha, 1, true) : -search(d - 1, -INF, -alpha, 1, true);
+      if (bm && v > alpha && !aborted) v = -search(d - 1, -INF, -alpha, 1, true);
+      unmake(m);
+      if (aborted) break;
+      if (v > bv) { bv = v; bm = m; if (v > alpha) alpha = v; }
+    }
+    if (aborted) break;
+    best = bm; lastScore = bv; if (bv > MATE - 100) break;
+    if (Date.now() > deadline - ms * 0.45 && d >= 4) break;
+  }
+  return best;
+}
+
+/* ================= game: history, SAN, results, persistence ================= */
+const fs = require('fs'), os = require('os'), path = require('path');
+const SAVE_FILE = path.join(os.homedir(), '.local', 'state', 'owl-chess', 'game.json');
+const CLOCKS = [{ name: 'Off', base: 0, inc: 0 }, { name: '3 min', base: 180, inc: 0 }, { name: '5 min', base: 300, inc: 0 }, { name: '10 min', base: 600, inc: 0 }, { name: '10+5', base: 600, inc: 5 }, { name: '15+10', base: 900, inc: 10 }];
+const G = { hist: [], keys: [], level: 3, playerWhite: true, flip: false, result: null, clock: 0, nextClock: 0, left: [0, 0], mode: 0, nextMode: 0, autoFlip: false, paused: false, startFen: START_FEN };
+const PIECE_LETTER = ['', '', 'N', 'B', 'R', 'Q', 'K'];
+const mvFrom = m => m & 63, mvTo = m => (m >> 6) & 63, mvPromo = m => (m >> 12) & 7;
+const uciOf = m => sqName(mvFrom(m)) + sqName(mvTo(m)) + (mvPromo(m) ? '  nbrq'[mvPromo(m)] : '');
+const keyNow = () => h1 + ':' + h2;
+
+function toSAN(m, legal) {
+  const f = mvFrom(m), t = mvTo(m), fl = m >> 15, pc = bd[f] & 7;
+  let s;
+  if (fl & 4) s = t > f ? 'O-O' : 'O-O-O';
+  else {
+    const cap = (fl & 3) !== 0;
+    if (pc === 1) s = (cap ? 'abcdefgh'[f & 7] + 'x' : '') + sqName(t) + (mvPromo(m) ? '=' + 'NBRQ'[mvPromo(m) - 2] : '');
+    else {
+      let dis = '';
+      const others = legal.filter(o => o !== m && mvTo(o) === t && (bd[mvFrom(o)] & 7) === pc);
+      if (others.length) {
+        const sameFile = others.some(o => (mvFrom(o) & 7) === (f & 7)), sameRank = others.some(o => (mvFrom(o) >> 3) === (f >> 3));
+        if (!sameFile) dis = 'abcdefgh'[f & 7]; else if (!sameRank) dis = String((f >> 3) + 1); else dis = sqName(f);
+      }
+      s = PIECE_LETTER[pc] + dis + (cap ? 'x' : '') + sqName(t);
+    }
+  }
+  make(m);
+  const chk = inCheck(); let any = false;
+  if (chk) { const n = gen(1, false); for (let i = 0; i < n; i++) { const q = MOVES[1][i]; make(q); const ok = !attacked(kingSq[side ^ 1], side); unmake(q); if (ok) { any = true; break; } } }
+  unmake(m);
+  return s + (chk ? (any ? '+' : '#') : '');
+}
+function insufficient() {
+  const minors = [];
+  for (let s = 0; s < 64; s++) {
+    const t = bd[s] & 7; if (!t || t === 6) continue;
+    if (t === 1 || t === 4 || t === 5) return false;
+    minors.push({ t, c: ((s & 7) + (s >> 3)) & 1 });
+  }
+  if (minors.length <= 1) return true;
+  return minors.every(x => x.t === 3 && x.c === minors[0].c);
+}
+function gameResult() {
+  if (G.result) return G.result;
+  const moves = legalMoves();
+  if (!moves.length) return inCheck() ? { over: true, win: side ? 0 : 1, text: (side ? 'White' : 'Black') + ' wins by checkmate', short: (side ? 'White' : 'Black') + ' wins · mate' } : { over: true, win: -1, text: 'Draw by stalemate', short: 'Draw · stalemate' };
+  if (half >= 100) return { over: true, win: -1, text: 'Draw by the 50-move rule', short: 'Draw · 50 moves' };
+  const k = keyNow(); let n = 0; for (const x of G.keys) if (x === k) n++;
+  if (n >= 3) return { over: true, win: -1, text: 'Draw by repetition', short: 'Draw · repetition' };
+  if (insufficient()) return { over: true, win: -1, text: 'Draw: not enough material', short: 'Draw · material' };
+  return { over: false };
+}
+function playMove(m) {
+  const legal = legalMoves(), san = toSAN(m, legal);
+  const fl = m >> 15, cap = (fl & 2) ? (PW | (side ^ 1) << 3) : bd[mvTo(m)];
+  make(m);
+  G.hist.push({ m, san, cap, by: side ^ 1 }); G.keys.push(keyNow());
+}
+function undoOne() { const e = G.hist.pop(); if (!e) return false; unmake(e.m); G.keys.pop(); return true; }
+function resetClock() { const c = CLOCKS[G.clock]; G.left = [c.base * 1000, c.base * 1000]; }
+function newGame() { setFen(START_FEN); G.startFen = START_FEN; G.hist = []; G.keys = [keyNow()]; G.result = null; G.clock = G.nextClock; G.mode = G.nextMode; G.paused = false; U.offer = -1; resetClock(); }
+function findMove(from, to, promo) {
+  return legalMoves().filter(m => mvFrom(m) === from && mvTo(m) === to && (promo === undefined || mvPromo(m) === promo));
+}
+function save() {
+  try {
+    fs.mkdirSync(path.dirname(SAVE_FILE), { recursive: true });
+    fs.writeFileSync(SAVE_FILE, JSON.stringify({ v: 2, level: G.level, playerWhite: G.playerWhite, flip: G.flip, clock: G.clock, next: G.nextClock, mode: G.mode, nextMode: G.nextMode, autoFlip: G.autoFlip, paused: G.paused, left: G.left, result: G.result, moves: G.hist.map(h => uciOf(h.m)) }));
+  } catch (e) { /* best effort */ }
+}
+function load() {
+  newGame();
+  try {
+    const d = JSON.parse(fs.readFileSync(SAVE_FILE, 'utf8'));
+    if (d.level >= 1 && d.level <= LEVELS.length) G.level = d.level;
+    G.playerWhite = d.playerWhite !== false; G.flip = !!d.flip; if (d.clock >= 0 && d.clock < CLOCKS.length) G.clock = d.clock;
+    G.nextClock = d.next >= 0 && d.next < CLOCKS.length ? d.next : G.clock; resetClock();
+    for (const u of d.moves || []) {
+      const from = u.charCodeAt(0) - 97 + (+u[1] - 1) * 8, to = u.charCodeAt(2) - 97 + (+u[3] - 1) * 8, pr = u[4] ? '  nbrq'.indexOf(u[4]) : undefined;
+      const c = findMove(from, to, pr); if (!c.length) throw new Error('bad move'); playMove(c[0]);
+    }
+    if (!G.hist.length) { G.clock = G.nextClock; resetClock(); }
+    if (Array.isArray(d.left) && d.left.length === 2 && CLOCKS[G.clock].base) G.left = d.left.map(x => Math.max(0, +x || 0));
+    G.result = d.result && d.result.over ? d.result : null;
+    G.mode = d.mode === 1 ? 1 : 0; G.nextMode = d.nextMode === 1 || d.nextMode === 0 ? d.nextMode : G.mode; if (!G.hist.length) G.mode = G.nextMode;
+    G.autoFlip = !!d.autoFlip; G.paused = !!d.paused && !G.result;
+  } catch (e) { newGame(); }
+}
+function bookMove() {
+  const opts = { '': ['e2e4', 'd2d4', 'g1f3', 'c2c4'], e2e4: ['e7e5', 'c7c5', 'e7e6', 'c7c6'], d2d4: ['d7d5', 'g8f6', 'e7e6'], g1f3: ['d7d5', 'g8f6', 'c7c5'], c2c4: ['e7e5', 'g8f6', 'c7c5'] };
+  if (G.hist.length > 1 || G.level < 3) return 0;
+  const list = opts[G.hist.length ? uciOf(G.hist[0].m) : '']; if (!list) return 0;
+  const u = list[Math.floor(Math.random() * list.length)];
+  const c = findMove(u.charCodeAt(0) - 97 + (+u[1] - 1) * 8, u.charCodeAt(2) - 97 + (+u[3] - 1) * 8);
+  return c.length ? c[0] : 0;
+}
+
+/* ================= raster board: pieces drawn as shapes, sixel output ================= */
+const zlib = require('zlib');
+// Shapes are in a 100x100 box. poly: even-odd polygon; circ; rect; ellipse. 'det' shapes are thin inner lines.
+const ell = (cx, cy, rx, ry, n = 28) => { const p = []; for (let i = 0; i < n; i++) { const a = i / n * Math.PI * 2; p.push([cx + Math.cos(a) * rx, cy + Math.sin(a) * ry]); } return p; };
+const SHAPES = {
+  1: { fill: [['circ', 50, 27, 12], ['rect', 38, 38, 62, 46], ['poly', [[42, 46], [58, 46], [67, 76], [33, 76]]], ['rect', 26, 76, 74, 88]], det: [] },
+  2: { fill: [['poly', [[26, 88], [26, 76], [32, 62], [40, 50], [34, 44], [20, 50], [16, 44], [30, 26], [38, 14], [42, 8], [48, 14], [58, 14], [74, 30], [80, 52], [76, 76], [74, 88]]]], det: [['circ', 41, 30, 3.2]] },
+  3: { fill: [['circ', 50, 12, 5.5], ['poly', ell(50, 36, 14, 22)], ['rect', 36, 52, 64, 60], ['poly', [[40, 60], [60, 60], [68, 76], [32, 76]]], ['rect', 26, 76, 74, 88]], det: [['line', 44, 40, 56, 24, 3.2]] },
+  4: { fill: [['rect', 26, 12, 36, 26], ['rect', 45, 12, 55, 26], ['rect', 64, 12, 74, 26], ['rect', 26, 24, 74, 34], ['poly', [[34, 34], [66, 34], [70, 74], [30, 74]]], ['rect', 24, 74, 76, 88]], det: [['line', 30, 36, 70, 36, 2.6]] },
+  5: { fill: [['circ', 18, 24, 5.5], ['circ', 34, 17, 5.5], ['circ', 50, 14, 5.5], ['circ', 66, 17, 5.5], ['circ', 82, 24, 5.5], ['poly', [[18, 28], [32, 62], [36, 24], [44, 60], [50, 20], [56, 60], [64, 24], [68, 62], [82, 28], [76, 72], [24, 72]]], ['rect', 24, 72, 76, 88]], det: [['line', 30, 66, 70, 66, 2.6]] },
+  6: { fill: [['rect', 46, 4, 54, 26], ['rect', 38, 11, 62, 18], ['poly', [[32, 34], [46, 28], [54, 28], [68, 34], [74, 54], [68, 74], [32, 74], [26, 54]]], ['rect', 24, 74, 76, 88]], det: [['line', 34, 64, 66, 64, 2.6]] }
+};
+function inShape(s, x, y) {
+  switch (s[0]) {
+    case 'circ': return (x - s[1]) ** 2 + (y - s[2]) ** 2 <= s[3] * s[3];
+    case 'rect': return x >= s[1] && x <= s[3] && y >= s[2] && y <= s[4];
+    case 'line': { const dx = s[3] - s[1], dy = s[4] - s[2], l2 = dx * dx + dy * dy; let t = ((x - s[1]) * dx + (y - s[2]) * dy) / l2; t = Math.max(0, Math.min(1, t)); return (x - s[1] - t * dx) ** 2 + (y - s[2] - t * dy) ** 2 <= (s[5] / 2) ** 2; }
+    case 'poly': { const p = s[1]; let c = false; for (let i = 0, j = p.length - 1; i < p.length; j = i++) if ((p[i][1] > y) !== (p[j][1] > y) && x < (p[j][0] - p[i][0]) * (y - p[i][1]) / (p[j][1] - p[i][1]) + p[i][0]) c = !c; return c; }
+  }
+  return false;
+}
+const spriteCache = new Map();
+function sprite(type, S) {
+  const key = type + ':' + S; if (spriteCache.has(key)) return spriteCache.get(key);
+  const fill = new Uint8Array(S * S), det = new Uint8Array(S * S), edge = new Uint8Array(S * S), k = 100 / S, SS = 3, sh = SHAPES[type];
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    let f = 0, d = 0;
+    for (let sy = 0; sy < SS; sy++) for (let sx = 0; sx < SS; sx++) {
+      const px = (x + (sx + 0.5) / SS) * k, py = (y + (sy + 0.5) / SS) * k;
+      let inF = false; for (const s of sh.fill) if (inShape(s, px, py)) { inF = true; break; }
+      if (inF) { f++; for (const s of sh.det) if (inShape(s, px, py)) { d++; break; } }
+    }
+    if (f * 2 > SS * SS) { fill[y * S + x] = 1; if (d * 2 > SS * SS) det[y * S + x] = 1; }
+  }
+  const t = Math.max(1, Math.round(S / 38));
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    if (fill[y * S + x]) continue; let near = false;
+    for (let dy = -t; dy <= t && !near; dy++) for (let dx = -t; dx <= t; dx++) { const xx = x + dx, yy = y + dy; if (xx >= 0 && yy >= 0 && xx < S && yy < S && fill[yy * S + xx] && dx * dx + dy * dy <= t * t + 1) { near = true; break; } }
+    if (near) edge[y * S + x] = 1;
+  }
+  const r = { fill, det, edge, S }; spriteCache.set(key, r); return r;
+}
+
+// 3x5 pixel font for coordinates
+const FONT = { a: '010101111101101', b: '110101110101110', c: '011100100100011', d: '110101101101110', e: '111100110100111', f: '111100110100100', g: '011100101101011', h: '101101111101101', 1: '010110010010111', 2: '110001010100111', 3: '110001010001110', 4: '101101111001001', 5: '111100110001110', 6: '011100111101111', 7: '111001010010010', 8: '111101111101111', p: '111101111100100', u: '101101101101111', s: '011100010001110' };
+
+// palette-indexed frame buffer
+class Frame {
+  constructor(w, h) { this.w = w; this.h = h; this.px = new Uint8Array(w * h); this.pal = []; this.map = new Map(); }
+  col(c) { const k = c.join(','); let i = this.map.get(k); if (i === undefined) { i = this.pal.length; this.pal.push(c); this.map.set(k, i); } return i; }
+  rect(x, y, w, h, i) { for (let yy = Math.max(0, y); yy < Math.min(this.h, y + h); yy++) this.px.fill(i, yy * this.w + Math.max(0, x), yy * this.w + Math.min(this.w, x + w)); }
+  disc(cx, cy, r, i, ring) { const r2 = r * r, in2 = ring ? (r - ring) * (r - ring) : -1; for (let y = Math.floor(cy - r); y <= cy + r; y++) for (let x = Math.floor(cx - r); x <= cx + r; x++) { const d = (x + 0.5 - cx) ** 2 + (y + 0.5 - cy) ** 2; if (d <= r2 && d >= in2 && x >= 0 && y >= 0 && x < this.w && y < this.h) this.px[y * this.w + x] = i; } }
+  text(s, x, y, k, i) { for (const ch of s) { const g = FONT[ch]; if (g) for (let r = 0; r < 5; r++) for (let c = 0; c < 3; c++) if (g[r * 3 + c] === '1') this.rect(x + c * k, y + r * k, k, k, i); x += 4 * k; } }
+  blit(sp, x0, y0, cf, ce, cd, clip) {
+    const S = sp.S;
+    for (let y = 0; y < S; y++) { const yy = y0 + y; if (yy < 0 || yy >= this.h || (clip && (yy < clip.y || yy >= clip.y + clip.h))) continue;
+      for (let x = 0; x < S; x++) { const xx = x0 + x; if (xx < 0 || xx >= this.w || (clip && (xx < clip.x || xx >= clip.x + clip.w))) continue;
+        const j = y * S + x; if (sp.det[j]) this.px[yy * this.w + xx] = cd; else if (sp.fill[j]) this.px[yy * this.w + xx] = cf; else if (sp.edge[j]) this.px[yy * this.w + xx] = ce; } }
+  }
+}
+
+// ---- sixel encode / decode (P2=1: unset bits leave pixels alone, so colors can be layered)
+function sixelEncode(fr, x0, y0, w, h, padL) {
+  padL = padL || 0; const lead = padL ? '!' + padL + '?' : ''; // '?' sets no pixels: with P2=1 they stay as they are
+  const used = new Set(); for (let y = y0; y < y0 + h; y++) for (let x = x0; x < x0 + w; x++) used.add(fr.px[y * fr.w + x]);
+  let out = '\x1bP0;1;0q"1;1;' + (w + padL) + ';' + h;
+  for (const i of used) { const c = fr.pal[i]; out += '#' + i + ';2;' + Math.round(c[0] * 100 / 255) + ';' + Math.round(c[1] * 100 / 255) + ';' + Math.round(c[2] * 100 / 255); }
+  const masks = new Map();
+  for (let by = 0; by < h; by += 6) {
+    masks.clear(); const bh = Math.min(6, h - by);
+    for (let r = 0; r < bh; r++) { const base = (y0 + by + r) * fr.w + x0; for (let x = 0; x < w; x++) { const c = fr.px[base + x]; let m = masks.get(c); if (!m) { m = new Uint8Array(w); masks.set(c, m); } m[x] |= 1 << r; } }
+    let first = true;
+    for (const [c, m] of masks) {
+      out += (first ? '' : '$') + '#' + c + lead; first = false;
+      let x = 0; while (x < w) { let n = 1; while (x + n < w && m[x + n] === m[x]) n++; const ch = String.fromCharCode(63 + m[x]); out += n > 3 ? '!' + n + ch : ch.repeat(n); x += n; }
+    }
+    out += '-';
+  }
+  return out + '\x1b\\';
+}
+function sixelDecode(s) {
+  const m = s.match(/"1;1;(\d+);(\d+)/); const w = +m[1], h = +m[2]; const pal = {}, px = new Array(w * h).fill(-1);
+  const body = s.slice(s.indexOf(m[0]) + m[0].length, s.length - 2); let col = 0, x = 0, by = 0, i = 0;
+  while (i < body.length) {
+    const ch = body[i];
+    if (ch === '#') { const mm = body.slice(i).match(/^#(\d+)(?:;2;(\d+);(\d+);(\d+))?/); col = +mm[1]; if (mm[2] !== undefined) pal[col] = [Math.round(mm[2] * 2.55), Math.round(mm[3] * 2.55), Math.round(mm[4] * 2.55)]; i += mm[0].length; }
+    else if (ch === '$') { x = 0; i++; } else if (ch === '-') { x = 0; by += 6; i++; }
+    else if (ch === '!') { const mm = body.slice(i).match(/^!(\d+)(.)/); const n = +mm[1], v = mm[2].charCodeAt(0) - 63; for (let k = 0; k < n; k++) { for (let r = 0; r < 6; r++) if (v & (1 << r) && by + r < h && x < w) px[(by + r) * w + x] = col; x++; } i += mm[0].length; }
+    else { const v = ch.charCodeAt(0) - 63; for (let r = 0; r < 6; r++) if (v & (1 << r) && by + r < h && x < w) px[(by + r) * w + x] = col; x++; i++; }
+  }
+  return { w, h, px, pal };
+}
+function pngOf(w, h, rgbAt) {
+  const raw = Buffer.alloc((w * 3 + 1) * h); for (let y = 0; y < h; y++) { raw[y * (w * 3 + 1)] = 0; for (let x = 0; x < w; x++) { const c = rgbAt(x, y); const o = y * (w * 3 + 1) + 1 + x * 3; raw[o] = c[0]; raw[o + 1] = c[1]; raw[o + 2] = c[2]; } }
+  const chunk = (t, d) => { const b = Buffer.alloc(12 + d.length); b.writeUInt32BE(d.length, 0); b.write(t, 4); d.copy(b, 8); b.writeUInt32BE(zlib.crc32(b.subarray(4, 8 + d.length)) >>> 0, 8 + d.length); return b; };
+  const ih = Buffer.alloc(13); ih.writeUInt32BE(w, 0); ih.writeUInt32BE(h, 4); ih[8] = 8; ih[9] = 2;
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ih), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+}
+
+/* ================= terminal UI: big board, bottom bar, menu, animation ================= */
+const GL = [' ', '♟', '♞', '♝', '♜', '♛', '♚'];
+const AS = [' ', 'p', 'n', 'b', 'r', 'q', 'k'];
+let ascii = false;
+const { Worker, isMainThread, parentPort } = require('worker_threads');
+
+// ---- colors (follow the Omarchy theme when its foot.ini is readable)
+const hex = s => { const v = parseInt(s, 16); return [v >> 16 & 255, v >> 8 & 255, v & 255]; };
+const mixc = (a, b, t) => [0, 1, 2].map(i => Math.round(a[i] * (1 - t) + b[i] * t));
+const rgb = c => c.join(';');
+function themeColors() {
+  const d = { background: '1a1b26', foreground: 'c0caf5', regular1: 'f7768e', regular2: '73daca', regular3: 'e0af68', regular4: '7aa2f7', regular6: '7dcfff' };
+  try {
+    const f = path.join(os.homedir(), '.local', 'state', 'omarchy', 'current', 'theme', 'foot.ini');
+    for (const line of fs.readFileSync(f, 'utf8').split('\n')) { const m = line.match(/^\s*(\w+)\s*=\s*#?([0-9a-fA-F]{6})\s*$/); if (m) d[m[1]] = m[2]; }
+  } catch (e) { /* defaults */ }
+  return d;
+}
+let C = {};
+function setupColors() {
+  const t = themeColors(), bg = hex(t.background), fg = hex(t.foreground), acc = hex(t.regular2 || t.regular6);
+  C = {
+    bg, fg, acc, muted: mixc(fg, bg, 0.5), light: mixc(bg, acc, 0.62), dark: mixc(bg, acc, 0.26),
+    yellow: hex(t.regular3), red: hex(t.regular1), blue: hex(t.regular4),
+    white: hex('f6f2e2'), black: hex('070b09'), btn: mixc(bg, fg, 0.16), btnHot: hex(t.regular3)
+  };
+}
+
+// ---- cell buffer
+let W = 80, H = 24, CHs, FGs, BGs, BOs;
+function initBuf() {
+  W = process.stdout.columns || 80; H = process.stdout.rows || 24;
+  const n = W * H; CHs = new Array(n).fill(' '); FGs = new Array(n).fill(rgb(C.fg)); BGs = new Array(n).fill(rgb(C.bg)); BOs = new Array(n).fill(false);
+}
+function put(x, y, str, fg, bg, bold) {
+  if (y < 0 || y >= H) return;
+  for (const ch of str) {
+    if (x >= 0 && x < W) { const i = y * W + x; CHs[i] = ch; if (fg) FGs[i] = rgb(fg); if (bg) BGs[i] = rgb(bg); if (bold !== undefined) BOs[i] = !!bold; }
+    x++;
+  }
+}
+function fillRect(x, y, w, h, bg) { for (let j = 0; j < h; j++) put(x, y + j, ' '.repeat(Math.max(0, w)), C.fg, bg, false); }
+function flush(skipRows, clear) {
+  let out = '\x1b[?2026h' + (clear ? '\x1b[48;2;' + rgb(C.bg) + 'm\x1b[2J' : '');
+  for (let y = skipRows || 0; y < H; y++) {
+    out += '\x1b[' + (y + 1) + ';1H'; let cf = '', cb = '', co = null;
+    for (let x = 0; x < W; x++) {
+      const i = y * W + x;
+      if (FGs[i] !== cf || BGs[i] !== cb || BOs[i] !== co) { cf = FGs[i]; cb = BGs[i]; co = BOs[i]; out += '\x1b[0' + (co ? ';1' : '') + ';38;2;' + cf + ';48;2;' + cb + 'm'; }
+      out += CHs[i];
+    }
+  }
+  process.stdout.write(out + '\x1b[0m' + (flush.after || '') + '\x1b[?2026l'); flush.after = '';
+}
+
+// ---- state
+const M = { img: false, cw: 0, ch: 0, pix: false };
+let IMG = null;
+const U = { vs: 0, offer: -1, sel: -1, targets: [], cursor: 12, kb: false, last: null, hint: null, thinking: false, promo: null, msg: '', msgUntil: 0, arm: '', armUntil: 0, typed: '', res: { over: false }, hits: [], view: 'game', anim: null, busy: false, needClear: true, token: 0, clkLast: Date.now() };
+// mode 0: you against the computer; mode 1: two people on one phone (the side to move is the human, there is no engine)
+const viewBlack = () => (G.mode ? (G.autoFlip && U.vs === 1) !== G.flip : G.playerWhite === G.flip);
+const humanSide = () => (G.mode ? side : (G.playerWhite ? 0 : 1));
+const engineSide = () => (G.mode ? -1 : (G.playerWhite ? 1 : 0));
+function toast(t, ms) { U.msg = t; U.msgUntil = Date.now() + (ms || 3000); setTimeout(render, (ms || 3000) + 30); }
+
+// Layout: the biggest squares that fit, with a two-row bar (status + buttons) under the board.
+function layout() {
+  let best = null;
+  for (let sw = 2; sw <= 20; sw++) for (let sh = 1; sh <= 10; sh++) {
+    const lab = 0, bw = 8 * sw, fileRow = 0, bh = 8 * sh; // the coordinates sit in the corners of the squares, not around the board
+    if (bw > W || bh + 2 > H) continue;
+    const d = sw - 2 * sh, vis = sw * sh * 100 - (d > 0 ? d * d * 25 : d * d * 150);
+    if (!best || vis > best.vis) best = { sw, sh, bw, bh, lab, fileRow, vis };
+  }
+  if (!best) best = { sw: 2, sh: 1, bw: 16, bh: 8, lab: 0, fileRow: 0, vis: 0 };
+  best.bx = Math.max(0, (W - best.bw) >> 1); best.by = 0;
+  best.barY = Math.min(H - 2, best.bh); best.extra = H - (best.bh + 2);
+  return best;
+}
+function sqAtDisplay(r, c) { const vb = viewBlack(); const file = vb ? 7 - c : c, rank = vb ? r : 7 - r; return rank * 8 + file; }
+function displayOf(sq) { const vb = viewBlack(); const file = sq & 7, rank = sq >> 3; return { r: vb ? rank : 7 - rank, c: vb ? 7 - file : file }; }
+const glyph = (pc) => (ascii ? ((pc & 8) ? AS[pc & 7] : AS[pc & 7].toUpperCase()) : GL[pc & 7]);
+
+function statusLine() {
+  if (Date.now() < U.msgUntil) return { t: U.msg, c: C.yellow };
+  if (U.res.over) {
+    const t = U.res.short || U.res.text;
+    return { t, c: U.res.win === -1 ? C.yellow : (G.mode || U.res.win === humanSide() ? C.acc : C.red) };
+  }
+  if (G.paused) return { t: 'Paused', c: C.yellow };
+  if (U.thinking) return { t: 'Thinking…', c: C.blue };
+  if (U.promo) return { t: 'Promote to…', c: C.yellow };
+  if (G.mode) { const w = side ? 'Black' : 'White'; return { t: inCheck() ? w + ' in check!' : w + ' to move', c: inCheck() ? C.red : C.acc }; }
+  if (side === humanSide()) return { t: inCheck() ? 'Check! Your move' : 'Your move', c: inCheck() ? C.red : C.acc };
+  return { t: 'Opponent…', c: C.muted };
+}
+
+// ---- drawing
+function squareBg(sq) {
+  const isLight = ((sq & 7) + (sq >> 3)) % 2 === 1; let bgc = isLight ? C.light : C.dark;
+  if (U.last && (sq === U.last.from || sq === U.last.to)) bgc = mixc(bgc, C.yellow, 0.4);
+  if (U.hint && (sq === U.hint.from || sq === U.hint.to)) bgc = mixc(bgc, C.blue, 0.65);
+  return bgc;
+}
+function drawBoard(L) {
+  const { sw, sh, bx, by, lab } = L, x0 = bx + lab, gi = sw >> 1;
+  const kInCheck = inCheck() ? kingSq[side] : -1;
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+    const sq = sqAtDisplay(r, c); let pc = bd[sq];
+    if (U.anim && U.anim.over.has(sq)) pc = U.anim.over.get(sq);
+    let bgc = squareBg(sq);
+    const isTarget = U.targets.includes(sq);
+    if (isTarget && pc) bgc = mixc(bgc, C.red, 0.55);
+    if (sq === kInCheck) bgc = mixc(bgc, C.red, 0.8);
+    if (sq === U.sel) bgc = mixc(bgc, C.yellow, 0.75);
+    const px = x0 + c * sw, py = by + r * sh;
+    fillRect(px, py, sw, sh, bgc);
+    const gx = px + gi, gy = py + (sh >> 1);
+    if (pc) put(gx, gy, glyph(pc), (pc & 8) ? C.black : C.white, bgc, true);
+    else if (isTarget) put(gx, gy, '•', mixc(C.fg, bgc, 0.2), bgc, true);
+    if (U.kb && sq === U.cursor) put(px, py, '▏', C.fg, bgc, true);
+    // coordinates in the corners of the edge squares: the rank top left, the file bottom right
+    if (sw >= 2 && c === 0) put(px, py, String((sq >> 3) + 1), C.muted, bgc, false);
+    if (sw >= 2 && r === 7 && px + sw - 1 !== gx) put(px + sw - 1, py + sh - 1, 'abcdefgh'[sq & 7], C.muted, bgc, false);
+    U.hits.push({ x: px, y: py, w: sw, h: sh, sq });
+  }
+  if (lab) for (let r = 0; r < 8; r++) put(bx, by + r * sh + (sh >> 1), String((sqAtDisplay(r, 0) >> 3) + 1), C.muted, C.bg, false);
+  if (L.fileRow) for (let c = 0; c < 8; c++) put(x0 + c * sw + gi, by + 8 * sh, 'abcdefgh'[sqAtDisplay(0, c) & 7], C.muted, C.bg, false);
+  if (U.anim) for (const mv of U.anim.movers) put(Math.round(mv.x), Math.round(mv.y), glyph(mv.pc), (mv.pc & 8) ? C.black : C.white, undefined, true);
+}
+function button(x, y, w, label, act, hot, dim) {
+  const t = label.length >= w ? label.slice(0, w) : ' '.repeat((w - label.length) >> 1) + label + ' '.repeat(w - label.length - ((w - label.length) >> 1));
+  put(x, y, t, hot ? C.bg : (dim ? C.muted : C.fg), hot ? C.btnHot : C.btn, true);
+  if (act !== null) U.hits.push({ x, y, w, h: 1, act });
+}
+function row(y, defs, gap) {
+  const n = defs.length; let w = Math.floor((W - gap * (n - 1)) / n); if (M.img) w = Math.max(6, Math.floor(w * 0.6)); let x = Math.max(0, (W - (w * n + gap * (n - 1))) >> 1);
+  for (const d of defs) { button(x, y, w, d[0], d[1], d[2], d[3]); x += w + gap; }
+}
+const fmtClock = ms => { const t = Math.max(0, Math.ceil(ms / 1000)); return Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0'); };
+function drawClocks(x, y) {
+  if (!CLOCKS[G.clock].base) return 0;
+  const parts = G.mode ? [[0, 'W '], [1, 'B ']] : [[humanSide(), 'You '], [engineSide(), 'Opp ']]; let w = 0; for (const p of parts) w += p[1].length + fmtClock(G.left[p[0]]).length + 1; w -= 1;
+  let cx = x < 0 ? W - w - 1 : x;
+  for (const [sd, lab] of parts) {
+    const t = fmtClock(G.left[sd]), run = !U.res.over && !G.paused && G.hist.length && side === sd, low = G.left[sd] < 30000;
+    put(cx, y, lab, C.muted, C.bg, false); cx += lab.length; put(cx, y, t, low ? C.red : (run ? C.fg : C.muted), C.bg, !!run); cx += t.length + 1;
+  }
+  return w;
+}
+function drawBar(L) {
+  const st = statusLine();
+  put(0, L.barY, ' ' + st.t.slice(0, W - 1), st.c, C.bg, true);
+  let clockDone = false;
+  if (CLOCKS[G.clock].base && st.t.length + 2 + drawClocks(-1, -1) <= W) { drawClocks(-1, L.barY); clockDone = true; } // drawClocks(-1, -1) only measures
+  const y = L.barY + 1;
+  if (U.promo) { row(y, [[glyph(5 | (side << 3)) + ' Q', { promo: 5 }, true], [glyph(4 | (side << 3)) + ' R', { promo: 4 }, true], [glyph(3 | (side << 3)) + ' B', { promo: 3 }, true], [glyph(2 | (side << 3)) + ' N', { promo: 2 }, true]], 1); return; }
+  const mine = side === humanSide() && !U.res.over && !U.thinking && !G.mode && !G.paused, pz = [G.paused ? 'Resume' : 'Pause', 'pause', G.paused, U.res.over && !G.paused];
+  if (W >= 30) row(y, [['New', 'new', U.arm === 'new'], ['Undo', 'undo', false, !G.hist.length || G.paused], ['Hint', 'hint', false, !mine], pz, ['Menu', 'menu']], 1);
+  else row(y, [['Undo', 'undo', false, !G.hist.length || G.paused], ['Hint', 'hint', false, !mine], pz, ['Menu', 'menu']], 1);
+  // spare rows: last moves and captured material
+  if (L.extra >= 1) {
+    const caps = [[], []]; for (const h of G.hist) caps[h.by].push(h.cap & 7);
+    const val = [0, 1, 3, 3, 5, 9, 0]; const mat = [0, 0]; for (const s of [0, 1]) for (const t of caps[s]) mat[s] += val[t];
+    const diff = G.mode ? mat[0] - mat[1] : mat[humanSide()] - mat[engineSide()];
+    const last = G.hist.slice(-4).map((h, i, a) => { const n = G.hist.length - a.length + i; return (n % 2 === 0 ? (n / 2 + 1) + '.' : '') + h.san; }).join(' ');
+    put(1, y + 1, (last + (diff ? '  ' + (G.mode ? (diff > 0 ? 'W+' + diff : 'B+' + -diff) : (diff > 0 ? '+' : '') + diff) : '')).slice(0, W - 1), C.muted, C.bg, false);
+    if (CLOCKS[G.clock].base && !clockDone) drawClocks(-1, y + 1);
+  }
+}
+function drawMenu() {
+  fillRect(0, 0, W, H, C.bg); const lv = LEVELS[G.level - 1];
+  const offered = U.offer === G.hist.length;
+  // buttons in the order they are paired: two columns on a normal screen, one on a narrow one
+  const defs = [[U.arm === 'new' ? 'Tap again!' : 'New game', 'new', U.arm === 'new'], [G.paused ? 'Resume game' : 'Pause game', 'pause', G.paused], ['Mode: ' + (G.nextMode ? '2 players' : 'Computer'), 'mode']];
+  if (G.mode) defs.push(['Flip board', 'flip'], ['Auto-flip: ' + (G.autoFlip ? 'On' : 'Off'), 'autoflip']); else defs.push([G.playerWhite ? 'Play Black' : 'Play White', 'side', U.arm === 'side'], ['Flip board', 'flip']);
+  defs.push(['Clock: ' + CLOCKS[G.nextClock].name, 'clock'], [offered ? 'Accept draw' : 'Offer draw', 'draw', offered], [U.arm === 'resign' ? 'Tap again!' : 'Resign', 'resign', U.arm === 'resign'], ['Moves', 'moves'], ['Close', 'close']);
+  const two = W >= 34, gx = 2, colW = two ? Math.floor((W - 4 - gx) / 2) : (M.img ? Math.min(W, Math.max(18, Math.floor(W * 0.6))) : Math.min(W, 22));
+  const totalW = two ? colW * 2 + gx : colW, x0 = (W - totalW) >> 1, per = two ? 2 : 1;
+  const seq = [{ k: 'title' }, { k: 'label' }]; if (!G.mode) seq.push({ k: 'pm' });
+  for (let i = 0; i < defs.length; i += per) seq.push({ k: 'btns', d: defs.slice(i, i + per) });
+  const height = step => seq.length * step - (step - 1) + 0, gapAfterTitle = 1;
+  const step = height(2) + 2 + (gapAfterTitle - 2) <= H ? 2 : 1; // keep the last two rows free for the notes below
+  const blockH = (seq.length - 1) * step + 1 - (step - gapAfterTitle);
+  let y = Math.max(0, (H - 2 - blockH) >> 1);
+  seq.forEach((r, i) => {
+    if (r.k === 'title') put(x0 + ((totalW - 4) >> 1), y, 'MENU', C.acc, C.bg, true);
+    else if (r.k === 'label') { const t = G.mode ? 'Two players' : 'Level ' + G.level + '/' + LEVELS.length + ' ' + lv.name; put(x0 + ((totalW - t.length) >> 1), y, t, C.fg, C.bg, true); }
+    else if (r.k === 'pm') { const h = Math.floor((totalW - 1) / 2); button(x0, y, h, '−', 'lvm', false); button(x0 + totalW - h, y, h, '+', 'lvp', false); }
+    else r.d.forEach((d, j) => { const w = r.d.length < per ? totalW : colW; button(x0 + j * (colW + gx), y, w, d[0], d[1], !!d[2]); });
+    y += i === 0 ? gapAfterTitle : step;
+  });
+  const dev = 'Developer: Vitalii Khomenko', pend = 'Applies from the next game';
+  put(Math.max(0, (W - dev.length) >> 1), H - 1, dev.slice(0, W), C.muted, C.bg, false);
+  if ((G.nextMode !== G.mode || G.nextClock !== G.clock) && y < H - 2) put(Math.max(0, (W - pend.length) >> 1), H - 2, pend.slice(0, W), C.yellow, C.bg, false);
+}
+function drawMoves() {
+  fillRect(0, 0, W, H, C.bg); put((W - 5) >> 1, 0, 'MOVES', C.acc, C.bg, true);
+  const lines = []; for (let i = 0; i < G.hist.length; i += 2) lines.push(((i >> 1) + 1) + '. ' + G.hist[i].san + (G.hist[i + 1] ? '  ' + G.hist[i + 1].san : ''));
+  const per = H - 4, cols = W >= 40 ? 2 : 1, shown = lines.slice(-per * cols), cw = Math.min(20, Math.floor(W / cols)), x0 = (W - cw * cols) >> 1;
+  if (!shown.length) put((W - 12) >> 1, 2, 'No moves yet', C.muted, C.bg, false);
+  shown.forEach((t, i) => put(x0 + (i < per ? 0 : cw), 2 + (i % per), t.slice(0, cw - 1), C.fg, C.bg, false));
+  button((W - 8) >> 1, H - 1, 8, 'Back', 'close', false);
+}
+function render() {
+  if (!U.started) return; // the first picture waits for the terminal's answers (see start)
+  if (!U.anim) U.vs = side;
+  if (M.img) { if (!U.anim) renderImg(); return; }
+  initBuf(); U.hits = [];
+  if (U.view === 'menu') drawMenu(); else if (U.view === 'moves') drawMoves();
+  else { const L = layout(); drawBoard(L); if (G.paused) dimBoard(L); drawBar(L); }
+  flush();
+}
+
+// ---- animation: the piece slides cell by cell, the destination keeps the captured piece until it lands
+function charPos(sq, L) { const d = displayOf(sq); return { x: L.bx + L.lab + d.c * L.sw + (L.sw >> 1), y: L.by + d.r * L.sh + (L.sh >> 1) }; }
+function animate(m, done) { if (M.img) return animateImg(m, done); return animateCells(m, done); }
+function animateCells(m, done) {
+  const L = layout(), f = mvFrom(m), t = mvTo(m), pc = bd[t], over = new Map(), movers = [];
+  const cap = G.hist.length ? G.hist[G.hist.length - 1].cap : 0, fl = m >> 15;
+  const orig = mvPromo(m) ? (PW | (pc & 8)) : pc;
+  over.set(t, fl & 2 ? 0 : cap); if (fl & 2) over.set(side === 1 ? t - 8 : t + 8, cap);
+  const a = charPos(f, L), b = charPos(t, L); movers.push({ pc: orig, a, b, x: a.x, y: a.y });
+  if (fl & 4) {
+    const rf = t === 6 ? 7 : t === 2 ? 0 : t === 62 ? 63 : 56, rt = t === 6 ? 5 : t === 2 ? 3 : t === 62 ? 61 : 59;
+    over.set(rt, 0); const ra = charPos(rf, L), rb = charPos(rt, L); movers.push({ pc: bd[rt], a: ra, b: rb, x: ra.x, y: ra.y });
+  }
+  const steps = Math.max(Math.abs(b.x - a.x), Math.abs(b.y - a.y), 2), frames = Math.max(6, Math.min(20, steps * 2 + 3));
+  U.anim = { over, movers }; U.busy = true; let i = 0;
+  const ease = x => (x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2);
+  const tick = () => {
+    i++; const p = ease(Math.min(1, i / frames));
+    for (const mv of U.anim.movers) { mv.x = mv.a.x + (mv.b.x - mv.a.x) * p; mv.y = mv.a.y + (mv.b.y - mv.a.y) * p; }
+    if (i >= frames) { U.anim = null; U.busy = false; render(); done && done(); return; }
+    render(); setTimeout(tick, 70);
+  };
+  render(); setTimeout(tick, 260); // a short beat on the start square first
+}
+
+
+/* ---- image mode: board as a sixel picture, text stays in the terminal font ---- */
+const PCOL = { wf: [246, 242, 226], we: [8, 12, 10], bf: [28, 36, 32], be: [226, 220, 196] };
+function imgLayout() {
+  const availW = W * M.cw, availH = (H - 2) * M.ch;
+  const sq = Math.max(24, Math.floor(Math.min(availW, availH) / 8));
+  const off = Math.max(0, Math.floor((availW - 8 * sq) / 2)), bxc = Math.floor(off / M.cw), sub = off - bxc * M.cw; // centred to the pixel: whole cells plus a shift inside the cell
+  const rows = Math.min(H - 2, Math.ceil(8 * sq / M.ch));
+  return { sq, bxc, sub, rows, wpx: 8 * sq, barY: rows, extra: H - rows - 2 };
+}
+function sqTint(sq, fr, ov) {
+  let base = ((sq & 7) + (sq >> 3)) % 2 === 1 ? C.light : C.dark; const pc = ov && ov.has(sq) ? ov.get(sq) : bd[sq];
+  if (U.last && (sq === U.last.from || sq === U.last.to)) base = mixc(base, C.yellow, 0.4);
+  if (U.hint && (sq === U.hint.from || sq === U.hint.to)) base = mixc(base, C.blue, 0.65);
+  if (U.targets.includes(sq) && pc) base = mixc(base, C.red, 0.55);
+  if (inCheck() && sq === kingSq[side]) base = mixc(base, C.red, 0.8);
+  if (sq === U.sel) base = mixc(base, C.yellow, 0.75);
+  return base;
+}
+function composeBoard(L, ov) {
+  const sq = L.sq, fr = new Frame(8 * sq, 8 * sq), S = Math.floor(sq * 0.88), off = Math.floor((sq - S) / 2), dy = Math.round(S * 0.04), k = Math.max(1, Math.round(sq / 45));
+  const wf = fr.col(PCOL.wf), we = fr.col(PCOL.we), bf = fr.col(PCOL.bf), be = fr.col(PCOL.be);
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+    const s = sqAtDisplay(r, c), x = c * sq, y = r * sq, pc = ov && ov.has(s) ? ov.get(s) : bd[s], bg = sqTint(s, fr, ov), bi = fr.col(bg);
+    fr.rect(x, y, sq, sq, bi);
+    if (c === 0) fr.text(String((s >> 3) + 1), x + k * 2, y + k * 2, k, fr.col(mixc(C.fg, bg, 0.55)));
+    if (r === 7) fr.text('abcdefgh'[s & 7], x + sq - k * 5, y + sq - k * 7, k, fr.col(mixc(C.fg, bg, 0.55)));
+    if (pc) { const t = pc & 7, white = !(pc & 8); fr.blit(sprite(t, S), x + off, y + off + dy, white ? wf : bf, white ? we : be, white ? we : be); }
+    else if (U.targets.includes(s)) fr.disc(x + sq / 2, y + sq / 2, sq * 0.13, fr.col(mixc(C.fg, bg, 0.3)));
+    if (U.targets.includes(s) && pc) fr.disc(x + sq / 2, y + sq / 2, sq * 0.46, fr.col(mixc(C.fg, bg, 0.3)), Math.max(2, k * 2));
+    if (U.kb && s === U.cursor) { const a = fr.col(C.acc), t = Math.max(2, k); fr.rect(x, y, sq, t, a); fr.rect(x, y + sq - t, sq, t, a); fr.rect(x, y, t, sq, a); fr.rect(x + sq - t, y, t, sq, a); }
+  }
+  if (G.paused) pausedOverlay(fr, sq);
+  return fr;
+}
+const cellPos = (L, px, py) => '\x1b[' + (Math.floor(py / M.ch) + 1) + ';' + (L.bxc + Math.floor(px / M.cw) + 1) + 'H';
+function drawImageMode() {
+  const L = imgLayout(); IMG = L;
+  const fr = composeBoard(L, null);
+  flush.after = '\x1b[1;' + (L.bxc + 1) + 'H' + sixelEncode(fr, 0, 0, fr.w, fr.h, L.sub);
+  return L;
+}
+// paused: the board goes darker and a pause sign with the word 'paused' sits in its middle
+function dimBoard(L) {
+  const x0 = L.bx, x1 = Math.min(W, L.bx + L.bw), y1 = Math.min(H, L.bh), dim = c => rgb(mixc(c.split(";").map(Number), [0, 0, 0], 0.42));
+  for (let y = 0; y < y1; y++) for (let x = x0; x < x1; x++) { const i = y * W + x; FGs[i] = dim(FGs[i]); BGs[i] = dim(BGs[i]); }
+  const t = ' PAUSED ', cy = Math.min(H - 1, y1 >> 1);
+  put(Math.max(0, x0 + ((L.bw - t.length) >> 1)), cy, t, C.yellow, C.bg, true);
+}
+function pausedOverlay(fr, sq) {
+  const N = 8 * sq; fr.pal = fr.pal.map(c => mixc(c, [0, 0, 0], 0.42)); fr.map = new Map();
+  const k = Math.max(2, Math.round(sq / 9)), word = 'paused', tw = word.length * 4 * k - k, th = 5 * k, ih = 8 * k, gap = 3 * k, pad = 3 * k;
+  const bw = tw + 2 * pad, bh = ih + gap + th + 2 * pad, x0 = (N - bw) >> 1, y0 = (N - bh) >> 1, cx = N >> 1;
+  fr.rect(x0, y0, bw, bh, fr.col(mixc(C.bg, [0, 0, 0], 0.35)));
+  const ink = fr.col(C.yellow);
+  fr.rect(cx - 3 * k, y0 + pad, 2 * k, ih, ink); fr.rect(cx + k, y0 + pad, 2 * k, ih, ink);
+  fr.text(word, cx - (tw >> 1), y0 + pad + ih + gap, k, ink);
+}
+function renderImg() {
+  initBuf(); U.hits = [];
+  if (U.view === 'game') {
+    const L = drawImageMode(); const bar = { sw: 0, sh: 0, barY: L.barY, extra: L.extra }; drawBar(bar);
+    const clear = U.needClear; U.needClear = false; flush(L.rows, clear);
+  } else {
+    if (U.view === 'menu') drawMenu(); else drawMoves();
+    U.needClear = true; flush(0, false);
+  }
+}
+function squareAtPx(px, py) {
+  if (!IMG) return -1; const x = px - IMG.bxc * M.cw - IMG.sub, y = py;
+  if (x < 0 || y < 0 || x >= IMG.wpx || y >= IMG.wpx) return -1;
+  return sqAtDisplay(Math.floor(y / IMG.sq), Math.floor(x / IMG.sq));
+}
+// pieces slide by pixels; only the small region around them is re-sent each frame
+function animateImg(m, done) {
+  const L = imgLayout(); IMG = L; const f = mvFrom(m), t = mvTo(m), fl = m >> 15, pcT = bd[t], over = new Map();
+  const cap = G.hist.length ? G.hist[G.hist.length - 1].cap : 0, sq = L.sq, S = Math.floor(sq * 0.88), off = Math.floor((sq - S) / 2), dyo = Math.round(S * 0.04);
+  over.set(t, fl & 2 ? 0 : cap); if (fl & 2) over.set(side === 1 ? t - 8 : t + 8, cap);
+  const where = s => { const d = displayOf(s); return { x: d.c * sq + off, y: d.r * sq + off + dyo }; };
+  const movers = [{ pc: mvPromo(m) ? (PW | (pcT & 8)) : pcT, a: where(f), b: where(t) }];
+  if (fl & 4) { const rf = t === 6 ? 7 : t === 2 ? 0 : t === 62 ? 63 : 56, rt = t === 6 ? 5 : t === 2 ? 3 : t === 62 ? 61 : 59; over.set(rt, 0); movers.push({ pc: bd[rt], a: where(rf), b: where(rt) }); }
+  const base = composeBoard(L, over);
+  for (const mv of movers) { const white = !(mv.pc & 8); mv.cf = base.col(white ? PCOL.wf : PCOL.bf); mv.ce = base.col(white ? PCOL.we : PCOL.be); mv.sp = sprite(mv.pc & 7, S); }
+  const dist = Math.hypot((where(t).x - where(f).x) / sq, (where(t).y - where(f).y) / sq), dur = Math.min(420, 120 + 40 * dist);
+  U.anim = {}; U.busy = true; const t0 = Date.now(); let prev = null;
+  const ease = x => (x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2);
+  const frame = (p) => {
+    const boxes = movers.map(mv => ({ x: Math.round(mv.a.x + (mv.b.x - mv.a.x) * p), y: Math.round(mv.a.y + (mv.b.y - mv.a.y) * p) }));
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const b of boxes.concat(prev || [])) { x0 = Math.min(x0, b.x); y0 = Math.min(y0, b.y); x1 = Math.max(x1, b.x + S); y1 = Math.max(y1, b.y + S); }
+    x0 = Math.max(0, Math.floor(x0 / M.cw) * M.cw); y0 = Math.max(0, Math.floor(y0 / M.ch) * M.ch);
+    x1 = Math.min(L.wpx, Math.ceil(x1 / M.cw) * M.cw); y1 = Math.min(L.wpx, Math.ceil(y1 / M.ch) * M.ch);
+    const w = x1 - x0, h = y1 - y0, reg = Object.create(Frame.prototype); reg.w = w; reg.h = h; reg.pal = base.pal; reg.map = base.map; reg.px = new Uint8Array(w * h);
+    for (let y = 0; y < h; y++) reg.px.set(base.px.subarray((y0 + y) * base.w + x0, (y0 + y) * base.w + x0 + w), y * w);
+    movers.forEach((mv, i) => reg.blit(mv.sp, boxes[i].x - x0, boxes[i].y - y0, mv.cf, mv.ce, mv.ce));
+    process.stdout.write('\x1b[?2026h' + cellPos(L, x0, y0).replace(/;(\d+)H$/, (q, c) => ';' + (+c) + 'H') + sixelEncode(reg, 0, 0, w, h, L.sub) + '\x1b[?2026l');
+    prev = boxes;
+  };
+  // first frame: the whole board with the mover on its start square
+  const full = Object.create(Frame.prototype); Object.assign(full, { w: base.w, h: base.h, pal: base.pal, map: base.map, px: base.px.slice() });
+  movers.forEach(mv => full.blit(mv.sp, mv.a.x, mv.a.y, mv.cf, mv.ce, mv.ce));
+  process.stdout.write('\x1b[?2026h' + '\x1b[1;' + (L.bxc + 1) + 'H' + sixelEncode(full, 0, 0, full.w, full.h, L.sub) + '\x1b[?2026l'); prev = movers.map(mv => ({ x: mv.a.x, y: mv.a.y }));
+  setTimeout(function tick() {
+    const p = Math.min(1, (Date.now() - t0) / dur);
+    if (p >= 1) { U.anim = null; U.busy = false; render(); done && done(); return; }
+    frame(ease(p)); setTimeout(tick, 16);
+  }, 120);
+}
+
+// ---- actions
+let worker = null; const pendingJobs = new Map(); let jobSeq = 0;
+function onWorkerMsg(r) { const cb = pendingJobs.get(r.id); if (cb) { pendingJobs.delete(r.id); cb(r); } }
+function thinkAsync(level, ms, cb) {
+  const id = ++jobSeq; pendingJobs.set(id, cb);
+  try {
+    if (!worker) { worker = new Worker(__filename); worker.on('message', onWorkerMsg); worker.on('error', () => { worker = null; }); }
+    worker.postMessage({ id, fen: G.startFen, moves: G.hist.map(h => uciOf(h.m)), level, ms });
+  } catch (e) { pendingJobs.delete(id); const m = think(level, ms); setImmediate(() => cb({ move: m ? uciOf(m) : '', score: lastScore })); }
+}
+function cancelThink() { U.token++; U.thinking = false; pendingJobs.clear(); if (worker) { worker.terminate(); worker = null; } }
+const moveFromUci = u => { const c = findMove(u.charCodeAt(0) - 97 + (+u[1] - 1) * 8, u.charCodeAt(2) - 97 + (+u[3] - 1) * 8, u[4] ? '  nbrq'.indexOf(u[4]) : undefined); return c.length ? c[0] : 0; };
+function workerLoop() {
+  parentPort.on('message', q => {
+    setFen(q.fen || START_FEN);
+    for (const u of q.moves) { const m = moveFromUci(u); if (!m) break; make(m); }
+    const m = think(q.level, q.ms);
+    parentPort.postMessage({ id: q.id, move: m ? uciOf(m) : '', score: lastScore });
+  });
+}
+const engineMs = () => { let ms = LEVELS[G.level - 1].ms; if (CLOCKS[G.clock].base) ms = Math.min(ms, Math.max(250, G.left[engineSide()] / 25)); return ms; };
+function afterMove(m) {
+  { const by = G.hist.length ? G.hist[G.hist.length - 1].by : 0; if (CLOCKS[G.clock].base) G.left[by] += CLOCKS[G.clock].inc * 1000; U.clkLast = Date.now(); }
+  U.last = { from: mvFrom(m), to: mvTo(m) }; U.sel = -1; U.targets = []; U.hint = null; U.promo = null; U.arm = '';
+  U.res = gameResult(); save();
+}
+function maybeEngine() {
+  U.res = gameResult();
+  if (G.paused || U.res.over || side !== engineSide() || U.thinking || U.busy) { render(); return; }
+  U.thinking = true; const tok = ++U.token; render(); const t0 = Date.now();
+  const finish = uci => setTimeout(() => {
+    if (tok !== U.token || !U.thinking) return; U.thinking = false;
+    const m = uci ? moveFromUci(uci) : 0;
+    if (!m) { U.res = gameResult(); render(); return; }
+    playMove(m); afterMove(m); animate(m, () => { U.res = gameResult(); render(); });
+  }, Math.max(0, 600 - (Date.now() - t0)));
+  const book = bookMove(); if (book) return finish(uciOf(book));
+  thinkAsync(G.level, engineMs(), r => { if (tok === U.token) finish(r.move); });
+}
+function humanMove(m) { playMove(m); afterMove(m); animate(m, () => maybeEngine()); }
+function trySelect(sq) {
+  if (G.paused || U.thinking || U.busy || U.res.over || U.promo || side !== humanSide()) return;
+  const pc = bd[sq];
+  if (U.sel >= 0 && U.targets.includes(sq)) {
+    const c = findMove(U.sel, sq);
+    if (c.length > 1) { U.promo = { from: U.sel, to: sq }; render(); return; }
+    if (c.length === 1) { humanMove(c[0]); return; }
+  }
+  if (pc && (pc >> 3) === side) { U.sel = sq; U.targets = legalMoves().filter(m => mvFrom(m) === sq).map(mvTo); }
+  else { U.sel = -1; U.targets = []; }
+  render();
+}
+function doPromo(t) { if (!U.promo) return; const c = findMove(U.promo.from, U.promo.to, t); if (c.length) humanMove(c[0]); }
+function confirmed(kind) {
+  if (U.res.over) return true; // a game in progress (even an empty one) needs a second tap
+  if (U.arm === kind && Date.now() < U.armUntil) return true;
+  U.arm = kind; U.armUntil = Date.now() + 4000; if (U.view === 'game') toast('Tap ' + (kind === 'new' ? 'New' : 'Side') + ' again to confirm', 4000); else setTimeout(render, 4050);
+  render(); return false;
+}
+function renderBar() {
+  if (!M.img) return render();
+  if (U.view !== 'game' || U.anim || !IMG) return;
+  initBuf(); U.hits = []; drawBar({ barY: IMG.barY, extra: IMG.extra }); flush(IMG.rows, false);
+}
+function clockTick() {
+  const now = Date.now(), dt = now - U.clkLast; U.clkLast = now;
+  if (!CLOCKS[G.clock].base || U.view !== 'game' || U.res.over || !G.hist.length || G.paused) return;
+  G.left[side] -= dt;
+  if (G.left[side] <= 0) {
+    G.left[side] = 0; cancelThink();
+    G.result = { over: true, win: side ^ 1, text: 'Out of time', short: 'Time · ' + (side ? 'White' : 'Black') + ' wins', time: true }; U.res = G.result; save(); render(); return;
+  }
+  if (!U.thinking || true) renderBar();
+}
+function resetBoard() { U.msgUntil = 0; U.last = null; U.sel = -1; U.targets = []; U.hint = null; U.promo = null; U.arm = ''; U.view = 'game'; save(); }
+function act(a) {
+  if (typeof a === 'object') { doPromo(a.promo); return; }
+  if (a === 'menu') { U.view = 'menu'; return render(); }
+  if (a === 'moves') { U.view = 'moves'; return render(); }
+  if (a === 'close') { U.view = U.view === 'moves' ? 'menu' : 'game'; return render(); }
+  const okBusy = ['lvm', 'lvp', 'flip', 'glyphs'], okThinking = okBusy.concat(['new', 'side', 'undo', 'resign', 'clock', 'pause', 'mode', 'autoflip']);
+  if (U.busy && !okBusy.includes(a)) return;
+  if (U.thinking && !okThinking.includes(a)) return;
+  if (G.paused && ['undo', 'hint', 'resign', 'draw'].includes(a)) return; // paused: the board and the clocks are locked
+  switch (a) {
+    case 'new': if (!confirmed('new')) return; cancelThink(); newGame(); resetBoard(); maybeEngine(); return;
+    case 'side': if (G.mode || !confirmed('side')) return; cancelThink(); G.playerWhite = !G.playerWhite; G.flip = false; newGame(); resetBoard(); maybeEngine(); return;
+    case 'undo': {
+      if (!G.hist.length) return;
+      if (G.result && G.result.time) { toast('The game is over', 2000); return; }
+      cancelThink(); G.result = null; U.offer = -1; undoOne(); if (G.hist.length && side === engineSide()) undoOne();
+      const l = G.hist[G.hist.length - 1]; U.last = l ? { from: mvFrom(l.m), to: mvTo(l.m) } : null;
+      U.sel = -1; U.targets = []; U.hint = null; U.promo = null; save(); U.res = gameResult(); maybeEngine(); return;
+    }
+    case 'hint': {
+      if (G.mode) { toast('No hints in 2-player games', 2500); return render(); }
+      if (U.res.over || side !== humanSide()) return;
+      U.thinking = true; const tok = ++U.token; toast('Looking for a move…', 5000); render();
+      thinkAsync(5, 1200, r => { if (tok !== U.token) return; U.thinking = false; U.msgUntil = 0; const m = r.move ? moveFromUci(r.move) : 0; if (m) U.hint = { from: mvFrom(m), to: mvTo(m) }; render(); });
+      return;
+    }
+    case 'resign': {
+      if (U.res.over) return;
+      if (!(U.arm === 'resign' && Date.now() < U.armUntil)) { U.arm = 'resign'; U.armUntil = Date.now() + 4000; setTimeout(render, 4050); return render(); }
+      cancelThink(); G.result = G.mode ? { over: true, win: side ^ 1, text: (side ? 'Black' : 'White') + ' resigned', short: (side ? 'Black' : 'White') + ' resigned' } : { over: true, win: engineSide(), text: 'You resigned', short: 'You resigned' }; U.res = G.result; U.arm = ''; U.view = 'game'; save(); break;
+    }
+    case 'draw': {
+      if (G.mode) { // two people: one offers, the other accepts with its own tap (the offer lapses with the next move)
+        if (U.res.over || G.hist.length < 2) { toast(U.res.over ? 'Not now' : 'Too early for a draw', 2000); U.view = 'game'; return render(); }
+        U.view = 'game';
+        if (U.offer !== G.hist.length) { U.offer = G.hist.length; toast('Draw offered: accept it in the Menu', 6000); return render(); }
+        G.result = { over: true, win: -1, text: 'Draw agreed', short: 'Draw agreed' }; U.res = G.result; U.offer = -1; save(); toast('Draw agreed', 3000); return render();
+      }
+      if (U.res.over || side !== humanSide() || U.thinking) { toast('Not now', 1800); U.view = 'game'; return render(); }
+      if (G.hist.length < 8) { toast('Too early for a draw', 2500); U.view = 'game'; return render(); }
+      U.view = 'game'; U.thinking = true; const tok = ++U.token; toast('Opponent is thinking…', 4000); render();
+      thinkAsync(5, 700, r => {
+        if (tok !== U.token) return; U.thinking = false;
+        if (-r.score <= 75) { G.result = { over: true, win: -1, text: 'Draw agreed', short: 'Draw agreed' }; U.res = G.result; save(); toast('Draw agreed', 3000); }
+        else toast('Draw declined', 3000);
+        render();
+      });
+      return;
+    }
+    case 'clock': G.nextClock = (G.nextClock + 1) % CLOCKS.length; if (!G.hist.length) { G.clock = G.nextClock; resetClock(); } else toast('Clock applies to the next game', 2500); save(); break;
+    case 'flip': G.flip = !G.flip; save(); break;
+    case 'autoflip': G.autoFlip = !G.autoFlip; save(); break;
+    case 'mode':
+      G.nextMode = G.nextMode ? 0 : 1;
+      if (!G.hist.length) { cancelThink(); G.mode = G.nextMode; U.arm = ''; resetBoard(); maybeEngine(); return; }
+      toast('Mode applies to the next game', 2500); save(); break;
+    case 'pause':
+      if (U.res.over) return;
+      if (!G.paused) { cancelThink(); G.paused = true; U.sel = -1; U.targets = []; U.hint = null; U.promo = null; U.arm = ''; U.view = 'game'; save(); render(); return; }
+      G.paused = false; U.clkLast = Date.now(); U.view = 'game'; save(); render(); maybeEngine(); return;
+    case 'glyphs': ascii = !ascii; break;
+    case 'lvm': G.level = Math.max(1, G.level - 1); save(); break;
+    case 'lvp': G.level = Math.min(LEVELS.length, G.level + 1); save(); break;
+  }
+  render();
+}
+
+// ---- input
+function click(rx, ry) {
+  let cx, cy, px, py;
+  if (M.img && M.pix) { px = rx - 1; py = ry - 1; cx = Math.floor(px / M.cw); cy = Math.floor(py / M.ch); }
+  else if (M.img) { cx = rx - 1; cy = ry - 1; px = (cx + 0.5) * M.cw; py = (cy + 0.5) * M.ch; }
+  else { cx = rx - 1; cy = ry - 1; }
+  if (M.img && U.view === 'game' && IMG && cy < IMG.rows) { const sq = squareAtPx(px, py); if (sq >= 0) { U.cursor = sq; trySelect(sq); } return; }
+  for (const h of U.hits) if (cx >= h.x && cx < h.x + h.w && cy >= h.y && cy < h.y + h.h) {
+    if (h.act !== undefined) act(h.act); else { U.cursor = h.sq; trySelect(h.sq); }
+    return;
+  }
+}
+function key(k) {
+  if (k === '\x03' || ((k === 'q' || k === 'Q') && !U.promo)) { cleanup(); process.exit(0); }
+  const move = (dr, dc) => { U.kb = true; const d = displayOf(U.cursor); const r = Math.min(7, Math.max(0, d.r + dr)), c = Math.min(7, Math.max(0, d.c + dc)); U.cursor = sqAtDisplay(r, c); render(); };
+  if (U.promo) { const t = { q: 5, r: 4, b: 3, n: 2 }[k.toLowerCase()]; if (t) { doPromo(t); return; } if (k === '\x1b') { U.promo = null; render(); } return; }
+  if (U.view !== 'game') { if (k === '\x1b' || k === 'm') act('close'); return; }
+  switch (k) {
+    case '\x1b[A': case 'k': return move(-1, 0);
+    case '\x1b[B': case 'j': return move(1, 0);
+    case '\x1b[C': case 'l': return move(0, 1);
+    case '\x1b[D': return move(0, -1);
+    case '\r': case ' ': return trySelect(U.cursor);
+    case '\x1b': U.sel = -1; U.targets = []; U.typed = ''; return render();
+    case 'p': return act('pause');
+    case 'n': return act('new'); case 'u': return act('undo'); case '?': return act('hint'); case 'x': return act('flip'); case 'm': return act('menu');
+    case '+': case '=': return act('lvp'); case '-': return act('lvm'); case 's': return act('side'); case 'i': return act('glyphs');
+  }
+  if (k >= '1' && k <= '6' && !U.typed && !G.mode) { G.level = +k; save(); toast('Level ' + G.level + ': ' + LEVELS[G.level - 1].name, 2000); return render(); }
+  if (/^[a-h]$/i.test(k)) { U.typed = k.toLowerCase(); U.kb = true; return; }
+  if (/^[1-8]$/.test(k) && U.typed) { const sq = U.typed.charCodeAt(0) - 97 + (+k - 1) * 8; U.typed = ''; U.cursor = sq; return trySelect(sq); }
+}
+function onData(buf) {
+  let s = buf.toString('utf8');
+  s = s.replace(/\x1b\[6;(\d+);(\d+)t/g, (q, h, w) => { M.ch = +h; M.cw = +w; return ''; })
+    .replace(/\x1b\[([458]);(\d+);(\d+)t/g, (q, k, a, b) => { M['r' + (k === '4' ? 14 : k === '5' ? 15 : 18)] = [+a, +b]; return ''; })
+    .replace(/\x1b\[\?([\d;]*)c/g, (q, p) => { M.sixel = p.split(';').includes('4'); M.da = true; return ''; })
+    .replace(/\x1b\[\?1016;(\d)\$y/g, (q, v) => { M.pixOk = +v === 1 || +v === 2; return ''; });
+  if (M.da && (!U.started || (!M.img && M.sixel && M.cw > 0 && M.ch > 0))) start(); // the DA1 answer comes last, so the others are in
+  const re = /\x1b\[<(\d+);(\d+);(\d+)([Mm])|\x1b\[[A-D]|\x1b|[\s\S]/g; let m;
+  while ((m = re.exec(s))) {
+    if (m[4]) { if (m[4] === 'M' && (+m[1] & 3) === 0 && !(+m[1] & 32) && !(+m[1] & 64)) click(+m[2], +m[3]); }
+    else key(m[0]);
+  }
+}
+function cleanup() { process.stdout.write('\x1b[?1016l\x1b[?1000l\x1b[?1006l\x1b[?7h\x1b[?25h\x1b[?1049l'); try { process.stdin.setRawMode(false); } catch (e) { /* ignore */ } }
+function start() {
+  U.started = true;
+  M.img = !!(M.sixel && M.cw > 0 && M.ch > 0 && !process.env.CHESS_NOIMG); M.pix = !!(M.img && M.pixOk);
+  if (M.pix) process.stdout.write('\x1b[?1016h');
+  U.needClear = true; render(); maybeEngine();
+}
+function main() {
+  if (!process.stdin.isTTY) { console.error('chess needs a terminal'); process.exit(1); }
+  setupColors(); load(); if (process.env.CHESS_FEN) { setFen(process.env.CHESS_FEN); G.hist = []; G.keys = [keyNow()]; }
+  U.res = gameResult();
+  const l = G.hist[G.hist.length - 1]; if (l) U.last = { from: mvFrom(l.m), to: mvTo(l.m) };
+  process.stdin.setRawMode(true); process.stdin.resume(); process.stdin.on('data', onData);
+  process.stdout.write('\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1000h\x1b[?1006h');
+  process.stdout.on('resize', () => { U.needClear = true; render(); }); process.on('exit', cleanup); process.on('SIGTERM', () => process.exit(0)); process.on('SIGHUP', () => process.exit(0));
+  // ask the terminal for its cell size in pixels, sixel support and pixel mouse reports; fall back to text-only pieces
+  setInterval(clockTick, 500);
+  if (process.env.CHESS_CELL) { const [w, h] = process.env.CHESS_CELL.split('x'); M.cw = +w; M.ch = +h; M.sixel = true; start(); return; }
+  process.stdout.write('\x1b[?1016$p\x1b[16t\x1b[14t\x1b[15t\x1b[18t\x1b[c'); // DA1 last: when it is answered the rest is too
+  setTimeout(() => { if (!U.started) start(); }, 4000); // no answer at all: text-only fallback (switches to the picture if the answer comes late)
+}
+if (!isMainThread) workerLoop();
+else if ((require.main === module || process.env.CHESS_RUN) && !process.env.CHESS_NOMAIN) main();
+CHESS_JS_EOF
+exec node ~/.cache/owl-chess/chess.js
+"""
+  }
+}

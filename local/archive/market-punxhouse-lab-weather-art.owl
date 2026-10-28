@@ -1,0 +1,1021 @@
+widget "weather art" {
+  meta {
+    owl: 7
+    description: "Live weather drawn as intricate ASCII art that follows the latitude: alpine lakes, deserts, tropics, arctic nights, skylines and forests. Tap the tile for settings, forecasts and a few secrets."
+    version: "2.2"
+    license: "MIT"
+    category: "world"
+  }
+
+  size: 3x4
+  minSize: 2x3
+  padding: 0
+
+  // ---- settings, kept by the launcher
+  state loc = "" persist
+  state draft = "" persist
+  state query = "" persist
+  state fahrenheit = false persist
+  state tab = "now" persist
+  state cat = 0 persist
+  state party = 0 persist
+  state taps = 0 persist
+  state fireflies = 1 persist
+  state rainbow = 1 persist
+  state scene = "auto" persist
+
+  let zq = trim(first(match(loc, "[A-Za-z0-9 ,.-]+") ?? [loc]))
+  let qq = trim(query) == "" ? "%20" : trim(query).replace("%", "%25").replace("+", "%2B").replace("/", "%2F").replace("?", "%3F").replace("#", "%23").replace("&", "%26").replace("'", "%27").replace(" ", "%20")
+
+  source now = clock every 60s
+  // Steps the calm layers (haze, clouds, stars, sun, water) once a second; the
+  // frame clock (`time`) is only read while something falls or the party is on.
+  source tick = clock every 1s
+  source wx = http("https://wttr.in/${zq}?format=j1") every 15m json timeout 25s status
+  source geo = http("https://geocoding-api.open-meteo.com/v1/search?name=${qq}&count=8&language=en&format=json") every 24h json timeout 12s status
+
+  onTap: screen()
+
+  let data = wx == null ? null : wx.ok ? wx.out : null
+  let cur = data.current_condition[0] ?? {}
+  let area = data.nearest_area[0] ?? {}
+  let astro = data.weather[0].astronomy[0] ?? {}
+  let days = data.weather ?? []
+  let hourly = days[0].hourly ?? []
+  let results = geo == null || !geo.ok ? [] : (geo.out.results ?? [])
+
+  // Sunrise and sunset come in the local time of the place, so ask that same
+  // place for its utc offset and count the hours there, not where the phone is.
+  let wlat = num(data.nearest_area[0].latitude, 0)
+  let wlon = num(data.nearest_area[0].longitude, 0)
+  source off = http("https://api.open-meteo.com/v1/forecast?latitude=${wlat}&longitude=${wlon}&current=temperature_2m&timezone=auto") every 6h json timeout 10s status
+
+  let place = area.areaName[0].value ?? "somewhere"
+  let region = area.region[0].value ?? ""
+  let country = area.country[0].value ?? ""
+  let code = num(cur.weatherCode, -1)
+  let tempC = num(cur.temp_C, 0)
+  let tempF = num(cur.temp_F, 32)
+  let temp = fahrenheit ? tempF : tempC
+  let feels = fahrenheit ? num(num(cur.FeelsLikeC) * 1.8 + 32, tempF) : num(cur.FeelsLikeC, tempC)
+  let hum = num(cur.humidity, 0)
+  let windK = num(cur.windspeedKmph, 0)
+  let gustK = num(cur.WindGustKmph, windK)
+  let windDir = cur.winddir16Point ?? "?"
+  let windDeg = num(cur.winddirDegree, 0)
+  let clouds = num(cur.cloudcover, 0)
+  let precip = num(cur.precipMM, 0)
+  let vis = num(cur.visibility, 10)
+  let uv = num(cur.uvIndex, 0)
+  let press = num(cur.pressure, 1013)
+  let pressWas = prev(press)
+  let pressTrend = num(pressWas, press) - press
+  let dewC = num(days[0].hourly[4].DewPointC, tempC)
+  let desc = first(cur.weatherDesc ?? []).value ?? (data == null ? "looking up" : "no report")
+  let blowsRight = windDeg > 78 && windDeg < 258
+
+  // What is falling is easier to read off the description than off the code:
+  // world weather online numbers the same kind of day all over the place.
+  let d = lower(desc)
+  let isStorm = contains(d, "thunder")
+  let isSnow = contains(d, "snow") || contains(d, "sleet") || contains(d, "blizzard") || contains(d, "pellet") || contains(d, "ice")
+  let isFog = contains(d, "fog") || contains(d, "mist") || contains(d, "haze") || contains(d, "smoke") || contains(d, "dust")
+  let isRain = !isSnow && (contains(d, "rain") || contains(d, "drizzle") || contains(d, "shower") || contains(d, "freezing") || contains(d, "downpour"))
+  let heavy = contains(d, "heavy") || contains(d, "moderate") || contains(d, "torrential") || contains(d, "intense") || contains(d, "dense") || contains(d, "severe") || contains(d, "blizzard")
+  let fogAmt = isFog ? clamp(0.6 + vis / 25, 0, 1.5) : 0
+  let rainAmt = isRain ? clamp(0.5 + precip * 0.7 + (heavy ? 1.6 : 0) + (isStorm ? 1.6 : 0), 0, 7) : 0
+  let snowAmt = isSnow ? clamp(0.6 + precip * 2.5 + (heavy ? 1.4 : 0), 0, 6) : 0
+  let wet = clamp(fogAmt * 0.4 + rainAmt * 0.22 + snowAmt * 0.22, 0, 1)
+  let dull = clamp(clouds / 100, 0, 1)
+
+  // Sunrise and sunset are in the local time of the place, so ask the same
+  // place for its utc offset and count the hours there, not where the phone is.
+  let utcOff = num(off.out.utc_offset_seconds, 0) / 3600
+  let hh = ((now % 86400) / 3600 + utcOff) % 24
+  source fc = http("https://api.open-meteo.com/v1/forecast?latitude=${wlat}&longitude=${wlon}&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&temperature_unit=${fahrenheit ? "fahrenheit" : "celsius"}&timezone=auto&forecast_days=7") every 6h json timeout 12s status
+  let fc7 = fc.out.daily ?? {}
+  // `off` and `fc` start before `wx` has the place (0,0), and a changed URL only
+  // takes effect at the next fetch: fetch again once the place or unit is known.
+  on "${wlat},${wlon},${fahrenheit}" { refresh() }
+  let rG = match(astro.sunrise ?? "06:00 AM", "([0-9]+):([0-9]+) (AM|PM)")
+  let sG = match(astro.sunset ?? "06:00 PM", "([0-9]+):([0-9]+) (AM|PM)")
+  let riseH = num(rG[1], 0) / 60 + (rG[2] == "PM" ? (num(rG[0], 6) == 12 ? 12 : num(rG[0], 6) + 12) : (num(rG[0], 6) == 12 ? 0 : num(rG[0], 6)))
+  let setH = num(sG[1], 0) / 60 + (sG[2] == "PM" ? (num(sG[0], 18) == 12 ? 12 : num(sG[0], 18) + 12) : (num(sG[0], 18) == 12 ? 0 : num(sG[0], 18)))
+  let frac = num((hh - riseH) / max(setH - riseH, 1), 0.5)
+  let sunAlt = num(sin(clamp(frac, 0, 1) * rad(180)), 0.5)
+  let night = frac < -0.03 || frac > 1.03
+  let twilight = !night && (frac < 0.14 || frac > 0.86)
+  let dusk = twilight && frac > 0.5
+
+  let mG = match(astro.moonrise ?? "06:00 PM", "([0-9]+):([0-9]+) (AM|PM)")
+  let msG = match(astro.moonset ?? "06:00 AM", "([0-9]+):([0-9]+) (AM|PM)")
+  let mRise = num(mG[1], 0) / 60 + (mG[2] == "PM" ? (num(mG[0], 18) == 12 ? 12 : num(mG[0], 18) + 12) : (num(mG[0], 18) == 12 ? 0 : num(mG[0], 18)))
+  let mSet = num(msG[1], 0) / 60 + (msG[2] == "PM" ? (num(msG[0], 6) == 12 ? 12 : num(msG[0], 6) + 12) : (num(msG[0], 6) == 12 ? 0 : num(msG[0], 6)))
+  let mFrac = num((hh - mRise) / max(mSet - mRise, 1), 0.5)
+  let moonUp = night && mFrac > -0.04 && mFrac < 1.04
+  let phaseName = lower(astro.moon_phase ?? "new moon")
+  let ph = phaseName == "new moon" ? 0 : contains(phaseName, "waxing crescent") ? 0.125 : contains(phaseName, "first quarter") ? 0.25 : contains(phaseName, "waxing gibbous") ? 0.375 : phaseName == "full moon" ? 0.5 : contains(phaseName, "waning gibbous") ? 0.625 : contains(phaseName, "last quarter") ? 0.75 : 0.875
+  let waxing = ph <= 0.5
+  let litFrac = waxing ? ph * 2 : (1 - ph) * 2
+  let termA = 1 - 2 * litFrac
+  let moonIll = num(astro.moon_illumination, 0) / 100
+  let moonAge = round(ph * 29.53, 1)
+  // The tide follows the moon: two highs a lunar day, late by the phase.
+  let tide = sin(hh * 0.506 + ph * 12.566)
+
+  let cold = tempC < 2
+  let hot = tempC > 26
+  let partyNow = party == 1 ? (sin(time * 1.6) * 0.5 + 0.5) : 0
+
+  let dayZen = mix(mix(rgb(52, 96, 190), blue, 0.45), rgb(74, 80, 94), dull * 0.38 + wet * 0.15)
+  let dayMid = mix(mix(rgb(122, 176, 226), cyan, 0.3), rgb(104, 112, 126), dull * 0.32 + wet * 0.15)
+  let dayHor = mix(mix(rgb(226, 236, 244), cyan, 0.3), rgb(132, 140, 152), dull * 0.28 + wet * 0.2)
+  let sunCol = twilight ? (dusk ? rgb(255, 150, 70) : rgb(255, 198, 122)) : rgb(255, 238, 170)
+  let cloudLit = mix(mix(rgb(246, 248, 252), cyan, 0.18), rgb(120, 128, 140), dull * 0.45 + wet * 0.2)
+  let cloudDark = mix(mix(rgb(126, 142, 168), blue, 0.2), rgb(58, 62, 74), dull * 0.5 + wet * 0.25)
+  let hillLit = mix(mix(rgb(126, 146, 170), cyan, 0.18), rgb(78, 86, 100), dull * 0.25 + wet * 0.2)
+  let hillDark = mix(mix(rgb(30, 42, 62), blue, 0.25), rgb(16, 19, 27), dull * 0.25 + wet * 0.2)
+  let seaCol = mix(mix(rgb(48, 92, 146), blue, 0.35), rgb(40, 48, 62), dull * 0.4 + wet * 0.25)
+  let nZen = mix(mix(rgb(6, 8, 28), blue, 0.25), rgb(12, 14, 22), dull * 0.6)
+  let nMid = mix(mix(rgb(14, 20, 58), blue, 0.3), rgb(22, 26, 36), dull * 0.55)
+  let nHor = mix(mix(rgb(38, 44, 92), magenta, 0.22), rgb(40, 46, 60), dull * 0.5)
+
+  let skyA = night ? nZen : twilight && !dusk ? mix(dayZen, rgb(70, 60, 140), 0.5) : dusk ? mix(dayZen, rgb(120, 60, 110), 0.45) : dayZen
+  let skyB = night ? nMid : twilight && !dusk ? mix(dayMid, rgb(190, 110, 120), 0.5) : dusk ? mix(dayMid, rgb(240, 130, 90), 0.5) : dayMid
+  let skyC = night ? nHor : twilight && !dusk ? mix(dayHor, rgb(250, 170, 130), 0.55) : dusk ? mix(dayHor, rgb(255, 160, 90), 0.5) : dayHor
+  let seaTop = mix(seaCol, rgb(255, 170, 110), twilight ? 0.3 : 0)
+  let seaBot = mix(mix(seaCol, rgb(4, 8, 24), 0.6), rgb(10, 14, 26), dull * 0.4)
+  let starCol = mix(rgb(226, 236, 255), cyan, 0.25)
+  let tempCol = party == 1 ? mix(rgb(255, 90, 120), rgb(120, 255, 200), partyNow) : cold ? rgb(140, 205, 255) : hot ? rgb(255, 160, 110) : rgb(255, 244, 214)
+  let rainbowCols = [red, orange, yellow, green, cyan, blue, magenta]
+
+  // A hop around the planet: one tap picks the next one by the clock.
+  let hops = ["64.15,-21.94", "51.51,-0.13", "48.85,2.35", "41.39,2.17", "40.71,-74.0", "34.05,-118.24", "37.77,-122.42", "19.43,-99.13", "-23.55,-46.63", "-34.6,-58.38", "30.04,31.24", "-1.29,36.82", "-33.92,18.42", "25.2,55.27", "28.61,77.21", "13.75,100.5", "1.35,103.82", "35.68,139.69", "37.57,126.98", "39.9,116.4", "-33.87,151.21", "-41.29,174.78", "21.31,-157.86", "59.33,18.07"]
+
+  // The land follows the latitude and the weather, unless you pick a scene.
+  let alat = abs(wlat)
+  let drybelt = alat > 12 && alat < 38 && hum < 50 && precip < 0.5 && clouds < 40
+  let biome = scene == "auto" ? (alat > 62 ? "arctic" : alat > 56 && cold ? "arctic" : drybelt && tempC > 18 ? "desert" : alat < 24 ? "tropics" : rainAmt > 1.5 || snowAmt > 0.5 || dull > 0.62 ? "forest" : "alps") : scene
+  let sandLit = mix(rgb(232, 200, 140), orange, 0.22)
+  let sandDark = mix(rgb(165, 122, 70), orange, 0.12)
+  let iceLit = mix(rgb(230, 242, 252), cyan, 0.2)
+  let iceDark = mix(rgb(140, 175, 210), blue, 0.25)
+  let leafLit = mix(rgb(110, 165, 110), green, 0.3)
+  let leafDark = mix(rgb(28, 66, 44), green, 0.2)
+  let cityLit = mix(rgb(205, 205, 215), yellow, 0.08)
+  let cityDark = mix(rgb(42, 46, 62), blue, 0.3)
+  let scenes = ["auto", "alps", "desert", "tropics", "arctic", "city", "forest"]
+
+  let cloudRamp = [" ", ".", ",", ":", "-", "~", "=", "*", "#"]
+  let glyphs = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "-", "°"]
+  let bigFont = [
+    ["█████", "█   █", "█   █", "█   █", "█   █", "█   █", "█████"],
+    ["  █  ", "  █  ", "  █  ", "  █  ", "  █  ", "  █  ", "  █  "],
+    ["█████", "    █", "    █", "█████", "█    ", "█    ", "█████"],
+    ["█████", "    █", "    █", " ███ ", "    █", "    █", "█████"],
+    ["█   █", "█   █", "█   █", "█████", "    █", "    █", "    █"],
+    ["█████", "█    ", "█    ", "█████", "    █", "    █", "█████"],
+    ["█████", "█    ", "█    ", "█████", "█   █", "█   █", "█████"],
+    ["█████", "    █", "    █", "   █ ", "  █  ", "  █  ", "  █  "],
+    ["█████", "█   █", "█   █", "█████", "█   █", "█   █", "█████"],
+    ["█████", "█   █", "█   █", "█████", "    █", "    █", "█████"],
+    ["     ", "     ", "     ", "█████", "     ", "     ", "     "],
+    [" ██ ", "█  █", "█  █", " ██ ", "    ", "    ", "    "]
+  ]
+  let catArt = [" /\\_/\\ ", "( o.o ) ", " > ^ < ", "  \\_/  "]
+  let tempStr = data == null ? "--°" : "${temp}°"
+
+  Box {
+    fill: true
+    Canvas {
+      fill: true
+
+      let tt = isRain || isSnow || isStorm || party == 1 ? time : tick
+      let fs = clamp(sqrt(width * height / 1050), 5.5, 14)
+      let cw = fs * 0.6
+      let lh = fs * 1.2
+      let cols = floor(width / cw)
+      let rows = floor(height / lh)
+      let ox = (width - cols * cw) / 2
+      let oy = (height - rows * lh) / 2
+      let hz = max(5, rows * 0.5)
+      let wl = hz + max(2, rows * 0.12)
+      let skyH = hz * lh + oy
+      let seaH = wl * lh + oy
+
+      let sunX = ox + (0.1 + clamp(frac, 0, 1) * 0.8) * cols * cw + cw / 2
+      let sunY = oy + (hz - 1.2 - clamp(sunAlt, 0, 1) * (hz - 3.5)) * lh
+      let discX = night ? ox + (0.12 + clamp(mFrac, 0, 1) * 0.76) * cols * cw + cw / 2 : sunX
+      let discY = night ? oy + (hz - 1.2 - clamp(num(sin(clamp(mFrac, 0, 1) * rad(180)), 0.5), 0, 1) * (hz - 3.5)) * lh : sunY
+      let bodyR = min(cols * cw, hz * lh) * 0.105
+
+      rect(0, 0, width, seaH, fill: linear(0, oy, 0, skyH, [skyA, skyB, skyC]))
+      rect(0, seaH, width, height - seaH, fill: linear(0, seaH, 0, height, [seaTop, seaBot]))
+      if biome == "desert" {
+        rect(0, seaH, width, height - seaH, fill: linear(0, seaH, 0, height, [sandLit, sandDark]))
+      }
+      if biome == "arctic" {
+        rect(0, oy + (hz - 1) * lh, width, height - oy - (hz - 1) * lh, fill: linear(0, oy + (hz - 1) * lh, 0, height, [mix(iceLit, skyC, 0.15), mix(iceDark, skyC, 0.25)]))
+      }
+      if biome == "city" {
+        rect(0, seaH, width, height - seaH, fill: linear(0, seaH, 0, height, [mix(cityDark, seaCol, 0.35), mix(cityDark, background, 0.35)]))
+      }
+
+      // Thin haze, densest low down.
+      for r in range(0, floor(hz) + 1) {
+        let a2 = r / hz
+        let vals = map(range(cols), c =>
+            sin(c * 0.31 + a2 * 2.4 + tt * 0.05) * 0.5
+          + sin(c * 0.13 - a2 * 5 + tt * 0.03) * 0.6
+          + sin((c + r * 2) * 0.19 - tt * 0.02) * 0.35
+        )
+        let q = map(vals, v => (v + 1.45) / 2.9 - (0.66 + a2 * 0.26))
+        let chars = map(q, d => d > 0.15 ? "-" : d > 0.05 ? "." : " ")
+        let line = join(chars, "")
+        if len(replace(line, " ", "")) > 0 {
+          text(line, ox, oy + r * lh + lh / 2, size: fs, color: alpha(mix(skyC, foreground, 0.5), 0.07 + a2 * 0.26))
+        }
+      }
+
+      // Stars, and a shooting star now and then.
+      if night {
+        for i in range(0, round(20 + (100 - clouds) * 0.4)) {
+          let h1 = sin(i * 12.9898 + 78.233) * 43758.545
+          let h2 = sin(i * 39.346 + 11.135) * 24634.634
+          let f1 = h1 - floor(h1)
+          let f2 = h2 - floor(h2)
+          text(f1 > 0.72 ? "*" : f2 > 0.45 ? "+" : ".", ox + floor(f2 * cols) * cw + cw / 2, oy + floor(f1 * hz * 0.9) * lh + lh / 2, size: fs, color: alpha(starCol, (0.2 + 0.8 * abs(sin(tt * (0.6 + f1) + i))) * (1 - dull * 0.75)))
+        }
+        for s in range(0, 2) {
+          let life = (tt * 0.14 + s * 0.5) % 1
+          let start = sin(s * 4.77) * 0.5 + 0.5
+          let sr = hz * (0.1 + start * 0.35)
+          let sc = (start * cols + life * cols * 0.5) % cols
+          if life < 0.12 && dull < 0.8 {
+            for k in range(0, 4) {
+              text(k == 0 ? "*" : ".", ox + round(sc - k * 1.6) * cw + cw / 2, oy + (round(sr) + round(k * 0.55)) * lh + lh / 2, size: fs, color: alpha(starCol, (0.9 - k * 0.2) * (1 - life / 0.12)))
+            }
+          }
+        }
+      }
+
+      // Aurora, rippling over the far north on a clear night.
+      if night && dull < 0.65 && (biome == "arctic" || abs(wlat) > 52) {
+        for i in range(0, 4) {
+          let vals = map(range(cols), c => sin(c * 0.35 + tt * 0.7 + i * 2.2) + sin(c * 0.13 - tt * 0.4 + i) * 0.6)
+          let line = join(map(vals, v => v > 0.9 ? "=" : v > 0.3 ? "-" : v > -0.2 ? "." : " "), "")
+          if len(replace(line, " ", "")) > 0 {
+            text(line, ox, oy + (1.5 + i * 1.8 + sin(tt * 0.5 + i) * 0.8) * lh + lh / 2, size: fs, color: alpha(mix(green, mix(cyan, magenta, 0.35), i / 3), 0.2 + 0.1 * sin(tt + i * 1.7)))
+          }
+        }
+        for b in range(0, 2) {
+          let abx = cols * (0.3 + 0.4 * b) + sin(tt * 0.2 + b * 2.1) * 3
+          for k in range(0, round(hz * 0.6)) {
+            let ax = ox + (abx + sin(k * 0.45 + tt * (0.6 + b * 0.2) + b * 3) * 2.2) * cw + cw / 2
+            text(k % 2 == 0 ? "|" : "/", ax, oy + k * lh + lh / 2, size: fs, color: alpha(mix(green, magenta, k / max(1, hz * 0.6) * 0.7 + b * 0.12), 0.3 + 0.18 * sin(tt * 0.9 + k * 0.5 + b * 2)))
+          }
+        }
+      }
+
+      if !night || moonUp {
+        circle(discX, discY, bodyR * 3.6, fill: radial(discX, discY, bodyR * 3.6, [alpha(night ? starCol : sunCol, night ? 0.07 : 0.22), alpha(night ? starCol : sunCol, 0)]))
+        for r in range(0, rows) {
+          for c in range(0, cols) {
+            let x = ox + c * cw + cw / 2
+            let y = oy + r * lh + lh / 2
+            let u = (x - discX) / bodyR
+            let v = (y - discY) / bodyR
+            let n = sqrt(u * u + v * v)
+            if n < 1.04 {
+              if night {
+                let lit = waxing ? u >= termA * sqrt(max(1 - v * v, 0)) : u <= -termA * sqrt(max(1 - v * v, 0))
+                text(lit ? (n < 0.4 ? "#" : n < 0.72 ? "*" : n < 0.9 ? "·" : "+") : (n < 0.5 ? "░" : "."), x, y, size: fs, color: alpha(lit ? starCol : mix(starCol, skyA, 0.5), lit ? (0.35 + (1 - n) * 0.65) * (0.3 + moonIll * 0.7) : 0.34))
+              } else if n < 0.88 {
+                text(n < 0.3 ? "@" : n < 0.62 ? "#" : n < 0.86 ? "*" : "·", x, y, size: fs, color: alpha(mix(sunCol, orange, n * 0.5), (0.45 + (1 - n) * 0.55) * (1 - dull * 0.5)))
+              } else {
+                text("*", x, y, size: fs, color: alpha(mix(sunCol, orange, 0.45), 0.85 * (1 - dull * 0.5)))
+              }
+            } else if n > 1.12 && n < 1.42 {
+              let a = atan2(v, u) * 57.29578 + (night ? 2 : 3.2) * tt
+              if a % 30 < 5 {
+                text(n < 1.24 ? "-" : ".", x, y, size: fs, color: alpha(night ? starCol : sunCol, 0.28 * (1 - (n - 1.12) / 0.3) * (night ? 0.7 : 1 - dull * 0.6)))
+              }
+            }
+          }
+        }
+      }
+
+      // The path the sun takes today, with a marker where it is now.
+      if !night {
+        for i in range(0, 13) {
+          let f = i / 12
+          let px2 = ox + (0.1 + f * 0.8) * cols * cw + cw / 2
+          let py = oy + (hz - 1.2 - clamp(num(sin(f * rad(180)), 0), 0, 1) * (hz - 3.5)) * lh
+          text("·", px2, py + bodyR * 1.25, size: fs, color: alpha(sunCol, 0.3))
+        }
+      }
+
+      // A rainbow after the rain.
+      if rainbow == 1 && !night && sunAlt > 0.22 && clouds > 18 && clouds < 80 && rainAmt == 0 && fogAmt == 0 && height > 160 {
+        let arcR = height * 0.66
+        let arcY = height * 0.16 + arcR
+        for r in range(0, floor(hz)) {
+          for c in range(0, cols) {
+            let x = ox + c * cw + cw / 2
+            let y = oy + r * lh + lh / 2
+            let n = sqrt(pow((x - width / 2) / arcR, 2) + pow((y - arcY) / arcR, 2))
+            if n > 0.6 && n < 0.95 {
+              let band = floor(clamp((n - 0.6) / 0.35 * 7, 0, 6.999))
+              text(x > width / 2 ? "\\" : "/", x, y, size: fs, color: alpha(rainbowCols[band], 0.5))
+            }
+          }
+        }
+      }
+
+      // A few birds, on a calm clear day.
+      if !night && rainAmt == 0 && fogAmt == 0 && windK < 16 && clouds < 55 && hz > 8 {
+        for i in range(0, 5) {
+          let h1 = sin(i * 12.9898 + 7.13) * 43758.545
+          let f1 = h1 - floor(h1)
+          let bob = sin(tt * 0.9 + i * 2.1) * 0.6
+          let cc = round(f1 * (cols - 6) + tt * 0.45)
+          let rr = round(hz * (0.12 + f1 * 0.3) + bob)
+          if rr > 1 && rr < hz - 1 {
+            let x = ox + cc * cw + cw / 2
+            let y = oy + rr * lh + lh / 2
+            text("\\", x, y, size: fs, color: alpha(mix(skyC, foreground, 0.5), 0.5))
+            text("/", x + cw, y + lh * 0.9, size: fs, color: alpha(mix(skyC, foreground, 0.5), 0.5))
+          }
+        }
+      }
+
+      // Cirrus: high, thin, in patches, streaked with the wind.
+      if clouds > 18 && rainAmt < 3.5 && !isStorm {
+        for r in range(0, floor(hz * 0.9)) {
+          let band = 1 / (1 + pow((r / hz - 0.26) / 0.26, 2))
+          let drift = tt * (0.1 + windK * 0.004)
+          let vals = map(range(cols), c =>
+              sin(c * 0.26 + r * 0.58 + drift) * 0.5
+            + sin(c * 0.13 - r * 1.05 - drift * 0.8) * 0.4
+            + sin(c * 0.62 + r * 0.3 + drift * 0.5) * 0.3
+            + sin(c * 0.085 + r * 0.17 + drift * 0.2) * 0.55
+          )
+          let q = map(vals, v => (v + 1.75) / 3.5 - (0.6 + band * 0.28))
+          let chars = map(q, d => d > 0.1 ? "=" : d > 0.01 ? "-" : " ")
+          let line = join(chars, "")
+          if len(replace(line, " ", "")) > 0 {
+            text(line, ox, oy + r * lh + lh / 2, size: fs, color: alpha(mix(cloudLit, skyC, 0.35), (0.14 + band * 0.3) * (1 - dull * 0.25)))
+          }
+        }
+      }
+
+      // Cumulus: the body of the cloud, thicker the more of the sky it covers.
+      let cloudThr = lerp(0.84, 0.4, dull)
+      for r in range(0, floor(hz) + 1) {
+        let band = 1 / (1 + pow((r / hz - 0.44) / 0.42, 2))
+        let drift = tt * (0.07 + windK * 0.005)
+        let vals = map(range(cols), c =>
+            sin(c * 0.33 + r * 0.42 + drift) * 0.55
+          + sin(c * 0.62 - r * 0.7 - drift * 0.6) * 0.45
+        )
+        let q = map(vals, v => (v + 1) / 2 * 0.72 + band * 0.3 - cloudThr)
+        let chars = map(q, d => d > 0 ? cloudRamp[floor(clamp(pow(clamp(d / 0.5, 0, 1), 0.7), 0, 0.999) * len(cloudRamp))] : " ")
+        let line = join(chars, "")
+        if len(replace(line, " ", "")) > 0 {
+          text(line, ox, oy + r * lh + lh / 2, size: fs, color: alpha(mix(mix(cloudDark, cloudLit, clamp(0.2 + band * 0.8, 0, 1)), mix(rgb(56, 62, 76), cloudDark, 0.35), dull * 0.8), night ? 0.78 : 0.92))
+        }
+      }
+
+      // Wind, as streaks blowing across the sky.
+      if windK > 13 && rainAmt < 2.5 {
+        for i in range(0, 30) {
+          let h1 = sin(i * 7.13 + 2.1) * 43758.545
+          let f1 = h1 - floor(h1)
+          let sp = 0.5 + windK * 0.07
+          let c = round(f1 * cols + (blowsRight ? tt * sp : -tt * sp))
+          let r = round(f1 * hz * 0.85)
+          text(blowsRight ? "-" : "=", ox + ((c % cols) + cols) % cols * cw + cw / 2, oy + r * lh + lh / 2, size: fs, color: alpha(foreground, 0.08 + f1 * 0.16))
+        }
+      }
+
+      // A balloon on a hot, still day, a plane when it is windy.
+      if tempC > 29 && clouds < 45 && windK < 18 && !night {
+        let bx = round(cols * (0.2 + (tt * 0.03) % 0.6))
+        let by = round(hz * (0.2 + 0.08 * sin(tt * 0.4)))
+        text("(o)", ox + bx * cw + cw / 2, oy + by * lh + lh / 2, size: fs, color: alpha(orange, 0.85))
+        text("/|\\", ox + bx * cw + cw / 2, oy + (by + 1) * lh + lh / 2, size: fs, color: alpha(orange, 0.85))
+      }
+      if clouds < 45 && windK > 22 && !night && !isStorm {
+        let px3 = (tt * 1.4) % (cols + 14)
+        let py = round(hz * (0.1 + 0.12 * sin(tt * 0.2)))
+        if px3 < cols + 12 {
+          text("✈", ox + px3 * cw, oy + py * lh + lh / 2, size: fs, color: alpha(foreground, 0.7))
+          for k in range(1, 5) {
+            text(".", ox + (px3 - k * 1.5) * cw, oy + (py + round(k * 0.12)) * lh + lh / 2, size: fs, color: alpha(foreground, 0.3 - k * 0.05))
+          }
+        }
+      }
+
+      // Far range: a silhouette of peaks, snow on the tops, drawn with texture on it.
+      let farFill = mix(mix(hillDark, skyC, 0.12), hillLit, 0.18)
+      let nearFill = mix(mix(hillDark, background, 0.35), hillLit, 0.12)
+      if biome == "alps" || biome == "forest" {
+      path(map(range(cols), c => [ox + c * cw + cw / 2, oy + round(hz - 1.5 - (4.2 * max(0, 1 - abs(c / cols - 0.08) / 0.22) + 2.4 * max(0, 1 - abs(c / cols - 0.3) / 0.15) + 5.4 * max(0, 1 - abs(c / cols - 0.55) / 0.24) + 3 * max(0, 1 - abs(c / cols - 0.8) / 0.17) + 1.6 * max(0, 1 - abs(c / cols - 0.97) / 0.1))) * lh + lh / 2]) + [[width, oy + round(wl) * lh], [0, oy + round(wl) * lh]], closed: true, fill: alpha(farFill, 0.85))
+
+      for c in range(0, cols) {
+        let u = c / cols
+        let p1 = 4.2 * max(0, 1 - abs(u - 0.08) / 0.22)
+        let p2 = 2.4 * max(0, 1 - abs(u - 0.3) / 0.15)
+        let p3 = 5.4 * max(0, 1 - abs(u - 0.55) / 0.24)
+        let p4 = 3 * max(0, 1 - abs(u - 0.8) / 0.17)
+        let p5 = 1.6 * max(0, 1 - abs(u - 0.97) / 0.1)
+        let ridge = hz - 1.5 - (p1 + p2 + p3 + p4 + p5)
+        let slope = (p1 > 0.05 ? (u > 0.08 ? -1 : 1) * p1 : 0) + (p2 > 0.05 ? (u > 0.3 ? -1 : 1) * p2 : 0) + (p3 > 0.05 ? (u > 0.55 ? -1 : 1) * p3 : 0) + (p4 > 0.05 ? (u > 0.8 ? -1 : 1) * p4 : 0) + (p5 > 0.05 ? (u > 0.97 ? -1 : 1) * p5 : 0)
+        let x = ox + c * cw + cw / 2
+        let lit = slope > 0 ? discX > width / 2 : discX < width / 2
+        let top = round(ridge)
+        let snow = cold && sunAlt > 0.15
+        text(top > 1 ? (abs(slope) < 1 ? "^" : slope > 0 ? "/" : "\\") : " ", x, oy + top * lh + lh / 2, size: fs, color: alpha(snow ? rgb(240, 247, 255) : lit ? hillLit : mix(hillDark, hillLit, 0.4), 0.95))
+        if abs(slope) > 2.6 && top + 1 < wl - 1 {
+          text(slope > 0 ? "\\" : "/", x, oy + (top + 1) * lh + lh / 2, size: fs, color: alpha(mix(hillLit, farFill, 0.45), 0.7))
+        }
+        if (c + top) % 3 == 0 && top + 2 < wl - 1 {
+          text(".", x, oy + (top + 2) * lh + lh / 2, size: fs, color: alpha(mix(farFill, hillLit, 0.35), 0.55))
+        }
+        if (c + top) % 4 == 1 && top + 3 < wl - 1 {
+          text(":", x, oy + (top + 3) * lh + lh / 2, size: fs, color: alpha(mix(farFill, hillLit, 0.22), 0.5))
+        }
+        let mr = round(wl + (hz - ridge) * 0.5 + sin(tt * 1.4 + c * 0.8) * 0.7)
+        if biome == "alps" && mr > wl && mr < rows {
+          text(c % 2 == 0 ? "^" : "~", x, oy + mr * lh + lh / 2, size: fs, color: alpha(mix(nearFill, seaCol, 0.5), 0.4))
+        }
+      }
+      }
+
+      // Pine forest in place of the near hills.
+      if biome == "forest" {
+        path(map(range(cols), c => [ox + c * cw + cw / 2, oy + round(wl - 0.5 - (0.9 + 0.7 * sin(c * 0.23 + 1.2))) * lh + lh / 2]) + [[width, oy + round(wl) * lh], [0, oy + round(wl) * lh]], closed: true, fill: alpha(mix(leafDark, background, 0.25), 0.9))
+        for c in range(0, cols) {
+          if (c * 7 + 2) % 4 == 0 {
+            let base = round(wl - 0.5 - (0.9 + 0.7 * sin(c * 0.23 + 1.2)))
+            let hgt = 2 + (c * 13) % 2
+            let x = ox + c * cw + cw / 2
+            text("^", x, oy + (base - hgt) * lh + lh / 2, size: fs, color: alpha(mix(leafDark, leafLit, 0.4), 0.9))
+            text("A", x, oy + (base - hgt + 1) * lh + lh / 2, size: fs, color: alpha(leafDark, 0.9))
+            text("|", x, oy + base * lh + lh / 2, size: fs, color: alpha(mix(leafDark, background, 0.3), 0.9))
+          }
+        }
+        for i in range(0, 2) {
+          let vals = map(range(cols), c => sin(c * 0.4 + tt * (0.3 + i * 0.15) + i * 2.2))
+          text(join(map(vals, v => v > 0.5 ? "-" : v > 0 ? "." : " "), ""), ox, oy + (round(wl) - 2 - i * 2) * lh + lh / 2, size: fs, color: alpha(mix(skyC, foreground, 0.5), 0.12))
+        }
+        if fogAmt > 0 {
+          for i in range(2, 4) {
+            let vals = map(range(cols), c => sin(c * 0.5 + tt * (0.25 + i * 0.1) + i * 1.9))
+            text(join(map(vals, v => v > 0.55 ? "=" : v > 0 ? "-" : " "), ""), ox, oy + (round(wl) - 3 - i * 2) * lh + lh / 2, size: fs, color: alpha(mix(skyC, foreground, 0.5), 0.16 * fogAmt))
+          }
+        }
+      }
+
+      // Desert: two dune ridges, cacti, a rolling tumbleweed, heat shimmer.
+      if biome == "desert" {
+        path(map(range(cols), c => [ox + c * cw + cw / 2, oy + round(hz + 0.8 + 1.3 * sin(c * 0.11 + 0.8) + 0.8 * sin(c * 0.27 + 2.1)) * lh + lh / 2]) + [[width, oy + round(wl + 1) * lh], [0, oy + round(wl + 1) * lh]], closed: true, fill: alpha(mix(sandDark, skyC, 0.25), 0.95))
+        path(map(range(cols), c => [ox + c * cw + cw / 2, oy + round(hz + 2.4 + 1.1 * sin(c * 0.13 + 3.2) + 0.6 * sin(c * 0.31 + 0.5)) * lh + lh / 2]) + [[width, oy + round(wl + 1) * lh], [0, oy + round(wl + 1) * lh]], closed: true, fill: alpha(mix(sandLit, skyC, 0.15), 0.95))
+        for c in range(0, cols) {
+          let ripple = sin(c * 0.8 + tt * 0.4) + sin(c * 0.33 - tt * 0.25) * 0.7
+          let ry = round(hz + 1.6 + 1.1 * sin(c * 0.12 + 1.6))
+          if ripple > 0.7 && ry > 1 && ry < wl {
+            text("~", ox + c * cw + cw / 2, oy + ry * lh + lh / 2, size: fs, color: alpha(sandDark, 0.4))
+          }
+        }
+        for ci in range(0, 3) {
+          let cu = 0.18 + ci * 0.32
+          let cx = ox + round(cu * cols) * cw + cw / 2
+          let cb = round(wl - 1)
+          for k in range(0, 3) {
+            text("|", cx, oy + (cb - 2 + k) * lh + lh / 2, size: fs, color: alpha(mix(rgb(70, 140, 80), green, 0.3), 0.9))
+          }
+          text("_", cx - cw, oy + (cb - 1) * lh + lh / 2, size: fs, color: alpha(mix(rgb(70, 140, 80), green, 0.3), 0.9))
+          text("|", cx - cw, oy + (cb - 2) * lh + lh / 2, size: fs, color: alpha(mix(rgb(70, 140, 80), green, 0.3), 0.9))
+          text("_", cx + cw, oy + (cb - 1) * lh + lh / 2, size: fs, color: alpha(mix(rgb(70, 140, 80), green, 0.3), 0.9))
+          text("|", cx + cw, oy + (cb - 2) * lh + lh / 2, size: fs, color: alpha(mix(rgb(70, 140, 80), green, 0.3), 0.9))
+        }
+        let tx = (tt * (1.5 + windK * 0.08)) % (cols + 12) - 6
+        let ty = wl - 0.5 - abs(sin(tx * 1.3)) * 1.5
+        text("(@)", ox + tx * cw + cw / 2, oy + ty * lh + lh / 2, size: fs, color: alpha(sandDark, 0.85))
+        for i in range(0, 12) {
+          let sx = (sin(i * 37.7) * 0.5 + 0.5) * cols
+          let sy = hz + 1 + ((tt * 1.1 + i * 0.63) % 3)
+          text("~", ox + sx * cw + cw / 2, oy + sy * lh + lh / 2, size: fs, color: alpha(mix(foreground, skyC, 0.5), 0.12))
+        }
+      }
+
+      // City skyline with windows that light up after dark.
+      if biome == "city" {
+        for b in range(0, 9) {
+          let bw = cols * cw / 9
+          let bh = 2 + floor((sin(b * 12.9) * 0.5 + 0.5) * max(2, hz * 0.3))
+          let bx0 = ox + b * bw
+          let bcol = night ? mix(rgb(14, 16, 26), blue, 0.25) : mix(cityDark, skyC, 0.15)
+          rect(bx0 + 1, oy + (wl - bh) * lh, bw - 2, bh * lh, fill: alpha(bcol, 0.96))
+          text(join(map(range(max(1, floor((bw - 2) / cw))), i => "-"), ""), bx0 + 1, oy + (wl - bh) * lh + 1, size: fs, color: alpha(night ? mix(cityLit, yellow, 0.4) : mix(cityDark, skyC, 0.3), night ? 0.7 : 0.5))
+          if b % 3 == 0 {
+            rect(bx0 + bw / 2 - 0.5, oy + (wl - bh - 1.2) * lh, 1, 1.2 * lh, fill: alpha(bcol, 0.96))
+            text("·", bx0 + bw / 2, oy + (wl - bh - 1.2) * lh, size: fs, color: alpha(red, 0.35 + 0.6 * abs(sin(tt * 2 + b))))
+          }
+          for wr in range(0, floor(bh)) {
+            for wc in range(0, floor((bw - 2) / (cw * 1.4))) {
+              if (b * 13 + wr * 7 + wc * 5) % 3 == 0 {
+                text(night ? ":" : ".", bx0 + 1 + (wc * 1.4 + 0.7) * cw, oy + (wl - bh + wr + 0.5) * lh + lh / 2, size: fs, color: night ? alpha(mix(yellow, orange, 0.35), 0.85) : alpha(mix(cityLit, skyC, 0.4), 0.4))
+              }
+            }
+          }
+        }
+      }
+
+      if biome == "alps" {
+      path(map(range(cols), c => [ox + c * cw + cw / 2, oy + round(hz + 0.6 - (2.4 * max(0, 1 - abs(c / cols - 0.18) / 0.26) + 2 * max(0, 1 - abs(c / cols - 0.6) / 0.28) + 1.3 * max(0, 1 - abs(c / cols - 0.93) / 0.16))) * lh + lh / 2]) + [[width, oy + round(wl) * lh], [0, oy + round(wl) * lh]], closed: true, fill: alpha(nearFill, 0.9))
+
+      for c in range(0, cols) {
+        let u = c / cols
+        let q1 = 2.4 * max(0, 1 - abs(u - 0.18) / 0.26)
+        let q2 = 2 * max(0, 1 - abs(u - 0.6) / 0.28)
+        let q3 = 1.3 * max(0, 1 - abs(u - 0.93) / 0.16)
+        let ridge = hz + 0.6 - (q1 + q2 + q3)
+        let slope = (q1 > 0.05 ? (u > 0.18 ? -1 : 1) * q1 : 0) + (q2 > 0.05 ? (u > 0.6 ? -1 : 1) * q2 : 0) + (q3 > 0.05 ? (u > 0.93 ? -1 : 1) * q3 : 0)
+        let x = ox + c * cw + cw / 2
+        let lit = slope > 0 ? discX > width / 2 : discX < width / 2
+        let top = round(ridge)
+        text(top > 1 ? (abs(slope) < 1 ? "^" : slope > 0 ? "/" : "\\") : " ", x, oy + top * lh + lh / 2, size: fs, color: alpha(cold && sunAlt > 0.15 ? rgb(214, 226, 248) : lit ? mix(hillLit, nearFill, 0.45) : mix(nearFill, hillLit, 0.1), 0.95))
+        if c % 3 == 1 && top + 1 < wl + 1 {
+          text("^", x, oy + (top + 1) * lh + lh / 2, size: fs, color: alpha(mix(nearFill, hillLit, 0.25), 0.8))
+        }
+        if (c + top) % 4 == 2 && top + 2 < wl + 1 {
+          text(".", x, oy + (top + 2) * lh + lh / 2, size: fs, color: alpha(mix(nearFill, hillLit, 0.15), 0.6))
+        }
+      }
+      }
+
+      // The lake: a shore line, then waves that thin out towards us.
+      // (In the desert the same rows are rippled sand; in the arctic, cracked ice.)
+      if biome != "desert" {
+      let shoreVals = map(range(cols), c => sin(c * 0.9 + 2.1) + sin(c * 0.37 - 1.2) * 0.6)
+      text(join(map(shoreVals, v => v > 0.9 ? "~" : v > 0.3 ? "_" : v > -0.6 ? "." : " "), ""), ox, oy + round(wl) * lh + lh / 2, size: fs, color: alpha(mix(seaCol, foreground, 0.35), 0.4))
+      let beachVals = map(range(cols), c => sin(c * 1.3 + 0.7) + sin(c * 0.51 - 2.4) * 0.7)
+      text(join(map(beachVals, v => v > 1.1 ? "·" : v > 0.1 ? "." : " "), ""), ox, oy + (round(wl) - 1) * lh + lh / 2, size: fs, color: alpha(mix(seaCol, foreground, 0.4), 0.35))
+      }
+      for r in range(round(wl) + 1, rows) {
+        let depth = (r - wl) / max(1, rows - wl)
+        let vals = map(range(cols), c =>
+            sin(c * 0.33 + tt * 1.5 + r * 0.9 + 1.1)
+          + sin(c * 0.71 - tt * 1.05 + r * 0.6 - 0.4) * 0.75
+          + sin(c * 0.13 + tt * 0.6 + r * 1.4) * 0.5
+        )
+        let q = map(vals, v => v - (1.4 - depth * 0.85))
+        let chars = map(q, d => biome == "desert" ? (d > 0.4 ? "~" : d > 0.05 ? "." : " ") : biome == "arctic" ? (d > 0.55 ? "_" : d > 0.15 ? "·" : " ") : d > 0.45 ? "~" : d > 0.12 ? "-" : d > -0.25 ? "." : " ")
+        let line = join(chars, "")
+        if len(replace(line, " ", "")) > 0 {
+          text(line, ox, oy + r * lh + lh / 2, size: fs, color: biome == "desert" ? alpha(mix(sandDark, foreground, 0.3), 0.5) : biome == "arctic" ? alpha(mix(iceDark, foreground, 0.3), 0.5) : alpha(mix(seaCol, foreground, 0.5), 0.62 - depth * 0.35))
+        }
+      }
+
+      // Palms and a passing boat for the tropics, icebergs for the arctic.
+      if biome == "tropics" {
+        rect(0, seaH - lh, width, lh * (tide < 0 ? 2.6 : 1.7), fill: alpha(sandLit, 0.85))
+        let wetVals = map(range(cols), c => sin(c * 0.5 + tt * 0.2) + sin(c * 0.21 - tt * 0.13) * 0.6)
+        text(join(map(wetVals, v => v > 0.6 ? "~" : v > -0.1 ? "_" : " "), ""), ox, seaH + tide * lh * 0.8, size: fs, color: alpha(mix(sandDark, seaCol, 0.5), 0.55))
+        for p in range(0, 2) {
+          let pu = 0.22 + p * 0.5
+          let px = ox + pu * cols * cw
+          let lean = blowsRight ? 1 : -1
+          let sway = sin(tt * 0.9 + p * 2.4) * 0.7
+          for k in range(0, 4) {
+            text(k % 2 == 0 ? "/" : "|", px + (lean * k * 0.5 + sway * k * 0.25) * cw, oy + (round(wl) - 1 - k) * lh + lh / 2, size: fs, color: alpha(mix(leafDark, background, 0.2), 0.9))
+          }
+          let tx = px + (lean * 4 * 0.5 + sway) * cw
+          let ty = oy + (round(wl) - 5) * lh + lh / 2
+          for j in range(-2, 3) {
+            text(j == 0 ? "-" : "~", tx + j * cw * 1.2, ty + abs(j) * lh * 0.3, size: fs, color: alpha(leafLit, 0.85))
+          }
+          text("o", tx - cw * 0.5, ty + lh * 0.5, size: fs, color: alpha(sandDark, 0.9))
+          text("o", tx + cw * 0.5, ty + lh * 0.5, size: fs, color: alpha(sandDark, 0.9))
+        }
+        let bx = (tt * 0.6) % (cols + 10) - 5
+        let by = round(wl) + 2 + round(sin(tt * 1.1 + bx) * 0.6)
+        if bx > -2 && bx < cols + 2 && by < rows {
+          text("\\_/", ox + bx * cw + cw / 2, oy + by * lh + lh / 2, size: fs, color: alpha(mix(foreground, background, 0.3), 0.85))
+          text("|", ox + bx * cw + cw / 2, oy + (by - 1) * lh + lh / 2, size: fs, color: alpha(mix(foreground, background, 0.3), 0.85))
+        }
+      }
+      if biome == "arctic" {
+        for b in range(0, 2) {
+          let bu = 0.3 + b * 0.38
+          let bx = ox + bu * cols * cw
+          let bw = cols * cw * (0.09 - b * 0.02)
+          let btop = seaH - (3.2 - b * 0.9) * lh
+          path([[bx - bw, seaH + lh], [bx - bw * 0.25, btop], [bx + bw * 0.35, btop + lh * 0.7], [bx + bw, seaH + lh]], closed: true, fill: alpha(iceLit, 0.95))
+          text("/", bx - bw * 0.4, btop + lh, size: fs, color: alpha(iceDark, 0.7))
+          text("\\", bx + bw * 0.2, btop + lh * 1.2, size: fs, color: alpha(iceDark, 0.7))
+          text("~", bx - bw * 0.8, seaH + lh * 0.4, size: fs, color: alpha(mix(iceLit, foreground, 0.4), 0.5))
+          text("~", bx + bw * 0.8, seaH + lh * 0.4, size: fs, color: alpha(mix(iceLit, foreground, 0.4), 0.5))
+        }
+        for i in range(0, 18) {
+          let h1 = sin(i * 17.3 + 2.9) * 43758.545
+          let f1 = h1 - floor(h1)
+          text("*", ox + f1 * cols * cw + cw / 2, oy + (round(wl) + f1 * (rows - round(wl))) * lh + lh / 2, size: fs, color: alpha(iceLit, 0.15 + 0.5 * abs(sin(tt * 1.2 + i))))
+        }
+      }
+
+      // The sun or moon lays a broken path of light on the water.
+      if ((!night && sunAlt > 0.03) || (night && moonUp)) && biome != "desert" {
+        let gx = night ? discX : sunX
+        let gc = round((gx - ox) / cw)
+        for r in range(round(wl) + 1, rows) {
+          let depth = (r - wl) / max(1, rows - wl)
+          let half = round(1 + depth * 2.6)
+          for c in range(max(0, gc - half), min(cols, gc + half + 1)) {
+            let w = sin(c * 0.33 + tt * 1.5 + r * 0.9 + 1.1) + sin(c * 0.71 - tt * 1.05 + r * 0.6 - 0.4) * 0.75
+            if w > 0.85 {
+              text("|", ox + c * cw + cw / 2, oy + r * lh + lh / 2, size: fs, color: alpha(mix(seaCol, night ? starCol : sunCol, 0.8), (0.8 - depth * 0.6) * (0.35 + night * moonIll * 0.65)))
+            } else if w > 0.05 {
+              text(":", ox + c * cw + cw / 2, oy + r * lh + lh / 2, size: fs, color: alpha(mix(seaCol, night ? starCol : sunCol, 0.7), (0.55 - depth * 0.42) * (0.35 + night * moonIll * 0.65)))
+            } else if w > -0.7 {
+              text("·", ox + c * cw + cw / 2, oy + r * lh + lh / 2, size: fs, color: alpha(mix(seaCol, night ? starCol : sunCol, 0.55), (0.4 - depth * 0.3) * (0.35 + night * moonIll * 0.65)))
+            }
+          }
+        }
+      }
+
+      // Rain.
+      if rainAmt > 0 {
+        for r in range(0, rows) {
+          for c in range(0, cols) {
+            let sp = max(1.7, 6.5 - rainAmt * 0.6)
+            let f = (r + c * 0.34 + tt * (1.7 + rainAmt * 0.45)) % sp
+            if f < 0.8 && (c * 13 + r * 5) % 3 != 0 && r > hz * 0.12 {
+              text(blowsRight ? "/" : "\\", ox + c * cw + cw / 2, oy + r * lh + lh / 2, size: fs, color: alpha(mix(skyC, foreground, 0.6), 0.26 + rainAmt * 0.07))
+            }
+            if rainAmt > 2.5 {
+              let hh2 = sin(c * 12.9898 + r * 78.233) * 43758.545
+              let hf = hh2 - floor(hh2)
+              let f2 = (r * 1.3 + c * 0.51 + tt * (2.6 + rainAmt * 0.3)) % (sp * 0.55)
+              if f2 < 0.7 && hf > 0.55 && r > hz * 0.2 {
+                text(blowsRight ? "|" : "\\", ox + c * cw + cw / 2, oy + (r + 1) * lh + lh / 2, size: fs, color: alpha(mix(skyC, foreground, 0.7), 0.2 + rainAmt * 0.05))
+              }
+            }
+          }
+        }
+      }
+
+      // Rain stipples the water where it lands.
+      if rainAmt > 0 && biome != "desert" {
+        for i in range(0, 24) {
+          let h1 = sin(i * 9.3 + 1.7) * 43758.545
+          let f1 = h1 - floor(h1)
+          let blink = (tt * (2 + f1 * 2) + i) % 1
+          if blink < 0.3 {
+            text(f1 > 0.5 ? "'" : "·", ox + f1 * cols * cw + cw / 2, oy + (round(wl) + 1 + floor((h1 * 7.7 - floor(h1 * 7.7)) * max(1, rows - round(wl) - 1))) * lh + lh / 2, size: fs, color: alpha(mix(seaCol, foreground, 0.6), 0.5 * (1 - blink / 0.3)))
+          }
+        }
+      }
+
+      // Snow.
+      if snowAmt > 0 {
+        for r in range(0, rows) {
+          for c in range(0, cols) {
+            let sp = 4 + c % 3
+            let cy = r + tt * (0.55 + snowAmt * 0.05)
+            let cx = round(c + sin(cy * 0.55 + c * 0.31) * 1.6)
+            let hh2 = sin(c * 12.9898 + cx * 78.233) * 43758.545
+            let hf = hh2 - floor(hh2)
+            if cy % sp < 0.9 && cx % sp == 0 && hf > 0.25 {
+              text(hf > 0.72 ? "*" : hf > 0.5 ? "o" : "·", ox + c * cw + cw / 2, oy + r * lh + lh / 2, size: fs, color: alpha(rgb(246, 250, 255), (0.3 + snowAmt * 0.09) * (0.6 + hf * 0.4)))
+            }
+          }
+        }
+      }
+
+      // Fog: a veil over the whole scene and a few slow bands near the ground.
+      if fogAmt > 0 {
+        rect(0, 0, width, height, fill: alpha(mix(skyC, foreground, 0.35), 0.13 * fogAmt))
+        for r in range(0, rows) {
+          if abs(r - hz) < rows * 0.3 {
+            let band = 1 - abs(r - hz) / (rows * 0.3)
+            let vals = map(range(cols), c => sin(c * 0.3 + tt * 0.22 + r * 1.6))
+            let chars = map(vals, v => v > 0.82 ? "=" : v > 0.4 ? "-" : " ")
+            let line = join(chars, "")
+            if len(replace(line, " ", "")) > 0 {
+              text(line, ox, oy + r * lh + lh / 2, size: fs, color: alpha(mix(skyC, foreground, 0.5), 0.12 * fogAmt * band))
+            }
+          }
+        }
+      }
+
+      // Lightning.
+      if isStorm {
+        let f = sin(tt * 1.31) * sin(tt * 0.73) * sin(tt * 2.17)
+        if f > 0.66 {
+          rect(0, 0, width, height, fill: alpha(rgb(220, 230, 255), (f - 0.66) * 0.7))
+          let bx = round(cols * (0.25 + 0.5 * (sin(tt * 3.3) * 0.5 + 0.5)))
+          for k in range(0, 7) {
+            let r = round(hz * 0.55) + k
+            let c = bx + round(sin(k * 2.4 + tt * 11) * 2)
+            if r < rows && c >= 0 && c < cols {
+              text(k % 2 == 0 ? "|" : k % 4 == 1 ? "/" : "\\", ox + c * cw + cw / 2, oy + r * lh + lh / 2, size: fs, color: alpha(mix(rgb(255, 250, 200), yellow, 0.4), 0.85))
+            }
+          }
+        }
+      }
+
+      // Fireflies on a warm, still night.
+      if fireflies == 1 && night && tempC > 9 && tempC < 30 && windK < 12 && dull < 0.5 {
+        for i in range(0, 7) {
+          let h1 = sin(i * 31.7 + 4.2) * 43758.545
+          let f1 = h1 - floor(h1)
+          let fx = (f1 * cols + sin(tt * 0.3 + i) * 3) % cols
+          let fr = hz * 0.55 + f1 * rows * 0.3 + sin(tt * 0.5 + i * 2) * 1.2
+          let blink = pow(abs(sin(tt * 1.4 + i * 1.7)), 6)
+          if blink > 0.12 {
+            text(blink > 0.6 ? "*" : "'", ox + fx * cw + cw / 2, oy + fr * lh + lh / 2, size: fs, color: alpha(rgb(200, 255, 140), blink))
+          }
+        }
+      }
+
+      // A near bank of reeds and stones, right at the edge of the tile.
+      if biome == "alps" || biome == "forest" || biome == "tropics" {
+      for c in range(0, cols) {
+        let u = c / cols
+        let b1 = 1.4 * max(0, 1 - abs(u - 0.08) / 0.1) + 1.8 * max(0, 1 - abs(u - 0.45) / 0.13) + 1.2 * max(0, 1 - abs(u - 0.82) / 0.12)
+        let top = rows - 1 - round(b1)
+        let x = ox + c * cw + cw / 2
+        for k in range(0, 3) {
+          let r = top + k
+          if r >= 0 && r < rows {
+            text(k == 0 ? (c % 4 == 0 ? "A" : c % 4 == 1 ? "W" : c % 4 == 2 ? "\\" : "/") : c % 3 == 0 ? "\\" : c % 3 == 1 ? "/" : "%", x, oy + r * lh + lh / 2, size: fs, color: alpha(mix(hillDark, background, 0.25), k == 0 ? 0.9 : 0.95))
+          }
+        }
+      }
+      }
+
+      // The cat sits on the near hill, if you call it.   
+      if cat == 1 && rows > 12 && (biome == "alps" || biome == "forest") {
+        let catC = round(cols * (0.2 + 0.12 * sin(tt * 0.2)))
+        let catU = catC / cols
+        let catTop = round(hz + 0.6 - (2.4 * max(0, 1 - abs(catU - 0.18) / 0.26) + 2 * max(0, 1 - abs(catU - 0.6) / 0.28) + 1.3 * max(0, 1 - abs(catU - 0.93) / 0.16)))
+        for k in range(0, len(catArt)) {
+          text(catArt[k], ox + catC * cw, oy + (catTop - 3 + k * 0.72) * lh + lh / 2, size: fs, color: alpha(mix(foreground, white, 0.35), 0.95))
+        }
+      }
+
+      // Scrims top and bottom so the text stays readable, then the big digits.
+      rect(0, 0, width, hz * 0.14 + 14, fill: linear(0, 0, 0, hz * 0.14 + 14, [alpha(mix(skyA, background, 0.5), 0.85), alpha(mix(skyA, background, 0.5), 0)]))
+      rect(0, height - hz * 0.16 - 46, width, hz * 0.16 + 46, fill: linear(0, height - hz * 0.16 - 46, 0, height, [alpha(mix(seaBot, background, 0.5), 0), alpha(mix(seaBot, background, 0.5), 0.92)]))
+
+      for gi in range(0, len(tempStr)) {
+        let ch = sub(tempStr, gi, gi + 1)
+        let gi2 = indexOf(glyphs, ch)
+        if gi2 >= 0 {
+          let g = bigFont[gi2]
+          for rr in range(0, 7) {
+            for cc in range(0, 5) {
+              if g[rr][cc] == "█" {
+                text("█", ox + cw * 1.8 + (gi * 6 + cc) * fs * 0.62 + fs * 0.09, hz * 0.16 + 30 + rr * fs * 0.8 + fs * 0.08, size: fs, color: alpha(background, 0.5))
+                text("█", ox + cw * 1.8 + (gi * 6 + cc) * fs * 0.62, hz * 0.16 + 30 + rr * fs * 0.8, size: fs, color: tempCol)
+              }
+            }
+          }
+        }
+      }
+    }
+
+    Column {
+      fill: true
+      padding: 10
+      Row {
+        gap: 6
+        Text { text: loc == "" ? "tap to set your place" : place; style: small; color: loc == "" ? accent : foreground; weight: 1; maxLines: 1; onTap: screen() }
+        Text { text: weatherIcon(code, night); font: icon; color: accent; width: 22; onTap: screen() }
+      }
+      Spacer { weight: 1 }
+      Row {
+        gap: 6
+        align: bottom
+        Column {
+          gap: 1
+          weight: 1
+          Text { text: data == null ? "looking up…" : desc; style: label; color: foreground; maxLines: 1 }
+          Text { text: data == null ? "" : "feels ${round(feels)}° · ${round(hum)}% hum"; style: label; color: muted; maxLines: 1 }
+          Text { text: data == null ? "" : "${blowsRight ? "→" : "←"} ${windDir} ${round(windK)} km/h"; style: label; color: muted; maxLines: 1; onTap: { fahrenheit = !fahrenheit } }
+        }
+        Text { text: "menu ›"; style: label; color: accent; width: 64; maxLines: 1; onTap: screen() }
+      }
+    }
+  }
+
+  screen {
+    title: "weather"
+    Column {
+      fill: true
+      gap: 8
+      padding: 12
+      Row {
+        gap: 6
+        Button { text: "place"; color: tab == "place" ? accent : muted; onTap: tab = "place" }
+        Button { text: "now"; color: tab == "now" ? accent : muted; onTap: tab = "now" }
+        Button { text: "days"; color: tab == "days" ? accent : muted; onTap: tab = "days" }
+        Button { text: "play"; color: tab == "play" ? accent : muted; onTap: tab = "play" }
+      }
+
+      if tab == "place" {
+        Column {
+          weight: 1
+          scroll: true
+          gap: 8
+          Text { text: "find a place"; style: muted }
+          Input {
+            placeholder: zq == "" ? "zip code, city or 37.77,-122.41" : zq
+            focus: true
+            onChange: draft = value
+            onSubmit: { query = trim(value); refresh() }
+          }
+          Row {
+            gap: 8
+            Button { text: "search"; onTap: { query = trim(draft); refresh() } }
+            Button { text: "✈"; onTap: { loc = hops[floor(now % len(hops))]; refresh(); close() } }
+            Button { text: "use this network"; color: muted; onTap: { loc = ""; query = ""; refresh(); close() } }
+          }
+          Text { text: "the plane jumps somewhere random · geocoding by open-meteo, weather by wttr.in"; style: label; color: muted }
+          if len(results) > 0 {
+            Text { text: "tap one to move there"; style: label; color: muted }
+          }
+          for r in results key r.id {
+            Column {
+              gap: 0
+              padding: 6
+              radius: 6 * corners
+              background: surface
+              onTap: { loc = "${round(r.latitude, 4)},${round(r.longitude, 4)}"; refresh(); close() }
+              Text { text: r.name; style: body; color: foreground; maxLines: 1 }
+              Text { text: "${r.admin1 ?? ""} ${r.country ?? ""} · ${round(r.latitude, 2)}, ${round(r.longitude, 2)} · ${r.timezone ?? ""}"; style: label; color: muted; maxLines: 1 }
+            }
+          }
+          if len(results) == 0 && query != "" {
+            Text { text: "nothing found for that — try a zip code or a bigger city"; style: small; color: muted }
+          }
+        }
+      }
+
+      if tab == "now" {
+        Column {
+          weight: 1
+          scroll: true
+          gap: 6
+          Text { text: "${place}${region == "" ? "" : ", " + region}"; style: title; maxLines: 1 }
+          Text { text: loc == "" ? "by network — set your own place below" : zq; style: label; color: muted }
+          Text { text: data == null ? "looking up…" : "${round(temp)}° · ${desc} · feels ${round(feels)}°"; style: body; onTap: { taps = taps + 1; party = taps >= 10 ? 1 : party; fahrenheit = taps >= 10 ? fahrenheit : !fahrenheit } }
+          Grid {
+            columns: 2
+            gap: 4
+            Text { text: "wind"; style: label; color: muted }
+            Text { text: "${blowsRight ? "→" : "←"} ${windDir} ${round(windK)} km/h, gusts ${round(gustK)}"; style: small; color: foreground; weight: 1 }
+            Text { text: "humidity"; style: label; color: muted }
+            Text { text: "${round(hum)}%"; style: small; color: foreground; weight: 1 }
+            Text { text: "dew point"; style: label; color: muted }
+            Text { text: "${fahrenheit ? round(dewC * 1.8 + 32) : round(dewC)}°"; style: small; color: foreground; weight: 1 }
+            Text { text: "pressure"; style: label; color: muted }
+            Text { text: "${round(press)} hPa ${pressTrend > 0.4 ? "▲" : pressTrend < -0.4 ? "▼" : "→"}"; style: small; color: foreground; weight: 1 }
+            Text { text: "uv index"; style: label; color: muted }
+            Text { text: "${round(uv)}"; style: small; color: uv > 7 ? orange : foreground; weight: 1 }
+            Text { text: "visibility"; style: label; color: muted }
+            Text { text: "${round(vis)} km"; style: small; color: vis < 2 ? orange : foreground; weight: 1 }
+            Text { text: "cloud cover"; style: label; color: muted }
+            Text { text: "${round(clouds)}%"; style: small; color: foreground; weight: 1 }
+            Text { text: "precipitation"; style: label; color: muted }
+            Text { text: "${round(precip, 1)} mm"; style: small; color: foreground; weight: 1 }
+          }
+          Text { text: "sun ${astro.sunrise ?? "—"} – ${astro.sunset ?? "—"} · now ${night ? "below the horizon" : fmtTime(now, "HH:mm")}"; style: small; color: muted }
+          Text { text: "moon ${astro.moon_phase ?? "—"}, ${round(moonIll * 100)}% lit · day ${moonAge} of 29.5 · up ${night && moonUp ? "now" : astro.moonrise ?? "—"} – ${astro.moonset ?? "—"}"; style: small; color: muted }
+          if biome == "tropics" {
+            Text { text: "tide ${tide > 0.5 ? "high" : tide < -0.5 ? "low" : tide > 0 ? "coming in" : "going out"} · watch the beach"; style: small; color: muted }
+          }
+          Row {
+            gap: 8
+            Button { text: fahrenheit ? "°F" : "°C"; color: muted; onTap: fahrenheit = !fahrenheit }
+            Button { text: "set place"; color: muted; onTap: tab = "place" }
+            Button { text: "close"; color: muted; onTap: close() }
+          }
+        }
+      }
+
+      if tab == "days" {
+        Column {
+          weight: 1
+          scroll: true
+          gap: 6
+          Text { text: "today, hour by hour (${fahrenheit ? "°F" : "°C"})"; style: muted }
+          Canvas {
+            height: 156
+            fill: width
+            let hs = days[0].hourly ?? []
+            let temps = map(hs, h => fahrenheit ? num(h.tempF, 32) : num(h.tempC, 0))
+            let hi = max(temps ?? [])
+            let lo = min(temps ?? [])
+            let span = max(hi - lo, 1)
+            let n = max(len(hs), 1)
+            let last = max(n - 1, 1)
+            let fs2 = 9
+            let cw2 = fs2 * 0.6
+            let lh2 = fs2 * 1.2
+            let gx = floor(width / cw2)
+            let gy = 11
+            for r in range(0, gy) {
+              let vals = map(range(gx), i => lerp(temps[floor(clamp(i / gx * last, 0, last))], temps[min(floor(i / gx * last) + 1, last)], i / gx * last - floor(i / gx * last)))
+              let chars = map(vals, t => (t - lo - (1 - r / (gy - 1)) * span) / span > 0.05 ? ((t - lo - (1 - r / (gy - 1)) * span) / span < 0.19 ? "*" : ".") : " ")
+              text(join(chars, ""), 0, 10 + r * lh2, size: fs2, color: mix(rgb(90, 150, 235), rgb(250, 150, 80), 1 - r / (gy - 1)))
+            }
+            text("${round(hi)}°", 0, 8, size: 9, color: foreground)
+            text("${round(lo)}°", 0, 10 + gy * lh2, size: 9, color: foreground)
+            for i in range(0, n) {
+              if i % 2 == 0 {
+                text(hs[i].time, i / last * (width - 30) + 15, 10 + gy * lh2 + 16, size: 9, color: muted, align: center)
+              }
+            }
+          }
+          Grid {
+            columns: 8
+            gap: 0
+            for h in hourly {
+              Column {
+                gap: 0
+                align: center
+                Text { text: weatherIcon(num(h.weatherCode, 0), night); font: icon; color: accent }
+                Text { text: "${round(fahrenheit ? num(h.tempF, 32) : num(h.tempC, 0))}°"; style: small; color: foreground }
+                Text { text: "${round(num(h.chanceofrain, 0))}%"; style: label; color: num(h.chanceofrain, 0) > 40 ? blue : muted }
+              }
+            }
+          }
+          Text { text: "blue is the chance of rain"; style: label; color: muted }
+          Text { text: "next 7 days"; style: muted }
+          if fc == null || !fc.ok {
+            Text { text: "fetching the week…"; style: small; color: muted }
+          }
+          for i in range(0, len(fc7.time ?? [])) {
+            Row {
+              gap: 8
+              Text { text: weatherIcon((fc7.weather_code[i] == 0 ? 113 : fc7.weather_code[i] <= 2 ? 116 : fc7.weather_code[i] == 3 ? 122 : (fc7.weather_code[i] == 45 || fc7.weather_code[i] == 48) ? 143 : fc7.weather_code[i] < 60 ? 266 : fc7.weather_code[i] < 70 ? 296 : fc7.weather_code[i] < 80 ? 326 : fc7.weather_code[i] < 90 ? 356 : 392), night); font: icon; color: accent; width: 18 }
+              Text { text: i == 0 ? "today" : sub(fc7.time[i], 5, 10); style: small; width: 64; maxLines: 1 }
+              Text { text: "${round(fc7.temperature_2m_min[i])}° ${round(fc7.temperature_2m_max[i])}°"; style: small; width: 84; maxLines: 1 }
+              Text { text: "${round(fc7.precipitation_probability_max[i] ?? 0)}%"; style: small; color: (fc7.precipitation_probability_max[i] ?? 0) > 40 ? blue : muted; width: 44; maxLines: 1 }
+            }
+          }
+          Text { text: "updated ${fmtTime(now, "HH:mm")} · every 15 min"; style: label; color: muted }
+        }
+      }
+
+      if tab == "play" {
+        Column {
+          weight: 1
+          scroll: true
+          gap: 6
+          Text { text: "secrets"; style: muted }
+          Text { text: "· tap the big temperature on the tile to flip units"; style: small; color: foreground }
+          Text { text: "· tap anywhere on the tile for this menu"; style: small; color: foreground }
+          Text { text: "· rainbows turn up on their own after the rain moves on"; style: small; color: foreground }
+          Text { text: "· shooting stars only at night, fireflies only when it is warm and still"; style: small; color: foreground }
+          Text { text: "· the cat comes when you call it"; style: small; color: foreground }
+          Text { text: "· tap that big temperature ten times in a row and the numbers start to dance"; style: small; color: foreground }
+          Text { text: "· the land follows the latitude — desert, tropics, arctic, city, forest — or pick one"; style: small; color: foreground }
+          Text { text: "· the plane takes you somewhere random when you feel lucky"; style: small; color: foreground }
+          Text { text: "display"; style: muted }
+          Row {
+            gap: 8
+            Button { text: fahrenheit ? "show °C" : "show °F"; color: muted; onTap: fahrenheit = !fahrenheit }
+            Button { text: party == 1 ? "stop the disco" : "party mode"; color: muted; onTap: party = party == 1 ? 0 : 1 }
+            Button { text: "close"; color: muted; onTap: close() }
+          }
+          Text { text: "scene: ${biome}"; style: small; color: accent }
+          Flow {
+            gap: 6
+            for s in scenes {
+              Button { text: s == scene ? "[${s}]" : s; color: s == scene ? accent : muted; onTap: scene = s }
+            }
+          }
+          Text { text: "wander"; style: muted }
+          Row {
+            gap: 8
+            Text { text: "take me anywhere"; style: small; color: foreground; weight: 1 }
+            Button { text: "✈"; color: muted; onTap: { loc = hops[floor(now % len(hops))]; refresh(); close() } }
+          }
+          Text { text: "wildlife"; style: muted }
+          Row {
+            gap: 8
+            Button { text: cat == 1 ? "call the cat away" : "call the cat"; color: muted; onTap: cat = cat == 1 ? 0 : 1 }
+            Button { text: rainbow == 1 ? "rainbows on" : "rainbows off"; color: muted; onTap: rainbow = rainbow == 1 ? 0 : 1 }
+            Button { text: fireflies == 1 ? "fireflies on" : "fireflies off"; color: muted; onTap: fireflies = fireflies == 1 ? 0 : 1 }
+          }
+          Text { text: party == 1 ? "party mode is on — the digits are dancing" : "ascii weather art · wttr.in + open-meteo · made with owl"; style: label; color: party == 1 ? magenta : muted }
+        }
+      }
+    }
+  }
+}

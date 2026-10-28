@@ -1,0 +1,139 @@
+# TAGLINE
+
+command-line virus scanner
+
+# TLDR
+
+**Scan single file**
+
+```clamscan [file]```
+
+**Scan directory recursively**
+
+```clamscan -r [/path/to/dir]```
+
+**Show only infected files**
+
+```clamscan -ri [/path/to/dir]```
+
+**Move infected files**
+
+```clamscan -r --move=[/quarantine] [/path/to/scan]```
+
+**Remove infected files**
+
+```clamscan -r --remove [/path/to/scan]```
+
+**Scan and log results**
+
+```clamscan -r -l [scan.log] [/path/to/dir]```
+
+**Exclude directory**
+
+```clamscan -r --exclude-dir=[backup] [/home]```
+
+# SYNOPSIS
+
+**clamscan** [_options_] [_file_|_directory_...]
+
+# DESCRIPTION
+
+**clamscan** is a standalone command-line virus scanner from the ClamAV antivirus suite. It scans files and directories for viruses, trojans, malware, and other threats using the ClamAV signature database.
+
+Each invocation loads the full virus database into memory, which makes it suitable for one-off scans but slower for repeated use. For high-volume or frequent scanning, the daemon-based **clamdscan** is preferred as it avoids the database reload overhead.
+
+clamscan supports recursive directory scanning, pattern-based file inclusion and exclusion, configurable size limits, and various actions for infected files including removal, quarantine (move), and copying. Scan results can be logged to a file for audit purposes.
+
+# PARAMETERS
+
+**-r**, **--recursive**
+> Scan directories recursively
+
+**-i**, **--infected**
+> Only print infected files
+
+**-o**, **--suppress-ok-results**
+> Don't print clean files
+
+**--remove**[=yes/no]
+> Remove infected files (dangerous; disabled by default)
+
+**--move**=_dir_
+> Move infected files to directory
+
+**--copy**=_dir_
+> Copy infected files to directory
+
+**-l** _file_, **--log**=_file_
+> Write scan report to file
+
+**-d** _path_, **--database**=_path_
+> Load virus signatures from file or directory
+
+**--exclude**=_REGEX_
+> Skip files matching the regex pattern
+
+**--exclude-dir**=_REGEX_
+> Skip directories matching the regex
+
+**--include**=_REGEX_
+> Only scan files matching the regex
+
+**--include-dir**=_REGEX_
+> Only enter directories matching the regex
+
+**--max-filesize**=_size_
+> Skip files larger than size
+
+**--max-scansize**=_size_
+> Maximum data scanned per container
+
+**--bell**
+> Sound an audible alert on detection
+
+**--detect-pua**[=yes/no]
+> Detect potentially unwanted applications
+
+**--quiet**
+> Only print error messages
+
+**--no-summary**
+> Suppress the final scan summary
+
+**-v**, **--verbose**
+> Verbose output
+
+**--version**
+> Print version information
+
+# DATABASE UPDATE
+
+Update signatures before scanning:
+
+```sudo freshclam```
+
+# CAVEATS
+
+--remove is dangerous due to false positives. Use --move or --copy instead. Single-threaded by default. For multi-threaded scanning, use clamdscan with clamd daemon.
+
+# INSTALL
+
+```apt: sudo apt install clamav```
+
+```dnf: sudo dnf install clamav```
+
+```pacman: sudo pacman -S clamav```
+
+```apk: sudo apk add clamav-scanner```
+
+```zypper: sudo zypper install clamav```
+
+```brew: brew install clamav```
+
+```nix: nix profile install nixpkgs#clamav```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[freshclam](/man/freshclam)(1), [clamdscan](/man/clamdscan)(1), [clamd](/man/clamd)(8)

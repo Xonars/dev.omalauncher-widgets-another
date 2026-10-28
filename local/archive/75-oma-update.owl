@@ -1,0 +1,20 @@
+widget "OMA · обновление" {
+  page: 3
+  order: 2
+  meta { owl: 10 }
+  size: 6x4
+  minSize: 3x2
+  requires { pacman: ["python", "git", "patch", "curl", "libarchive", "make", "perl", "jdk25-openjdk", "bash", "coreutils", "sed", "gawk", "grep", "binutils", "cmake", "ninja", "glibc"] }
+  source sys = android.system every 1m
+  source job = file("/root/.cache/oma-updater/status.json") json
+  source settings = file("/root/.cache/oma-updater/auto-enabled")
+  every 1m { if trim(settings ?? "") == "1" { run("python /root/.local/share/oma-updater/updater.py auto") } }
+  onTap: open("o:76-oma-update-app.owl")
+  Column { gap: 8
+    Text { text: "OMA LAUNCHER"; style: label; color: accent }
+    Text { text: "Запущен: ${sys.launcher ?? "…"}"; style: body; maxLines: 2 }
+    Text { text: "Git: ${job.local ?? "…"} → GitHub: ${job.remote ?? "…"}"; style: small; color: muted }
+    Text { text: job.message ?? "Откройте приложение обновления"; color: job.phase == "error" ? red : job.available ? yellow : green; maxLines: 2 }
+    Button { text: "Открыть обновление"; onTap: open("o:76-oma-update-app.owl") }
+  }
+}

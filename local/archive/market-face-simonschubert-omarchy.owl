@@ -1,0 +1,402 @@
+face "omarchy" {
+  // A session in the Omarchy way: a bar, gaps, and tiled windows on the wallpaper.
+  // Its windows have home's tile glass: widgets.opacity and frosted glass from settings › style.
+  // Workspace 1 is the desktop. 2 apps, 3 quattro, 4 notifications, 5 agents.
+
+  meta {
+    owl: 13
+    description: "An Omarchy session: a bar, tiled windows, fastfetch, quattro commits, and your apps"
+    version: "1.0"
+    license: "MIT"
+    category: "system"
+  }
+
+  statusBar: false
+  padding: 0
+
+  source now = clock every 1m
+  source dev = android.device
+  source sys = android.system every 1m
+  source bat = android.battery
+  source modes = android.modes
+  source m = android.media
+  source n = android.notifications
+  source apps = android.apps
+  source rec = android.recent
+  source ag = android.agents
+  // Arch, once Linux is installed. Base tools only, so the face still runs without it. Hourly: each run starts
+  // a process in Linux, and the release, the package count and the shell hardly change.
+  source lx = cmd("""
+    . /etc/os-release
+    printf '%s\t%s\t%s\n' "$PRETTY_NAME" "$(pacman -Qq | wc -l)" "$(basename "$SHELL")"
+  """) every 1h optional
+  source raw = http("https://api.github.com/repos/omacom/omarchy/commits?sha=quattro&per_page=20", {Accept: "application/vnd.github+json"}) every 10m timeout 15s json status
+
+  state ws = 1
+  state focused = "fetch"
+
+  let host = lower(replace(trim(dev.model ?? "phone"), " ", "-"))
+  let user = linux ? "root" : "user"
+  let mem = sys.memory
+  let wide = (tileWidth ?? 0) > (tileHeight ?? 1)
+  let playing = m != null && m.title != null && m.title != ""
+  let osName = !linux ? (dev == null ? null : "Android ${dev.android}") : (lx == null || lx == "" ? null : trim(split(lx, "\t")[0]))
+  let pkgLine = !linux ? (sys.apps == null ? null : "${sys.apps} (apps)") : (lx == null || lx == "" ? null : "${trim(split(lx, "\t")[1])} (pacman) · ${sys.apps} apps")
+  let shellName = !linux || lx == null || lx == "" ? null : trim(split(lx, "\t")[2])
+  let cpuLine = sys.cpu == null ? null : trim("${sys.cpu.soc == "" || sys.cpu.soc == null ? sys.cpu.hardware : sys.cpu.soc} (${sys.cpu.cores})")
+  let memLine = mem == null || !mem.total ? null : "${fmtBytes(mem.used)} / ${fmtBytes(mem.total)}"
+  let batLine = bat == null ? null : "${bat.level}%${bat.charging ? " · charging" : ""}"
+  let themeName = lower(sys.theme ?? "default")
+  let problem = raw == null || raw.ok ? null : raw.code == 403 ? "rate limited" : "offline"
+  let commits = (raw != null && raw.ok ? raw.out ?? [] : []).map(c => {
+    sha: c.sha,
+    url: c.html_url,
+    subject: first(split(c.commit.message ?? "", "\n")) ?? "",
+    author: c.author.login ?? c.commit.author.name ?? "",
+    at: parseTime(c.commit.author.date)
+  })
+  let top = values(groupBy((apps ?? []).filter(a => !a.system || a.score > 0).sortBy(a => -a.score), a => a.name)).map(g => g[0])
+  let sideApps = len(rec ?? []) > 0 ? (rec ?? []).take(10) : top.take(10)
+  let ink = alpha(muted, 0.55)
+  let glass = alpha(background, tileOpacity)
+  let gap = 5
+
+  component Ws(n) {
+    Column {
+      gap: 2
+      align: center
+      width: 22
+      padding: [0, 1]
+      onTap: { ws = n; haptic() }
+      Text { text: "${n}"; font: mono; fontSize: 14; fontWeight: ws == n ? 700 : 500; color: ws == n ? accent : alpha(foreground, 0.55); align: center; width: 22 }
+      Box { width: 14; height: 2; background: ws == n ? accent : alpha(foreground, 0) }
+    }
+  }
+
+  component Line(key, value) {
+    Row {
+      gap: 12
+      Text { text: key; font: mono; fontSize: 14; color: accent; width: 76; maxLines: 1 }
+      Text { text: value; font: mono; fontSize: 14; maxLines: 1; weight: 1 }
+    }
+  }
+
+  component Palette() {
+    Column {
+      gap: 3
+      for row in [[color0, color1, color2, color3, color4, color5, color6, color7], [color8, color9, color10, color11, color12, color13, color14, color15]] {
+        Row {
+          gap: 3
+          for c in row { Box { width: 16; height: 8; background: c } }
+        }
+      }
+    }
+  }
+
+  component Fetch() {
+    Column {
+      fill: width
+      gap: 10
+      padding: [14, 12]
+      background: glass
+      frost: tileFrost
+      border: 2
+      borderColor: focused == "fetch" ? accent : ink
+      clip: true
+      onTap: focused = "fetch"
+      Text { text: "omarchy"; font: mono; fontSize: 26; fontWeight: 700; letterSpacing: 1; maxLines: 1; onTap: launcher("style") }
+      Text {
+        spans: [{text: user, color: accent, bold: true}, "@", {text: host, color: accent, bold: true}]
+        font: mono
+        fontSize: 16
+        maxLines: 1
+      }
+      Palette {}
+      Column {
+        gap: 3
+        Line { key: "os"; value: osName }
+        Line { key: "host"; value: dev == null ? null : "${dev.maker} ${dev.model}" }
+        Line { key: "kernel"; value: sys.kernel }
+        Line { key: "uptime"; value: sys.uptime == null ? null : fmtDuration(sys.uptime) }
+        Line { key: "pkgs"; value: pkgLine }
+        if linux { Line { key: "shell"; value: shellName } }
+        Line { key: "wm"; value: sys.launcher == null ? null : "omalauncher ${sys.launcher}" }
+        Row {
+          gap: 12
+          onTap: launcher("themes")
+          Text { text: "theme"; font: mono; fontSize: 14; color: accent; width: 76; maxLines: 1 }
+          Text { text: themeName; font: mono; fontSize: 14; maxLines: 1; weight: 1 }
+        }
+        Line { key: "cpu"; value: cpuLine }
+        Line { key: "memory"; value: memLine }
+        Line { key: "battery"; value: batLine }
+      }
+    }
+  }
+
+  component CommitRow(c, showAuthor) {
+    Row {
+      gap: 8
+      align: center
+      padding: [0, 5]
+      onTap: { focused = "commits"; url(c.url) }
+      Column {
+        gap: 0
+        weight: 1
+        Text { text: c.subject; font: mono; fontSize: 12; maxLines: 1 }
+        if showAuthor {
+          Text { text: c.author; font: mono; fontSize: 11; color: muted; maxLines: 1 }
+        }
+      }
+      Text { text: fmtAgo(c.at, now); font: mono; fontSize: 11; color: muted; maxLines: 1 }
+    }
+  }
+
+  component Commits(full = false) {
+    Column {
+      fill: true
+      gap: 6
+      padding: 12
+      background: glass
+      frost: tileFrost
+      border: 2
+      borderColor: (full || focused == "commits") ? accent : ink
+      clip: true
+      onTap: focused = "commits"
+      Row {
+        align: center
+        Text { text: "quattro"; font: mono; fontSize: 12; color: accent; weight: 1; onTap: url("https://github.com/omacom/omarchy/commits/quattro") }
+        Text { text: problem ?? (raw == null ? "…" : "${len(commits)}"); font: mono; fontSize: 11; color: muted; maxLines: 1 }
+      }
+      if problem != null {
+        Text { text: problem; font: mono; fontSize: 13; color: muted }
+      } else {
+        Column {
+          scroll: true
+          weight: 1
+          gap: 0
+          for c in commits key c.sha {
+            CommitRow { c: c; showAuthor: full }
+          }
+        }
+      }
+    }
+  }
+
+  component AppGrid(list, columns, iconSize) {
+    Grid {
+      columns: columns
+      gap: 14
+      for a in list key a.key {
+        Column {
+          gap: 5
+          align: center
+          onTap: open(a.key)
+          Image { src: a.icon; size: iconSize }
+          Text { text: lower(a.name); font: mono; fontSize: 11; align: center; maxLines: 1 }
+        }
+      }
+    }
+  }
+
+  component Apps(full = false) {
+    Column {
+      fill: true
+      gap: 10
+      padding: 12
+      background: glass
+      frost: tileFrost
+      border: 2
+      borderColor: (full || focused == "apps") ? accent : ink
+      clip: true
+      onTap: focused = "apps"
+      Row {
+        align: center
+        Text { text: full ? "apps" : "recent"; font: mono; fontSize: 12; color: muted; weight: 1 }
+        Text { text: "all"; font: mono; fontSize: 12; color: accent; onTap: launcher("drawer") }
+      }
+      Column {
+        scroll: true
+        weight: 1
+        AppGrid { list: full ? top.take(16) : sideApps; columns: full ? (wide ? 6 : 4) : 2; iconSize: full ? 52 : 44 }
+      }
+    }
+  }
+
+  component Notes() {
+    Column {
+      fill: true
+      gap: 8
+      padding: 12
+      background: glass
+      frost: tileFrost
+      border: 2
+      borderColor: accent
+      clip: true
+      Row {
+        align: center
+        Text { text: "notifications"; font: mono; fontSize: 12; color: muted; weight: 1 }
+        if n.available && n.count > 0 {
+          Text { text: "${n.count}"; font: mono; fontSize: 12; color: accent }
+        }
+      }
+      if !n.available {
+        Text { text: "allow notification access"; font: mono; fontSize: 14; color: accent; onTap: notification("open", "") }
+      } else if n.count == 0 {
+        Text { text: "all clear"; font: mono; fontSize: 14; color: muted }
+      } else {
+        Column {
+          scroll: true
+          weight: 1
+          gap: 2
+          for item in n.items.take(20) key item.key {
+            Row {
+              gap: 10
+              align: center
+              padding: [0, 6]
+              onTap: notification("open", item.key)
+              onLongPress: { haptic(); notification("dismiss", item.key) }
+              Image { src: item.icon; size: 28 }
+              Column {
+                gap: 0
+                weight: 1
+                Text { text: item.title; font: mono; fontSize: 13; maxLines: 1 }
+                Text { text: "${lower(item.app)} · ${fmtAgo(item.time, now)}"; font: mono; fontSize: 11; color: muted; maxLines: 1 }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  component Agents() {
+    Column {
+      fill: true
+      gap: 8
+      padding: 12
+      background: glass
+      frost: tileFrost
+      border: 2
+      borderColor: accent
+      clip: true
+      Row {
+        align: center
+        Text { text: "agents"; font: mono; fontSize: 12; color: muted; weight: 1 }
+        Text { text: "manage"; font: mono; fontSize: 12; color: accent; onTap: launcher("agents") }
+      }
+      if len(ag.installed ?? []) == 0 {
+        Text { text: "no agent installed"; font: mono; fontSize: 14; color: muted; onTap: launcher("agents") }
+      } else {
+        Column {
+          scroll: true
+          weight: 1
+          gap: 4
+          for a in ag.installed key a.key {
+            Row {
+              gap: 10
+              align: center
+              padding: [0, 6]
+              onTap: open(a.key)
+              if a.icon != null { Image { src: a.icon; size: 28 } }
+              Column {
+                gap: 0
+                weight: 1
+                Text { text: a.name; font: mono; fontSize: 14; color: ag.default != null && a.key == ag.default.key ? accent : foreground; maxLines: 1 }
+                if a.description != null && a.description != "" {
+                  Text { text: a.description; font: mono; fontSize: 11; color: muted; maxLines: 2 }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  component Desk() {
+    Column {
+      fill: true
+      gap: gap
+      Fetch {}
+      Row {
+        gap: gap
+        weight: 1
+        fill: width
+        Commits { weight: 1; fill: true }
+        Apps { weight: 1; fill: true }
+      }
+    }
+  }
+
+  Column {
+    fill: true
+    gap: 0
+
+    // The bar. Logo opens the style screen, the way the Omarchy mark opens its menu.
+    Row {
+      align: center
+      padding: [10, 6]
+      background: background
+      Row {
+        width: 132
+        gap: 0
+        align: center
+        Text { text: "●"; fontSize: 10; color: accent; width: 14; align: center; onTap: launcher("style") }
+        Ws { n: 1 }
+        Ws { n: 2 }
+        Ws { n: 3 }
+        Ws { n: 4 }
+        Ws { n: 5 }
+      }
+      Spacer { weight: 1 }
+      Text { text: fmtTime(now, "EEE d  HH:mm"); font: mono; fontSize: 13; maxLines: 1 }
+      Spacer { weight: 1 }
+      Row {
+        width: 132
+        gap: 8
+        align: center
+        justify: end
+        if modes.dnd { Text { text: "dnd"; font: mono; fontSize: 12; color: yellow } }
+        Text {
+          text: bat == null ? null : "${bat.level}%"
+          font: mono
+          fontSize: 13
+          color: bat.charging ? green : bat.level <= 15 ? red : bat.level <= 30 ? yellow : foreground
+        }
+      }
+    }
+
+    if playing {
+      Row {
+        gap: 8
+        align: center
+        padding: [12, 5]
+        background: background
+        onTap: media("toggle")
+        Text { text: m.playing == true ? "▶" : "⏸"; font: mono; fontSize: 11; color: accent }
+        Text { text: "${m.artist ?? lower(m.app ?? "")} — ${m.title}"; font: mono; fontSize: 12; color: muted; maxLines: 1; weight: 1 }
+      }
+    }
+
+    Column {
+      weight: 1
+      fill: width
+      gap: gap
+      padding: 10
+      if ws == 1 {
+        Desk { fill: true }
+      } else if ws == 2 {
+        Apps { full: true; fill: true }
+      } else if ws == 3 {
+        Commits { full: true; fill: true }
+      } else if ws == 4 {
+        Notes { fill: true }
+      } else {
+        Agents { fill: true }
+      }
+    }
+
+    Spacer { height: screenInset }
+  }
+}

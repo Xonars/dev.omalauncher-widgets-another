@@ -1,0 +1,136 @@
+# TAGLINE
+
+Static analysis tool for C/C++
+
+# TLDR
+
+**Check single file**
+
+```cppcheck [file.cpp]```
+
+**Check directory**
+
+```cppcheck [src/]```
+
+**Enable all checks**
+
+```cppcheck --enable=all [file.cpp]```
+
+**Enable specific checks**
+
+```cppcheck --enable=warning,style [src/]```
+
+**Check with C++ standard**
+
+```cppcheck --std=c++17 [file.cpp]```
+
+**Output to XML**
+
+```cppcheck --xml [src/] 2> [report.xml]```
+
+**Suppress specific warning**
+
+```cppcheck --suppress=uninitvar [file.cpp]```
+
+**Use multiple cores**
+
+```cppcheck -j [4] [src/]```
+
+# SYNOPSIS
+
+**cppcheck** [_options_] _path_...
+
+# DESCRIPTION
+
+**cppcheck** performs static analysis on C/C++ source code to detect bugs, undefined behavior, and dangerous coding patterns without executing the program. It focuses on maintaining a low false positive rate, making warnings actionable and trustworthy.
+
+The tool analyzes code for memory leaks, null pointer dereferences, buffer overflows, uninitialized variables, and many other issues. It supports C++11 through C++20 standards and can check both individual files and entire project directories.
+
+Unlike compiler warnings, cppcheck performs deeper analysis including flow-sensitive checks and interprocedural analysis. It can detect issues that compilers typically miss while being faster and simpler to configure than comprehensive tools like Clang Static Analyzer.
+
+# PARAMETERS
+
+**--enable**=_checks_
+> Enable checks: all, warning, style, performance, portability, information, unusedFunction
+
+**--std**=_standard_
+> C/C++ standard: c89, c99, c11, c++03, c++11, c++14, c++17, c++20
+
+**-j** _n_
+> Use n threads
+
+**--xml**
+> Output as XML
+
+**--suppress**=_id_
+> Suppress warning type
+
+**--suppressions-list**=_file_
+> Suppress from file
+
+**-I** _dir_
+> Include directory
+
+**-D** _name_
+> Define preprocessor symbol
+
+**--force**
+> Check all configurations
+
+**--inconclusive**
+> Report uncertain results
+
+**--project**=_file_
+> Use compile database (compile_commands.json) or Visual Studio project file
+
+**--check-level**=_level_
+> Check level: normal (default), exhaustive (deeper analysis), reduced (faster)
+
+**--cppcheck-build-dir**=_dir_
+> Build directory for faster rechecking and whole-program analysis
+
+**--platform**=_type_
+> Target platform: unix32, unix64, win32A, win32W, win64, native
+
+**--template**=_format_
+> Custom error message format (e.g., gcc, vs, {file}:{line}: {message})
+
+**--max-configs**=_n_
+> Maximum configurations to check per file (default: 12)
+
+**-q**, **--quiet**
+> Suppress progress output
+
+# CHECK TYPES
+
+**error**: Bugs and undefined behavior
+**warning**: Defensive coding issues
+**style**: Code style issues
+**performance**: Optimization suggestions
+**portability**: Cross-platform issues
+
+# CAVEATS
+
+Cannot analyze included headers without proper include paths. Use with clang-tidy for comprehensive analysis.
+
+# INSTALL
+
+```apt: sudo apt install cppcheck```
+
+```dnf: sudo dnf install cppcheck```
+
+```pacman: sudo pacman -S cppcheck```
+
+```apk: sudo apk add cppcheck```
+
+```zypper: sudo zypper install cppcheck```
+
+```brew: brew install cppcheck```
+
+```nix: nix profile install nixpkgs#cppcheck```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[clang-tidy](/man/clang-tidy)(1), [cpplint](/man/cpplint)(1), [gcc](/man/gcc)(1)

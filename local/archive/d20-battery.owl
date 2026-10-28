@@ -1,0 +1,51 @@
+widget "d20 battery" {
+  meta {
+    owl: 10
+    description: "Battery as a d20: each face is 5%, so 20 is full. The color slides from green at 20 through yellow (~15) and orange (~8) to red at 2 and 1. Solid while charging, outlined on battery."
+    version: "1.1"
+    license: "MIT"
+    category: "system"
+  }
+  size: 1x1
+  minSize: 1x1
+  padding: 4
+
+  source bat = android.battery
+  // each face is 5%: 20 = 100%, 19 = 95%, ... rolling over at the halfway point (97.5% → 20)
+  let face = bat.level == null ? null : clamp(round(bat.level / 5), 1, 20)
+  let charging = bat.charging ?? false
+  // Smooth charge gradient using the current launcher theme palette.
+  let dice = face == null ? accent : face >= 15 ? mix(yellow, green, (face - 15) / 5) : face >= 8 ? mix(orange, yellow, (face - 8) / 7) : mix(red, orange, clamp((face - 2) / 6, 0, 1))
+
+  Canvas {
+    let cx = width / 2
+    let cy = height / 2
+    let r = min(width, height) / 2 - 2
+    let s = r * 0.866
+    // outer hexagon, pointy top
+    let top = [cx, cy - r]
+    let ur = [cx + s, cy - r / 2]
+    let lr = [cx + s, cy + r / 2]
+    let bot = [cx, cy + r]
+    let ll = [cx - s, cy + r / 2]
+    let ul = [cx - s, cy - r / 2]
+    // the front face, pointing up
+    let a = [cx, cy - r * 0.48]
+    let bl = [cx - r * 0.62, cy + r * 0.4]
+    let br = [cx + r * 0.62, cy + r * 0.4]
+    let ink = charging ? alpha(background, 0.55) : dice
+    let lw = max(1.5, r * 0.05)
+
+    if charging {
+      path([top, ur, lr, bot, ll, ul], closed: true, fill: dice)
+      path([a, bl, br], closed: true, fill: alpha(background, 0.12))
+    }
+    path([top, ur, lr, bot, ll, ul], closed: true, stroke: dice, width: lw * 1.4)
+    path([a, bl, br], closed: true, stroke: ink, width: lw)
+    for e in [[a, top], [a, ul], [a, ur], [bl, ul], [bl, ll], [bl, bot], [br, ur], [br, lr], [br, bot]] {
+      line(e[0][0], e[0][1], e[1][0], e[1][1], stroke: ink, width: lw)
+    }
+    text(face == null ? "…" : "${face}", cx, cy + r * 0.13, size: r * 0.48, align: center, fontWeight: 900,
+      color: charging ? background : foreground)
+  }
+}

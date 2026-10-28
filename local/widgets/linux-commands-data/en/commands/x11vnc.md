@@ -1,0 +1,104 @@
+# TAGLINE
+
+VNC server for existing X displays
+
+# TLDR
+
+**Share current display** with multiple clients
+
+```x11vnc -shared```
+
+**Run in view-only** mode persistently
+
+```x11vnc -forever -viewonly```
+
+**Launch** on a specific display and screen
+
+```x11vnc -display :[display].[screen]```
+
+**Launch** on the third display's default screen
+
+```x11vnc -display :2```
+
+**Launch** on the first display's second screen
+
+```x11vnc -display :0.1```
+
+**Start with password** protection
+
+```x11vnc -passwd [mypassword] -forever```
+
+**Start with SSL** encryption
+
+```x11vnc -ssl -forever```
+
+# SYNOPSIS
+
+**x11vnc** [_options_]
+
+# PARAMETERS
+
+**-display _display_**
+> X display to share (e.g., :0, :1.0)
+
+**-shared**
+> Allow multiple simultaneous clients
+
+**-forever**
+> Don't exit when last client disconnects
+
+**-viewonly**
+> Clients can only view, not interact
+
+**-passwd _password_**
+> Set VNC password
+
+**-rfbauth _file_**
+> Use password file
+
+**-rfbport _port_**
+> Set VNC port (default: 5900)
+
+**-noxdamage**
+> Disable X DAMAGE extension
+
+**-clip _WxH+X+Y_**
+> Share only a portion of the screen
+
+**-scale _fraction_**
+> Scale the framebuffer
+
+**-ssl**
+> Enable SSL/TLS encryption
+
+# DESCRIPTION
+
+**x11vnc** allows VNC access to an existing X11 display. Unlike other VNC servers that create virtual displays, x11vnc shares the actual running desktop, allowing remote control of the physical display.
+
+The server captures the display content and transmits it to VNC clients. By default, it terminates when all clients disconnect, unless **-forever** is specified.
+
+# CAVEATS
+
+Requires an existing X display to be running. May have performance issues with compositing window managers. Security concerns when used without encryption; consider using **-ssl** or tunneling over SSH.
+
+# INSTALL
+
+```apt: sudo apt install x11vnc```
+
+```dnf: sudo dnf install x11vnc```
+
+```pacman: sudo pacman -S x11vnc```
+
+```apk: sudo apk add x11vnc```
+
+```zypper: sudo zypper install x11vnc```
+
+```brew: brew install x11vnc```
+
+```nix: nix profile install nixpkgs#x11vnc```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[vncviewer](/man/vncviewer)(1), [xvnc](/man/xvnc)(1), [ssh](/man/ssh)(1)

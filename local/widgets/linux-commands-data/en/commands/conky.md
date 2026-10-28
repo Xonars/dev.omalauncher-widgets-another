@@ -1,0 +1,108 @@
+# TAGLINE
+
+lightweight system monitor
+
+# TLDR
+
+**Start with default configuration**
+
+```conky```
+
+**Print default config to stdout**
+
+```conky -C```
+
+**Use a specific configuration file**
+
+```conky -c [path/to/config]```
+
+**Run as daemon in background**
+
+```conky -d```
+
+**Set update interval** (in seconds)
+
+```conky -u [2]```
+
+**Set alignment on desktop**
+
+```conky -a [top_right]```
+
+# SYNOPSIS
+
+**conky** [_options_]
+
+# DESCRIPTION
+
+**conky** is a lightweight system monitor for X11 that displays system information on the desktop root window or in its own window. It provides over 250 built-in monitoring objects and supports extensive customization including fonts, colors, and Lua scripting.
+
+# PARAMETERS
+
+**-c, --config FILE**
+> Load specified configuration file
+
+**-C, --print-config**
+> Print default configuration to stdout
+
+**-d, --daemonize**
+> Run as daemon in background
+
+**-o, --own-window**
+> Create a separate window
+
+**-p, --pause SECONDS**
+> Pause before startup
+
+**-t, --text TEXT**
+> Specify text to render
+
+**-u, --interval SECONDS**
+> Set update interval
+
+**-a, --alignment ALIGNMENT**
+> Set window alignment (top_left, top_right, bottom_left, bottom_right, etc.)
+
+**-x X**
+> Set X position
+
+**-y Y**
+> Set Y position
+
+**-v, --version**
+> Display version information
+
+# CONFIGURATION
+
+**~/.config/conky/conky.conf**
+> User-level configuration file with conky.config and conky.text sections.
+
+**/etc/conky/conky.conf**
+> System-wide default configuration.
+
+# CAVEATS
+
+Configuration uses Lua syntax with two sections: **conky.config** for settings and **conky.text** for display content. Send **SIGUSR1** to reload configuration without restarting. Requires an X11 or Wayland compositor with X11 support; native Wayland is not supported.
+
+# HISTORY
+
+**conky** is a fork of Torsmo and has become one of the most popular system monitors for Linux desktop environments. It supports monitoring CPU, memory, disk, network, and many other system metrics.
+
+# INSTALL
+
+```apt: sudo apt install conky-all```
+
+```dnf: sudo dnf install conky```
+
+```pacman: sudo pacman -S conky```
+
+```apk: sudo apk add conky```
+
+```zypper: sudo zypper install conky```
+
+```nix: nix profile install nixpkgs#conky```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[top](/man/top)(1), [htop](/man/htop)(1), [nmon](/man/nmon)(1)

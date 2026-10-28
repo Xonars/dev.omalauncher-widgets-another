@@ -1,0 +1,294 @@
+widget "share bridge" {
+  page: 2
+  order: 3
+  size: 3x3
+  minSize: 3x2
+
+  meta {
+    owl: 7
+    description: "Move files between Android and Arch via ~/share. One tap starts a private link for this phone's browser to upload and download. No setup."
+    version: "1.2"
+    license: "MIT"
+    category: "productivity"
+  }
+
+  requires { pacman: ["python", "coreutils", "sed", "bash"] }
+
+  source bridge = file("~/.local/share/omalauncher/share-bridge/status.json") json
+  // status.json can outlive the process (Android kills it, reboot): check the pid is really alive.
+  // The answer carries the pid it checked, so an old answer never delays a fresh start.
+  source alive = cmd(bridge.pid == null ? "echo none" : "p=${int(bridge.pid)}; kill -0 $p 2>/dev/null && echo $p:1 || echo $p:0") every 15s
+
+  let ready = bridge.url != null && alive != "${int(bridge.pid)}:0"
+
+
+  onTap: screen()
+
+  component Status() {
+    Row {
+      gap: 7
+      align: center
+      Text { text: ready ? "●" : "○"; fontSize: 18; color: ready ? green : muted; width: 16; align: center }
+      Column {
+        gap: 0
+        weight: 1
+        Text { text: ready ? "bridge is on" : "bridge is off"; style: small; color: ready ? green : muted; maxLines: 1 }
+        Text { text: "~/share"; style: label; color: muted; maxLines: 1 }
+      }
+    }
+  }
+
+  state err = ""
+  state starting = false
+
+  when ready { starting = false }
+  when err != "" { starting = false }
+
+
+  component StartButton(label = "start") {
+    Button {
+      text: starting ? "starting…" : label
+      color: accent
+      fill: width
+      onTap: { starting = true; err = ""; err = run("""
+set -eu
+d="$HOME/.local/share/omalauncher/share-bridge"
+mkdir -p "$d" "$HOME/share"
+
+if [ -r "$d/status.json" ]; then
+  pid=$(sed -n 's/.*"pid":[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$d/status.json" | head -1)
+  if [ -n "$pid" ] && kill "$pid" 2>/dev/null; then
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.1
+    done
+  fi
+  rm -f "$d/status.json"
+fi
+
+cat > "$d/bridge.py" <<'PY'
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, quote, unquote, urlsplit
+import html
+import json
+import os
+import secrets
+import shutil
+import signal
+import sys
+import time
+
+ROOT = Path.home() / "share"
+ROOT.mkdir(exist_ok=True)
+STATE = Path(os.environ["BRIDGE_STATE"])
+PREFIX = "/" + secrets.token_urlsafe(24) + "/"
+ORIGIN = "http://127.0.0.1:8765"
+LIMIT = 50 * 1024 * 1024
+
+def fmt_size(n):
+    if n < 1024:
+        return f"{n} B"
+    if n < 1048576:
+        return f"{n / 1024:.1f} KB"
+    return f"{n / 1048576:.1f} MB"
+
+class Bridge(BaseHTTPRequestHandler):
+    def log_message(self, *_):
+        pass
+
+    def allowed(self):
+        return self.headers.get("Host") == "127.0.0.1:8765" and urlsplit(self.path).path.startswith(PREFIX)
+
+    def send(self, body, content_type="text/html; charset=utf-8", code=200):
+        self.send_response(code)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def bad(self, code):
+        self.send_error(code)
+
+    def safe_name(self, name):
+        return name and len(name.encode()) <= 180 and "/" not in name and "\\" not in name and name not in (".", "..") and not any(ord(c) < 32 for c in name)
+
+    def do_GET(self):
+        if not self.allowed():
+            return self.bad(404)
+        path = urlsplit(self.path).path
+        if path == PREFIX:
+            files = "".join('<li><a class="dl" href="files/' + quote(p.name, safe="") + '" onclick="return dl(this)"><span class="fn">' + html.escape(p.name) + '</span><span class="sz" data-sz="' + fmt_size(p.stat().st_size) + '">' + fmt_size(p.stat().st_size) + ' &darr;</span></a></li>' for p in sorted(ROOT.iterdir()) if p.is_file() and not p.is_symlink()) or '<li class="empty">No files yet.</li>'
+            page = '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Share Bridge</title><style>*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;max-width:480px;margin:0 auto;padding:22px 16px 48px;background:#14141c;color:#e7e7f0}h1{font-size:21px;margin:0 0 4px}p.sub{color:#8c8ca3;font-size:13px;margin:0 0 18px}.card{background:#1e1e2a;border:1px solid #2b2b3b;border-radius:14px;padding:16px;margin-bottom:14px}.card h2{font-size:12px;margin:0 0 10px;color:#a9b8ff;text-transform:uppercase;letter-spacing:.06em}.tip{font-size:13px;color:#9797ad;line-height:1.6;margin:0;padding-left:18px}.tip li{margin:4px 0;background:none;padding:0;border:0;display:list-item}.file-input{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden}label.pick{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;background:#242434;border:1px dashed #454766;color:#cfd3ff;padding:12px 14px;border-radius:10px;font-size:14px;cursor:pointer}.pick-btn{background:#32344a;padding:6px 11px;border-radius:7px;font-size:13px;font-weight:500;flex-shrink:0}#name{font-size:12px;color:#8c8ca3;overflow-wrap:anywhere;text-align:right}button{display:block;width:100%;appearance:none;-webkit-appearance:none;border:0;background:linear-gradient(135deg,#6d8bff,#9c6dff);color:#fff;padding:12px 18px;border-radius:10px;font-size:14px;font-weight:600;margin-top:10px}button.ghost{background:#262634;color:#cfd3ff;border:1px solid #3a3a4e}#status{font-size:13px;color:#a9b8ff;margin-top:10px}#status:empty{display:none}ul{list-style:none;margin:0;padding:0}li{margin-top:8px;font-size:14px}li:first-child{margin-top:0}li.empty{display:flex;justify-content:center;background:#262634;border-radius:10px;padding:12px 14px;color:#71718a}a.dl{display:flex;align-items:center;justify-content:space-between;background:#262634;border:1px solid transparent;border-radius:10px;padding:12px 14px;color:#cfd3ff;text-decoration:none;transition:background .15s,border-color .15s}a.dl.done{background:#1c2b26;border-color:#2f5c47}span.fn{overflow-wrap:anywhere;margin-right:10px}span.sz{color:#8c8ca3;flex-shrink:0;font-size:12px}a.dl.done span.sz{color:#6ee7a8;font-weight:600}.credit-wrap{text-align:right;padding-right:10px;margin-top:18px}.credit{font-size:11px;color:#62647a;text-decoration:underline;text-decoration-color:#36384a;text-underline-offset:3px}</style><h1>Share Bridge</h1><p class="sub">A private link between this computer and your phone.</p><div class="card"><h2>Upload</h2><label class="pick" for="file"><span class="pick-btn">Choose files</span><span id="name">No file selected</span></label><input type="file" id="file" class="file-input" accept="application/*,text/*,image/*,audio/*,video/*,font/*,model/*" multiple><button onclick="upload()">Upload</button><div id="status"></div></div><div class="card"><h2>Files to download</h2><ul>' + files + '</ul><button class="ghost" onclick="location.reload()">Refresh list</button></div><div class="card"><h2>How it works</h2><ol class="tip"><li>Tap Choose files, pick photos or documents up to 50 MB each, then tap Upload. They are saved to ~/share on the computer.</li><li>Tap any file under Files to download to save it to this phone.</li><li>This link only works while the bridge is on, and changes each time it restarts.</li></ol></div><div class="credit-wrap"><a class="credit" href="https://github.com/nicomaure" target="_blank" rel="noopener">nicomaure</a></div><script>const fi=document.getElementById("file"),nm=document.getElementById("name"),st=document.getElementById("status");fi.onchange=function(){const n=fi.files.length;nm.textContent=n===0?"No file selected":n===1?fi.files[0].name:n+" files selected"};function dl(a){if(a.dataset.busy==="1")return false;a.dataset.busy="1";a.classList.add("done");const s=a.querySelector(".sz");s.textContent="Downloading...";setTimeout(()=>{s.innerHTML="Downloaded &#10003;";a.dataset.busy="0"},1500);return true}function sendFile(f,idx,total){return new Promise((res,rej)=>{const x=new XMLHttpRequest();x.open("POST","upload?name="+encodeURIComponent(f.name));x.upload.onprogress=e=>{if(e.lengthComputable){const p=Math.round(e.loaded/e.total*100);st.textContent="Uploading "+(total>1?(idx+1)+"/"+total+" ":"")+p+"%..."}};x.onload=()=>x.status>=200&&x.status<300?res():rej(new Error("HTTP error "+x.status));x.onerror=()=>rej(new Error("Network error"));x.send(f)})}async function upload(){const fs=Array.from(fi.files);if(!fs.length)return;for(const f of fs){if(f.size>52428800){st.textContent=f.name+" is larger than 50 MB.";return}}try{for(let i=0;i<fs.length;i++){st.textContent="Uploading "+(fs.length>1?(i+1)+"/"+fs.length+"...":"...");await sendFile(fs[i],i,fs.length)}location.reload()}catch(e){st.textContent=e.message}}</script>'
+            return self.send(page.encode())
+        if not path.startswith(PREFIX + "files/"):
+            return self.bad(404)
+        name = unquote(path[len(PREFIX + "files/"):])
+        if not self.safe_name(name):
+            return self.bad(400)
+        target = ROOT / name
+        if target.is_symlink() or not target.is_file():
+            return self.bad(404)
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(target.stat().st_size))
+        self.send_header("Content-Disposition", "attachment; filename*=UTF-8''" + quote(name, safe=""))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        try:
+            with target.open("rb") as f:
+                shutil.copyfileobj(f, self.wfile)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def do_POST(self):
+        if not self.allowed() or urlsplit(self.path).path != PREFIX + "upload":
+            return self.bad(404)
+        if self.headers.get("Origin") != ORIGIN:
+            return self.bad(403)
+        try:
+            size = int(self.headers.get("Content-Length", "-1"))
+        except ValueError:
+            return self.bad(400)
+        name = parse_qs(urlsplit(self.path).query).get("name", [""])[0]
+        if not 0 <= size <= LIMIT or not self.safe_name(name):
+            return self.bad(413 if size > LIMIT else 400)
+        target = None
+        try:
+            for candidate in (name, secrets.token_hex(4) + "_" + name):
+                try:
+                    f = (ROOT / candidate).open("xb")
+                except FileExistsError:
+                    continue
+                target = ROOT / candidate
+                break
+            if target is None:
+                return self.bad(409)
+            with f:
+                remaining = size
+                while remaining:
+                    chunk = self.rfile.read(min(65536, remaining))
+                    if not chunk:
+                        raise OSError("incomplete upload")
+                    f.write(chunk)
+                    remaining -= len(chunk)
+        except OSError:
+            if target is not None:
+                target.unlink(missing_ok=True)
+            return self.bad(400)
+        self.send(b"OK", "text/plain; charset=utf-8")
+
+def stop(*_):
+    sys.exit(0)
+
+try:
+    os.setsid()
+except OSError:
+    pass
+signal.signal(signal.SIGTERM, stop)
+
+server = None
+for i in range(20):
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", 8765), Bridge)
+        break
+    except OSError as e:
+        last_err = e
+        if i == 0:
+            for p in Path("/proc").glob("[0-9]*/cmdline"):
+                try:
+                    pid = int(p.parent.name)
+                    cmd = p.read_bytes()
+                    if pid != os.getpid() and cmd.startswith(b"python3\x00") and cmd.endswith(b"/share-bridge/bridge.py\x00"):
+                        os.kill(pid, signal.SIGTERM)
+                except (OSError, ValueError):
+                    pass
+        time.sleep(0.1)
+if server is None:
+    sys.exit("Port 8765 is busy (" + last_err.strerror + "). Close whatever uses it and tap start again.")
+STATE.write_text(json.dumps({"url": ORIGIN + PREFIX, "pid": os.getpid()}))
+try:
+    server.serve_forever()
+finally:
+    try:
+        if json.loads(STATE.read_text()).get("pid") == os.getpid():
+            STATE.unlink()
+    except (OSError, ValueError):
+        pass
+    server.server_close()
+PY
+
+BRIDGE_STATE="$d/status.json" nohup python3 "$d/bridge.py" </dev/null >/dev/null 2>"$d/bridge.log" &
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+  [ -s "$d/status.json" ] && break
+  kill -0 $! 2>/dev/null || break
+  sleep 0.2
+done
+if [ ! -s "$d/status.json" ]; then
+  tail -n 1 "$d/bridge.log"
+fi
+""") }
+    }
+  }
+
+  Column {
+    gap: 8
+    fill: true
+    Text { text: "share bridge"; style: muted }
+    Status { }
+    Spacer { weight: 1 }
+    if ready {
+      Text { text: "upload and download from your phone"; style: small; color: muted; maxLines: 2 }
+      Row {
+        gap: 6
+        Button { text: "open"; color: accent; weight: 1; onTap: url(bridge.url) }
+        Button { text: "stop"; color: red; weight: 1; onTap: { starting = false; err = ""; run("""
+d="$HOME/.local/share/omalauncher/share-bridge"
+pid=$(sed -n 's/.*"pid":[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$d/status.json" 2>/dev/null | head -1)
+[ -z "$pid" ] || kill "$pid" 2>/dev/null || true
+rm -f "$d/status.json"
+""") } }
+      }
+    } else {
+      Text { text: err != "" ? err : starting ? "starting bridge…" : "tap start to share files"; style: small; color: err != "" ? red : muted; maxLines: 2 }
+      StartButton { }
+    }
+  }
+
+  screen {
+    title: "share bridge"
+    Column {
+      gap: 12
+      padding: 16
+      Status { }
+      Text { text: "Starts a private web link to upload and download files in ~/share from your phone's browser. Stop the bridge anytime to close the link for security."; style: body; color: muted }
+      if !ready && err != "" {
+        Text { text: err; style: small; color: red }
+      }
+      if ready {
+        Button { text: "open in browser"; color: accent; fill: width; onTap: url(bridge.url) }
+        Row {
+          gap: 8
+          Button { text: "copy link"; weight: 1; onTap: copy(bridge.url) }
+          Button { text: "share link"; weight: 1; onTap: share(bridge.url) }
+        }
+        Row {
+          gap: 8
+          StartButton { label: "restart link"; weight: 1 }
+          Button { text: "stop bridge"; color: red; weight: 1; onTap: { starting = false; err = ""; run("""
+d="$HOME/.local/share/omalauncher/share-bridge"
+pid=$(sed -n 's/.*"pid":[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$d/status.json" 2>/dev/null | head -1)
+[ -z "$pid" ] || kill "$pid" 2>/dev/null || true
+rm -f "$d/status.json"
+""") } }
+        }
+      } else {
+        StartButton { label: "start transfer" }
+      }
+    }
+  }
+}

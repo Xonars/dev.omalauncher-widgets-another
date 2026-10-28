@@ -1,0 +1,180 @@
+widget "Game of Life" {
+  meta {
+    owl: 10
+    description: "Conway's Game of Life, with an editable board, starting patterns and adjustable speed"
+    version: "1.0.1"
+    license: "MIT"
+    category: "games"
+  }
+  // All simulation and drawing run in OWL; there are no shell dependencies.
+  requires { pacman: [] }
+  size: 6x6
+  minSize: 4x4
+  padding: 12
+
+  let side = 20
+  let indices = range(side * side)
+  let patterns = [
+    {name: "Garden", points: [85, 106, 124, 125, 126, 251, 252, 270, 271, 291]},
+    {name: "Gliders", points: [43, 64, 82, 83, 84, 235, 256, 274, 275, 276]},
+    {name: "Pulsar", points: [86, 87, 88, 92, 93, 94, 124, 129, 131, 136, 144, 149, 151, 156, 164, 169, 171, 176, 186, 187, 188, 192, 193, 194, 226, 227, 228, 232, 233, 234, 244, 249, 251, 256, 264, 269, 271, 276, 284, 289, 291, 296, 326, 327, 328, 332, 333, 334]},
+    {name: "Random", points: []}
+  ]
+  state pick = 0
+  state cells = range(400).map(i => contains([85, 106, 124, 125, 126, 251, 252, 270, 271, 291], i) ? 1 : 0)
+  state generation = 0
+  state playing = true
+  state advance = 0
+  state secondsPerGeneration = 1 persist
+  state elapsed = 0
+
+  // Eight neighbours per cell; the board wraps at its edges.
+  let neighbours = indices.map(i => [
+    ((floor(i / side) + side - 1) % side) * side + (i % side + side - 1) % side,
+    ((floor(i / side) + side - 1) % side) * side + i % side,
+    ((floor(i / side) + side - 1) % side) * side + (i % side + 1) % side,
+    floor(i / side) * side + (i % side + side - 1) % side,
+    floor(i / side) * side + (i % side + 1) % side,
+    ((floor(i / side) + 1) % side) * side + (i % side + side - 1) % side,
+    ((floor(i / side) + 1) % side) * side + i % side,
+    ((floor(i / side) + 1) % side) * side + (i % side + 1) % side
+  ])
+  let counts = neighbours.map(near => sum(near.map(k => cells[k])))
+  let nextCells = cells.map((alive, i) => counts[i] == 3 || (alive == 1 && counts[i] == 2) ? 1 : 0)
+  let population = sum(cells)
+  let settled = all(indices, i => cells[i] == nextCells[i])
+  let status = population == 0 ? "Empty" : settled ? "Still life" : playing ? "Running" : "Paused"
+  let tileBoard = max(40, min((tileWidth ?? 320) - 24, (tileHeight ?? 320) - 92))
+
+  // Keep the timer at OWL's one-second minimum; count ticks for the chosen speed.
+  every 1s {
+    if playing {
+      elapsed = elapsed + 1
+      if elapsed >= secondsPerGeneration {
+        elapsed = 0
+        advance = advance + 1
+      }
+    }
+  }
+  on playing { elapsed = 0 }
+  on secondsPerGeneration { elapsed = 0 }
+  on advance {
+    let upcoming = nextCells
+    let finished = settled
+    cells = upcoming
+    generation = generation + 1
+    if finished { playing = false }
+  }
+
+  component Board(boardSize, editable = false) {
+    Canvas {
+      width: boardSize
+      height: boardSize
+      onTap: {
+        if editable {
+          let column = floor(x / (boardSize / side))
+          let row = floor(y / (boardSize / side))
+          if column >= 0 && column < side && row >= 0 && row < side {
+            playing = false
+            cells = set(cells, row * side + column, cells[row * side + column] == 1 ? 0 : 1)
+            generation = 0
+          }
+        } else { screen() }
+      }
+      let unit = width / side
+      rect(0, 0, width, height, fill: surface)
+      for i in indices {
+        rect((i % side) * unit + 1, floor(i / side) * unit + 1,
+          max(1, unit - 2), max(1, unit - 2),
+          fill: cells[i] == 1 ? accent : alpha(muted, 0.12))
+      }
+    }
+  }
+
+  component Controls() {
+    Row {
+      gap: 6
+      Button { text: playing ? "Pause" : "Play"; weight: 1; onTap: playing = !playing }
+      Button { text: "Step"; weight: 1; onTap: { playing = false; advance = advance + 1 } }
+      Button {
+        text: "Reset"
+        weight: 1
+        onTap: {
+          cells = indices.map(i => pick == 3 ? (random() < 0.28 ? 1 : 0) : (contains(patterns[pick].points, i) ? 1 : 0))
+          generation = 0
+          elapsed = 0
+          playing = true
+        }
+      }
+    }
+  }
+
+  onTap: screen()
+  Column {
+    gap: 8
+    Row {
+      Text { text: "Gen ${generation}"; style: small; color: muted; weight: 1 }
+      Text { text: "${population} alive"; style: small; color: muted; width: 72; align: end }
+    }
+    Box {
+      weight: 1
+      fill: width
+      align: center
+      Board { boardSize: tileBoard }
+    }
+    Controls { fill: width }
+  }
+
+  screen {
+    title: "Game of Life"
+    Column {
+      padding: 16
+      gap: 12
+      scroll: true
+      Row {
+        Text { text: "Gen ${generation}"; weight: 1; bold: true }
+        Text { text: "${population} alive · ${status}"; style: small; color: muted; width: 160; align: end }
+      }
+      Board { boardSize: max(40, (screenWidth ?? 360) - 32); editable: true }
+      Text { text: "Tap a cell to add or remove life. Editing pauses the board."; style: small; color: muted }
+      Controls { fill: width }
+      Text { text: "SPEED"; style: label; color: muted }
+      Text { text: secondsPerGeneration == 1 ? "1 second per generation" : "${secondsPerGeneration} seconds per generation"; style: small }
+      Slider {
+        value: secondsPerGeneration
+        min: 1
+        max: 10
+        step: 1
+        onChange: secondsPerGeneration = value
+      }
+      Row {
+        Text { text: "Fast · 1s"; style: small; color: muted; weight: 1 }
+        Text { text: "Slow · 10s"; style: small; color: muted; width: 72; align: end }
+      }
+      Text { text: "STARTING PATTERNS"; style: label; color: muted }
+      Grid {
+        columns: 2
+        gap: 8
+        for pattern, p in patterns {
+          Button {
+            text: pattern.name
+            color: pick == p ? accent : foreground
+            onTap: {
+              pick = p
+              cells = indices.map(i => p == 3 ? (random() < 0.28 ? 1 : 0) : (contains(pattern.points, i) ? 1 : 0))
+              generation = 0
+              elapsed = 0
+              playing = true
+            }
+          }
+        }
+      }
+      Button { text: "Clear board"; onTap: { playing = false; cells = indices.map(i => 0); generation = 0 } }
+      Text {
+        text: "A cell is born with 3 neighbours; it survives with 2 or 3. Edges wrap around."
+        style: small
+        color: muted
+      }
+    }
+  }
+}

@@ -1,0 +1,479 @@
+widget "bertie" {
+  meta { owl: 3; description: "Bertie, the 2005 aqua pet, bobbing in a water tube. Feed, water, play, dance and pet"; version: "1.15"; license: "MIT"; category: "fun" }
+  page: 2
+  order: 1
+  size: 3x3
+  minSize: 3x3
+
+  // Bertie (Aqua Pets, wave 4, 2005): a white bird from a speckled egg, with a
+  // green leaf collar and an orange beak, hung in a water-filled cylinder on a
+  // white base. Feed it a dandelion, top up the water, play, dance and pet.
+  // Tap the egg and he pops out. His wings flap, and stay still while he sleeps.
+  // He sleeps from 23 to 7 and dances when music is playing. No shell commands.
+  source now = clock every 1s
+  source m = android.media
+
+  state born = 0 persist
+  // 1 until the next tap pops him out. Day and pets stay.
+  state shelled = 1 persist
+  state fed = 0 persist
+  state treated = 0 persist
+  state played = 0 persist
+  state danced = 0 persist
+  state petted = 0 persist
+  state pets = 0 persist
+  // Last tap, in Canvas `time` and in Unix seconds, and what it did.
+  state tapAt = -100
+  state tapNow = 0
+  state tapKind = ""
+
+  let hour = num(fmtTime(now, "H"))
+  let hatched = born > 0
+  let asleep = hatched && (hour >= 23 || hour < 7)
+  // Each bar uses only its own care. Feeding does not fill treat, play, dance or pet.
+  // 100 right after that care, 0 when it is due, or when it has never been done.
+  // Music keeps the dance bar full on its own.
+  let hungry = hatched && now - fed > 8 * 3600
+  let wantsTreat = hatched && now - treated > 6 * 3600
+  let bored = hatched && now - played > 5 * 3600
+  let feedPct = !hatched ? 0 : round(clamp(1 - (now - fed) / (8 * 3600), 0, 1) * 100)
+  let treatPct = !hatched ? 0 : round(clamp(1 - (now - treated) / (6 * 3600), 0, 1) * 100)
+  let playPct = !hatched ? 0 : round(clamp(1 - (now - played) / (5 * 3600), 0, 1) * 100)
+  let dancePct = !hatched ? 0 : m.playing == true ? 100 : round(clamp(1 - (now - danced) / (5 * 3600), 0, 1) * 100)
+  let petPct = !hatched ? 0 : round(clamp(1 - (now - petted) / (5 * 3600), 0, 1) * 100)
+  let day = floor((now - born) / 86400) + 1
+  let ago = now - fed < 3600 ? "${max(floor((now - fed) / 60), 1)}m" : "${floor((now - fed) / 3600)}h"
+  let busy = tapNow > 0 && now - tapNow >= 0 && now - tapNow < 4
+  let note = !hatched || shelled > 0 ? "a speckled egg"
+    : busy && tapKind == "hatch" ? "hello"
+    : busy && tapKind == "feed" ? "eating a dandelion"
+    : busy && tapKind == "treat" ? "yum!"
+    : busy && tapKind == "play" ? "playing"
+    : busy && tapKind == "dance" ? "dancing"
+    : busy && tapKind == "pet" ? "happy"
+    : asleep ? "asleep"
+    : hungry ? "hungry"
+    : wantsTreat ? "wants a treat"
+    : bored ? "bored"
+    : m.playing == true ? "♪ ${lower(m.title ?? "music")}"
+    : "bertie · day ${day} · fed ${ago} · ♥︎${pets}"
+
+  // Everything is drawn with smooth shapes, in units of `u` (1/20 of the
+  // base's width). Bertie's speckles are [x, y, radius] from its centre:
+  // some on the round head, the rest down the slimmer body.
+  let spots = [
+    [-1.4, -5.0, 0.24], [1.0, -5.4, 0.2], [2.3, -4.0, 0.28], [-2.6, -3.4, 0.24],
+    [3.1, -2.4, 0.22], [-3.2, -1.8, 0.24], [0.4, -3.0, 0.2],
+    [-1.4, 2.0, 0.22], [1.6, 2.4, 0.24], [-0.4, 3.8, 0.2], [1.0, 4.2, 0.2], [-1.8, 3.2, 0.2]
+  ]
+  // The egg's, on an egg of radius 1.
+  let eggSpots = [
+    [-0.4, -0.6, 0.09], [0.3, -0.3, 0.07], [-0.55, 0.15, 0.08], [0.5, 0.35, 0.1],
+    [0.05, 0.6, 0.07], [-0.2, -0.05, 0.06], [0.2, -0.75, 0.06]
+  ]
+  // A leaf as a closed path: [baseX, baseY, tipX, tipY, half-width x, half-width y].
+  let leaf = v => range(17).map(i => [
+    lerp(v[0], v[2], i <= 8 ? i / 8 : (16 - i) / 8) + (i <= 8 ? 1 : -1) * sin(rad(180 * (i <= 8 ? i / 8 : (16 - i) / 8))) * v[4],
+    lerp(v[1], v[3], i <= 8 ? i / 8 : (16 - i) / 8) + (i <= 8 ? 1 : -1) * sin(rad(180 * (i <= 8 ? i / 8 : (16 - i) / 8))) * v[5]
+  ])
+  // A unit teardrop outline: a rounded bulb around (0,0) tapering to a point at
+  // the tip (0, +1.4). Scaled, rotated and placed for Bertie's wings.
+  let teardrop = range(49).map(i => [
+    (0.52 + 0.88 * pow(0.5 + 0.5 * cos(rad(i * 7.5)), 2.5)) * sin(rad(i * 7.5)),
+    (0.52 + 0.88 * pow(0.5 + 0.5 * cos(rad(i * 7.5)), 2.5)) * cos(rad(i * 7.5))
+  ])
+
+  let body = mix(foreground, background, 0.06)
+  let bodyShade = mix(foreground, background, 0.3)
+  let outline = mix(foreground, background, 0.5)
+  let speck = mix(green, orange, 0.35)
+  let belly = mix(body, yellow, 0.12)
+  let leafDark = mix(green, background, 0.4)
+  let vein = mix(green, foreground, 0.3)
+  let beakDark = mix(orange, background, 0.3)
+  let ink = mix(background, foreground, 0.08)
+  let eggColor = mix(foreground, background, 0.1)
+  let petal = mix(orange, yellow, 0.3)
+
+  Column {
+    gap: 4
+    Canvas {
+      weight: 1
+      fill: width
+      onTap: {
+        tapKind = !hatched || shelled > 0 ? "hatch" : "pet"
+        tapAt = time
+        tapNow = now
+        pets = hatched && shelled == 0 ? pets + 1 : pets
+        petted = hatched && shelled == 0 ? now : petted
+        born = hatched ? born : now
+        shelled = 0
+      }
+
+      // The whole toy, in units: base 20 wide, tube and base 34 tall.
+      let u = clamp(min((width - 8) / 22, (height - 4) / 36), 3, 16)
+      let since = time >= tapAt && now - tapNow < 6 ? time - tapAt : 1000
+      let baseW = 20 * u
+      let tubeW = 16 * u
+      let tubeH = 26 * u
+      let baseH = 8 * u
+      let x0 = (width - baseW) / 2
+      let y0 = (height - tubeH - baseH) / 2
+      let midX = width / 2
+      let tubeX = x0 + 2 * u
+      let baseY = y0 + tubeH
+      let inL = tubeX + 0.8 * u
+      let inW = tubeW - 1.6 * u
+      let inTop = y0 + 4 * u
+      let inBot = baseY - u
+
+      let plastic = mix(foreground, background, 0.1)
+      let shade = mix(foreground, background, 0.32)
+      // The tube stays comfortably full; a treat isn't water.
+      let level = 0.92
+      let waterY = inBot - (inBot - inTop - u) * level
+
+      let dancing = tapKind == "dance" && since < 4 || !asleep && m.playing == true
+      let playing = tapKind == "play" && since < 3
+      let eating = tapKind == "feed" && since < 2.4
+      let happy = (tapKind == "pet" || tapKind == "hatch" || tapKind == "treat") && since < 2.4
+      let lively = happy || playing || dancing || eating
+
+      let sway = dancing ? sin(time * 4) * 1.2 * u : playing ? sin(time * 9) * 1.6 * u : 0
+      let tilt = dancing ? sin(time * 4) * 8 : playing ? sin(time * 9) * 5 : 0
+      let bob = sin(time * (asleep && !lively ? 1.1 : 2.4)) * (dancing ? 1.4 : 1) * u
+      let cx = midX + sway
+      let cy = inTop + (inBot - inTop) / 2 + bob
+      // Hatch: a shake, then he pops up out of the shell as the halves fall away.
+      let emerge = hatched && tapKind == "hatch" && since < 2.3
+      let growT = emerge ? clamp((since - 0.55) / 0.7, 0, 1) : 1
+      let growEase = 1 - pow(1 - growT, 3)
+      let settleT = emerge ? clamp((since - 1.35) / 0.55, 0, 1) : 1
+      let popScale = emerge ? lerp(lerp(0.2, 1.18, growEase), 1, settleT) : 1
+      let popStretch = emerge ? 1 + sin(clamp((since - 0.5) / 0.95, 0, 1) * rad(180)) * 0.1 : 1
+      let hop = emerge ? sin(clamp((since - 0.5) / 0.95, 0, 1) * rad(180)) * 2.4 * u : 0
+      let resting = asleep && !lively && !emerge
+      let flapSpeed = dancing ? 16 : playing ? 13 : (happy || eating || emerge) ? 10 : 7
+      let flapAmp = dancing ? 50 : playing ? 42 : (happy || eating || emerge) ? 38 : 34
+      let beat = sin(time * flapSpeed)
+      // 0 at the bottom of the stroke, 1 at the top, so the wings sweep up and down.
+      let wingLift = resting ? 0.15 : 0.5 + 0.5 * beat
+      let wingBeat = wingLift * flapAmp
+      let leafFlutter = resting ? 0 : beat * (dancing ? 1.15 : 0.45) * u
+
+      // Back of the glass: a dome on a cylinder.
+      clip(tubeX, y0, tubeW, inTop - y0) {
+        scale(1, 0.5, midX, inTop) { circle(midX, inTop, tubeW / 2 - 0.4 * u, fill: alpha(blue, 0.1)) }
+      }
+      rect(tubeX + 0.4 * u, inTop, tubeW - 0.8 * u, baseY - inTop, fill: alpha(blue, 0.1))
+
+      // Water, with a rippling surface.
+      let surface = range(17).map(i => [inL + inW * i / 16, waterY + sin(rad(i * 45) + time * 2.2) * 0.22 * u])
+      path(flatten([surface, [[inL + inW, inBot + u], [inL, inBot + u]]]), closed: true, fill: linear(0, waterY, 0, inBot, [alpha(blue, 0.3), alpha(blue, 0.55)]))
+      path(surface, stroke: alpha(foreground, 0.4), width: 0.3 * u, cap: round)
+
+      for k in range(5) {
+        let t = (time * 0.28 + k * 0.19) % 1
+        let yb = inBot - u - t * (inBot - waterY - 2 * u)
+        let xb = inL + (1.5 + (k * 3.3) % 11) * u + sin(time * 3 + k) * 0.3 * u
+        circle(xb, yb, (0.3 + 0.15 * (k % 2)) * u, stroke: alpha(foreground, 0.25 + 0.4 * (1 - t)), width: 0.15 * u)
+      }
+
+      if hatched && shelled == 0 {
+        let headY = cy - hop - 5.8 * u * popScale
+        let stringA = emerge ? clamp((since - 1.15) / 0.4, 0, 1) : 1
+        line(cx - 1.8 * u, inTop - 2 * u, cx - 1.8 * u, headY, stroke: alpha(foreground, 0.4 * stringA), width: 1)
+        line(cx + 1.8 * u, inTop - 2 * u, cx + 1.8 * u, headY, stroke: alpha(foreground, 0.4 * stringA), width: 1)
+
+        translate(0, -hop) {
+          scale(popScale * (2 - popStretch), popScale * popStretch, cx, cy) {
+        rotate(tilt, cx, cy) {
+          // Short legs with three toes, mostly tucked under the body.
+          for s in [-1, 1] {
+            let fx = cx + s * 1.3 * u
+            rect(fx - 0.25 * u, cy + 5.2 * u, 0.5 * u, 0.9 * u, fill: beakDark)
+            for k in [-1, 0, 1] { circle(fx + k * 0.6 * u, cy + 6.2 * u, 0.34 * u, fill: orange) }
+          }
+
+          // Geometry: a big round head above a slimmer egg-shaped body.
+          let hy = cy - 2.4 * u
+          let rH = 4.2 * u
+          let by = cy + 3.0 * u
+          let bW = 3.0 * u
+          let bH = 3.2 * u
+
+          // A little tuft of feathers sprouting from the top of the head.
+          for k in [-1, 0, 1] {
+            rotate(k * 28, cx, hy - rH + 0.5 * u) {
+              scale(0.4, 1, cx, hy - rH - 0.5 * u) { circle(cx, hy - rH - 0.5 * u, 1.1 * u, fill: mix(bodyShade, body, 0.4)) }
+            }
+          }
+
+          // Wings on the shoulders. Each is a short fan of feathers that swings
+          // up and down; asleep, they hang still.
+          for s in [-1, 1] {
+            let px = cx + s * 2.05 * u
+            let py = cy + 0.45 * u
+            let reach = (3.45 + (resting ? 0 : wingLift * 0.4)) * u
+            for f in [2, 1, 0] {
+              rotate(-s * (36 + wingBeat + f * 7), px, py) {
+                let w = teardrop.map(p => [px + p[0] * (1.2 - f * 0.16) * u, py + p[1] * reach * (1 - f * 0.14)])
+                path(w, closed: true, fill: f == 0 ? mix(body, foreground, 0.42) : mix(body, bodyShade, f * 0.35))
+                path(w, closed: true, stroke: outline, width: 0.2 * u)
+              }
+            }
+          }
+
+          // Slim body (an upright ellipse), then the round head on top so the
+          // two merge cleanly at the neck.
+          let bodyPath = range(33).map(i => [cx + bW * sin(rad(i * 360 / 32)), by - bH * cos(rad(i * 360 / 32))])
+          path(bodyPath, closed: true, fill: radial(cx - 1.2 * u, by - 1.5 * u, 6 * u, [mix(body, foreground, 0.5), body, bodyShade]))
+          path(bodyPath, closed: true, stroke: outline, width: 0.3 * u)
+          circle(cx, hy, rH, fill: radial(cx - 1.5 * u, hy - 1.8 * u, 6.5 * u, [mix(body, foreground, 0.6), body, bodyShade]))
+          circle(cx, hy, rH, stroke: outline, width: 0.3 * u)
+
+          // Soft lighter belly patch (no feather scallops).
+          scale(1, 0.8, cx, by + 0.4 * u) { circle(cx, by + 0.4 * u, bW - 0.5 * u, fill: belly) }
+
+          // Bertie's signature speckles, her trademark — softly luminous,
+          // each twinkling on its own phase.
+          for sp, i in spots {
+            let px = cx + sp[0] * u
+            let py = cy + sp[1] * u
+            let glow = 0.5 + 0.5 * sin(time * 1.6 + i * 0.9)
+            circle(px, py, sp[2] * u * 2.3, fill: alpha(mix(speck, green, 0.3), 0.1 + 0.14 * glow))
+            circle(px, py, sp[2] * u, fill: mix(speck, foreground, 0.08 + 0.28 * glow))
+          }
+
+          // Blush.
+          for s in [-1, 1] {
+            scale(1, 0.6, cx + s * 2.8 * u, cy - 1.6 * u) { circle(cx + s * 2.8 * u, cy - 1.6 * u, 0.85 * u, fill: alpha(red, 0.45)) }
+          }
+
+          // Eyes, high on the round head.
+          let ey = cy - 2.9 * u
+          let blink = time % 4.4 < 0.14
+          if (asleep && !lively) || blink {
+            for s in [-1, 1] { arc(cx + s * 1.9 * u, ey - 0.5 * u, 0.9 * u, 120, 120, stroke: ink, width: 0.35 * u, cap: round) }
+          } else if happy || playing || dancing {
+            for s in [-1, 1] { arc(cx + s * 1.9 * u, ey + 0.6 * u, 0.9 * u, 300, 120, stroke: ink, width: 0.35 * u, cap: round) }
+          } else {
+            // Glancing about, or up at the dandelion when hungry.
+            let lx = hungry ? 0 : [0, 1, 0, -1][floor(time / 2.6) % 4] * 0.35 * u
+            let ly = hungry ? -0.4 * u : 0
+            for s in [-1, 1] {
+              let ex = cx + s * 1.9 * u + lx
+              scale(0.85, 1, ex, ey + ly) { circle(ex, ey + ly, 1.1 * u, fill: ink) }
+              circle(ex - 0.3 * u, ey + ly - 0.38 * u, 0.34 * u, fill: foreground)
+              circle(ex + 0.28 * u, ey + ly + 0.36 * u, 0.14 * u, fill: alpha(foreground, 0.6))
+            }
+          }
+
+          // Beak on the lower face: the lower half drops open while eating.
+          let gape = eating && since > 0.8 && floor(since * 6) % 2 == 0 ? 0.45 * u : 0
+          path([[cx - 0.65 * u, cy - 1.0 * u + gape], [cx + 0.65 * u, cy - 1.0 * u + gape], [cx, cy - 0.1 * u + gape]], closed: true, fill: beakDark)
+          path([[cx - 1.0 * u, cy - 1.5 * u], [cx + 1.0 * u, cy - 1.5 * u], [cx + 0.25 * u, cy - 0.55 * u], [cx - 0.25 * u, cy - 0.55 * u]], closed: true, fill: orange)
+          for s in [-1, 1] { circle(cx + s * 0.32 * u, cy - 1.25 * u, 0.1 * u, fill: beakDark) }
+
+          // Leaf collar around the neck: two big leaves a side that flap, plus a small one.
+          for s in [-1, 1] {
+            for l in [
+              [cx + s * 2.0 * u, cy + 0.8 * u, cx + s * 4.6 * u, cy + 1.8 * u - leafFlutter, -0.34 * u, 0.72 * s * u],
+              [cx + s * 1.4 * u, cy + 1.3 * u, cx + s * 3.2 * u, cy + 3.0 * u - leafFlutter * 0.6, -0.5 * u, 0.5 * s * u],
+              [cx + s * 0.2 * u, cy + 1.0 * u, cx + s * 1.6 * u, cy + 1.4 * u, -0.1 * u, 0.5 * s * u]
+            ] {
+              path([l].map(leaf)[0], closed: true, fill: linear(l[0], l[1], l[2], l[3], [leafDark, green]))
+              line(l[0], l[1], lerp(l[0], l[2], 0.85), lerp(l[1], l[3], 0.85), stroke: vein, width: 0.18 * u, cap: round)
+            }
+          }
+        }
+          }
+        }
+      }
+
+      // The speckled egg. It rocks until a tap, then splits so he can pop out.
+      if !hatched || shelled > 0 || emerge {
+        let open = emerge ? clamp((since - 0.5) / 0.42, 0, 1) : 0
+        let out = open * open
+        let shellA = emerge ? 1 - clamp((since - 1.5) / 0.6, 0, 1) : 1
+        let eggRock = emerge ? sin(since * 48) * (1 - open) * 16 : (time % 5 < 0.5 ? sin(time * 22) * 8 : 0)
+        layer(shellA) {
+          rotate(eggRock, midX, cy + 4.2 * u) {
+            for s in [-1, 1] {
+              let sx = midX + s * out * 6.2 * u
+              let sy = cy + out * 6 * u
+              rotate(s * out * 78, sx, sy) {
+                scale(0.8, 1, sx, sy) {
+                  arc(sx, sy, 5 * u, s < 0 ? 180 : 0, 180, fill: radial(sx - 1.4 * u, sy - 2 * u, 7 * u, [mix(eggColor, foreground, 0.5), eggColor, mix(eggColor, background, 0.3)]))
+                  if out > 0.12 { line(sx, sy - 4.7 * u, sx, sy + 4.7 * u, stroke: mix(eggColor, outline, 0.5), width: 0.4 * u, cap: round) }
+                  for sp in eggSpots {
+                    if s * sp[0] > 0.04 { circle(sx + sp[0] * 5 * u, sy + sp[1] * 5 * u, sp[2] * 5 * u, fill: speck) }
+                  }
+                }
+              }
+            }
+            if out < 0.45 {
+              line(midX, cy - 4.4 * u, midX, cy + 4.4 * u, stroke: mix(outline, eggColor, 0.3), width: 0.42 * u, cap: round)
+            }
+          }
+        }
+        if emerge && open > 0.05 {
+          for k in range(5) {
+            let p = clamp((since - 0.5) / 0.9, 0, 1)
+            let dir = k % 2 == 0 ? -1 : 1
+            circle(midX + dir * (1.2 + k * 0.55) * p * 7 * u, cy - 2.2 * u + p * p * 10 * u, (0.4 - p * 0.18) * u, fill: alpha(eggColor, 1 - p))
+          }
+        }
+      }
+
+      // Glass front: outline and shine.
+      let dome = range(19).map(i => [midX - cos(rad(i * 10)) * tubeW / 2, inTop - sin(rad(i * 10)) * 4 * u])
+      path(flatten([[[tubeX, baseY]], dome, [[tubeX + tubeW, baseY]]]), stroke: alpha(foreground, 0.55), width: 0.7 * u, cap: round)
+      rect(tubeX + 1.3 * u, inTop + 0.5 * u, 0.9 * u, tubeH - 9 * u, radius: 0.45 * u, fill: alpha(foreground, 0.35))
+      rect(tubeX + tubeW - 2.2 * u, inTop + 2 * u, 0.45 * u, tubeH - 14 * u, radius: 0.22 * u, fill: alpha(foreground, 0.16))
+      rotate(-28, tubeX + 3.6 * u, y0 + 2.2 * u) { rect(tubeX + 2.4 * u, y0 + 1.9 * u, 2.4 * u, 0.6 * u, radius: 0.3 * u, fill: alpha(foreground, 0.3)) }
+
+      // Collar, then the white base with two yellow buttons and a centre stud.
+      rect(x0 + 3 * u, baseY + baseH - 2.2 * u, baseW - 6 * u, 2.2 * u, radius: u, fill: shade)
+      rect(x0, baseY + 0.6 * u, baseW, baseH - 2 * u, radius: 2.6 * u, fill: linear(0, baseY, 0, baseY + baseH, [plastic, mix(plastic, shade, 0.6)]))
+      rect(tubeX - u, baseY - 1.5 * u, tubeW + 2 * u, 2.4 * u, radius: 1.1 * u, fill: linear(0, baseY - 1.5 * u, 0, baseY + 0.9 * u, [mix(orange, plastic, 0.35), mix(orange, shade, 0.45)]))
+      let lit = since < 0.3
+      let btn = lit ? yellow : mix(yellow, plastic, 0.35)
+      for s in [-1, 1] {
+        let bxc = midX + s * 7.3 * u
+        circle(bxc, baseY + 3.9 * u, 1.5 * u, fill: btn)
+        circle(bxc - 0.45 * u, baseY + 3.4 * u, 0.45 * u, fill: alpha(foreground, 0.5))
+      }
+      circle(midX, baseY + 3.9 * u, 2 * u, fill: mix(green, plastic, 0.25))
+      circle(midX, baseY + 3.9 * u, 1.1 * u, fill: green)
+      circle(midX, baseY + baseH - 2.4 * u, 0.4 * u, fill: alpha(background, 0.8))
+
+      // A dandelion: falling to Bertie while eating, waiting by the tube when hungry.
+      if eating && since <= 0.9 || hungry && !eating {
+        let fx = eating ? cx : tubeX + tubeW
+        let fy = eating ? lerp(inTop, cy, since / 0.9) : max(y0 - u, 2 * u)
+        line(fx, fy, fx, fy + 2.8 * u, stroke: green, width: 0.35 * u, cap: round)
+        for k in range(8) { circle(fx + sin(rad(k * 45)) * 0.9 * u, fy - cos(rad(k * 45)) * 0.9 * u, 0.55 * u, fill: petal) }
+        circle(fx, fy, 0.7 * u, fill: orange)
+      }
+
+      if happy {
+        for k in range(3) {
+          let t = since - k * 0.3
+          if t > 0 && t < 1.7 {
+            layer(1 - t / 1.7) {
+              let hx = cx + [-4.5, 0, 4.5][k] * u
+              let hy = cy - 6.5 * u - t * 7 * u
+              circle(hx - 0.55 * u, hy, 0.65 * u, fill: red)
+              circle(hx + 0.55 * u, hy, 0.65 * u, fill: red)
+              path([[hx - 1.17 * u, hy + 0.2 * u], [hx + 1.17 * u, hy + 0.2 * u], [hx, hy + 1.5 * u]], closed: true, fill: red)
+            }
+          }
+        }
+      }
+
+      if asleep && !lively && shelled == 0 {
+        for k in range(3) {
+          let t = (time * 0.35 + k / 3) % 1
+          text("z", tubeX + tubeW + t * 3 * u, y0 + 6 * u - t * 8 * u, size: (1.6 + t * 1.4) * u, bold: true, color: alpha(foreground, 1 - t))
+        }
+      }
+    }
+
+    Text {
+      font: mono
+      style: small
+      color: muted
+      align: center
+      maxLines: 1
+      text: cols != null && cols < 4
+        ? (!hatched || shelled > 0 ? "egg" : hungry ? "hungry" : wantsTreat ? "treat" : bored ? "bored" : asleep ? "asleep" : "♥︎${pets}")
+        : note
+    }
+
+    Row {
+      gap: 4
+      Column {
+        weight: 1
+        gap: 2
+        Text { text: "${feedPct}%"; font: mono; style: small; color: muted; align: center; maxLines: 1 }
+        Progress { value: feedPct; fill: width; height: 6; color: feedPct > 20 ? green : orange; track: alpha(muted, 0.35); animate value: spring() }
+        Box { fill: width; height: 26; align: center; border: 1; borderColor: alpha(hungry ? orange : accent, 0.6); background: alpha(hungry ? orange : accent, 0.12); onTap: {
+          tapKind = !hatched || shelled > 0 ? "hatch" : "feed"
+          tapAt = time
+          tapNow = now
+          fed = now
+          born = hatched ? born : now
+          shelled = 0
+        }
+          Text { text: "feed"; fontSize: 9; color: hungry ? orange : accent; align: center; maxLines: 1 }
+        }
+      }
+      Column {
+        weight: 1
+        gap: 2
+        Text { text: "${treatPct}%"; font: mono; style: small; color: muted; align: center; maxLines: 1 }
+        Progress { value: treatPct; fill: width; height: 6; color: orange; track: alpha(muted, 0.35); animate value: spring() }
+        Box { fill: width; height: 26; align: center; border: 1; borderColor: alpha(wantsTreat ? green : accent, 0.6); background: alpha(wantsTreat ? green : accent, 0.12); onTap: {
+          tapKind = !hatched || shelled > 0 ? "hatch" : "treat"
+          tapAt = time
+          tapNow = now
+          treated = now
+          born = hatched ? born : now
+          shelled = 0
+        }
+          Text { text: "treat"; fontSize: 9; color: wantsTreat ? green : accent; align: center; maxLines: 1 }
+        }
+      }
+      Column {
+        weight: 1
+        gap: 2
+        Text { text: "${playPct}%"; font: mono; style: small; color: muted; align: center; maxLines: 1 }
+        Progress { value: playPct; fill: width; height: 6; color: magenta; track: alpha(muted, 0.35); animate value: spring() }
+        Box { fill: width; height: 26; align: center; border: 1; borderColor: alpha(bored ? magenta : accent, 0.6); background: alpha(bored ? magenta : accent, 0.12); onTap: {
+          tapKind = !hatched || shelled > 0 ? "hatch" : "play"
+          tapAt = time
+          tapNow = now
+          played = now
+          born = hatched ? born : now
+          shelled = 0
+        }
+          Text { text: "play"; fontSize: 9; color: bored ? magenta : accent; align: center; maxLines: 1 }
+        }
+      }
+      Column {
+        weight: 1
+        gap: 2
+        Text { text: "${dancePct}%"; font: mono; style: small; color: muted; align: center; maxLines: 1 }
+        Progress { value: dancePct; fill: width; height: 6; color: yellow; track: alpha(muted, 0.35); animate value: spring() }
+        Box { fill: width; height: 26; align: center; border: 1; borderColor: alpha(m.playing == true ? yellow : accent, 0.6); background: alpha(m.playing == true ? yellow : accent, 0.12); onTap: {
+          tapKind = !hatched || shelled > 0 ? "hatch" : "dance"
+          tapAt = time
+          tapNow = now
+          danced = now
+          born = hatched ? born : now
+          shelled = 0
+        }
+          Text { text: "dance"; fontSize: 9; color: m.playing == true ? yellow : accent; align: center; maxLines: 1 }
+        }
+      }
+      Column {
+        weight: 1
+        gap: 2
+        Text { text: "${petPct}%"; font: mono; style: small; color: muted; align: center; maxLines: 1 }
+        Progress { value: petPct; fill: width; height: 6; color: red; track: alpha(muted, 0.35); animate value: spring() }
+        Box { fill: width; height: 26; align: center; border: 1; borderColor: alpha(red, 0.6); background: alpha(red, 0.12); onTap: {
+          tapKind = !hatched || shelled > 0 ? "hatch" : "pet"
+          tapAt = time
+          tapNow = now
+          pets = hatched && shelled == 0 ? pets + 1 : pets
+          petted = now
+          born = hatched ? born : now
+          shelled = 0
+        }
+          Text { text: "pet"; fontSize: 9; color: red; align: center; maxLines: 1 }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,53 @@
+widget "github" {
+  meta { description: "Unread GitHub notifications, reviews waiting on you and your open pull requests, via the GitHub CLI"; version: "1.1"; license: "MIT"; category: "dev" }
+  size: 6x4
+  minSize: 3x3
+
+  requires { pacman: ["github-cli", "jq"] }
+
+  source gh = cmd("""
+    gh auth status >/dev/null 2>&1 || { echo '{"auth": false}'; exit; }
+    jq -nc \
+      --argjson unread "$(gh api notifications --jq length)" \
+      --argjson reviews "$(gh search prs --review-requested=@me --state=open --json number --jq length)" \
+      --argjson mine "$(gh search prs --author=@me --state=open --limit 8 --json title,url,repository,updatedAt)" \
+      '{auth: true, unread: $unread, reviews: $reviews, mine: [$mine[] | {title, url, repo: .repository.name}]}'
+  """) every 5m json timeout 30s
+
+  component Count(label, n, hot) {
+    Column {
+      gap: 0
+      Text { text: label; style: label }
+      Text { text: "${n}"; style: title; color: n > 0 ? hot : muted }
+    }
+  }
+
+  onTap: url("https://github.com/notifications")
+
+  Column {
+    gap: 6
+    Text { text: "github"; style: muted }
+    if gh.auth == false {
+      Text { text: "the GitHub CLI isn't signed in"; style: small }
+      Button { text: "sign in"; onTap: terminal("gh auth login", "github") }
+    } else {
+      Row {
+        Count { label: "unread"; n: gh.unread; hot: accent; weight: 1 }
+        Count { label: "reviews"; n: gh.reviews; hot: yellow; weight: 1 }
+        Count { label: "my prs"; n: len(gh.mine); hot: foreground; weight: 1 }
+      }
+      Column {
+        scroll: true
+        weight: 1
+        gap: 4
+        for p in gh.mine key p.url {
+          Row {
+            onTap: url(p.url)
+            Text { text: p.repo; fontSize: 11; color: muted; width: 80; maxLines: 1 }
+            Text { text: p.title; fontSize: 12; maxLines: 1; weight: 1 }
+          }
+        }
+      }
+    }
+  }
+}

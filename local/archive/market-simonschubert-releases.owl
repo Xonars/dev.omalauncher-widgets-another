@@ -1,0 +1,61 @@
+widget "releases" {
+  meta { description: "The latest release of each GitHub repository listed in ~/.config/omarchy-proot/releases; new ones stand out"; version: "1.2"; license: "MIT"; category: "dev" }
+  size: 6x3
+  minSize: 3x2
+
+  requires { pacman: ["curl", "jq"] }
+
+  // One owner/repo per line, fetched in parallel without a token (GitHub allows 60 requests an hour).
+  source rel = cmd("""
+    f=~/.config/omarchy-proot/releases
+    mkdir -p "${f%/*}"
+    [ -f "$f" ] || printf 'omacom/omarchy\nneovim/neovim\nhyprwm/Hyprland\njesseduffield/lazygit\nsxyazi/yazi\n' > "$f"
+    {
+      grep -v '^#' "$f" | grep . | while read -r repo; do
+        curl -fsLm 10 "https://api.github.com/repos/$repo/releases/latest" |
+          jq -c --arg repo "$repo" '{repo: $repo, tag: .tag_name, url: .html_url, at: (.published_at | fromdateiso8601)}' &
+      done
+      wait
+    } | jq -sc 'sort_by(-.at)'
+  """) every 1h json timeout 30s
+  source now = clock every 5m
+  // A narrow tile (the landscape home screen, or 3 columns) leaves the repo name a few letters
+  // beside the tag: put the tag and age on a second line beneath it.
+  let narrow = tileWidth != null && tileWidth < 300
+
+  Column {
+    gap: 4
+    Row {
+      onTap: terminal('$EDITOR ~/.config/omarchy-proot/releases', "releases")
+      Text { text: "releases"; style: muted; weight: 1 }
+      Text { text: "edit"; fontSize: 11; color: muted; width: 40; align: end }
+    }
+    Column {
+      scroll: true
+      weight: 1
+      gap: narrow ? 10 : 4
+      for r in rel key r.repo {
+        let days = floor((now - r.at) / 86400)
+        Row {
+          align: center
+          onTap: url(r.url)
+          Box { size: 6; radius: 3; background: days < 7 ? green : transparent }
+          if narrow {
+            Column {
+              weight: 1
+              Text { text: split(r.repo, "/")[1]; fontSize: 12; maxLines: 1 }
+              Row {
+                Text { text: r.tag; fontSize: 12; color: days < 7 ? green : foreground; maxLines: 1; weight: 1 }
+                Text { text: days < 1 ? "today" : "${days}d"; fontSize: 11; color: muted; width: 40; align: end }
+              }
+            }
+          } else {
+            Text { text: split(r.repo, "/")[1]; fontSize: 12; maxLines: 1; weight: 1 }
+            Text { text: r.tag; fontSize: 12; color: days < 7 ? green : foreground; maxLines: 1; width: 96; align: end }
+            Text { text: days < 1 ? "today" : "${days}d"; fontSize: 11; color: muted; width: 40; align: end }
+          }
+        }
+      }
+    }
+  }
+}

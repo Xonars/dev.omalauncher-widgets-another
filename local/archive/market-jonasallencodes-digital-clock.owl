@@ -1,0 +1,99 @@
+widget "digital clock" {
+  page: 1
+  order: 3
+  size: 3x1
+  minSize: 2x1
+  padding: [12, 2]
+  meta { owl: 5; description: "Clean 12h digital clock; tap opens your clock app"; version: "1.7"; license: "MIT"; category: "time" }
+
+  source now = clock every 1s
+  source dev = android.device
+  state clockPkg = "" persist
+  state draft = ""
+  onTap: screen()
+
+  let stack = (tileWidth ?? 400) < (tileHeight ?? 100) && (cols ?? 6) <= 2
+  let fsWide = clamp(round(min((tileHeight ?? 100) / 2.2, (tileWidth ?? 400) / 6.5)), 16, 72)
+  let fsTiny = clamp(round(min((tileHeight ?? 100) / 2.2, (tileWidth ?? 200) / 5)), 14, 72)
+  let amWide = round(fsWide * 0.45)
+  let timeW = round(fsWide * 3.2)
+  let amW = round(amWide * 2.2)
+  let t = fmtTime(now, "h:mm")
+  let ap = fmtTime(now, "a")
+  let tiny = (cols ?? 6) <= 2 && (rows ?? 1) <= 2
+  let n = (len(t) ?? 5) + (tiny ? 0 : (len(ap) ?? 2))
+  let fsStack = clamp(round(min((tileHeight ?? 400) / (n * 1.65 + 1), (tileWidth ?? 200) / 1.8)), 10, 48)
+  let maker = lower(dev.maker ?? "")
+  let model = lower(dev.model ?? "")
+  let guess = contains(maker, "samsung") ? "com.sec.android.app.clockpackage" : contains(maker, "google") || contains(model, "pixel") ? "com.google.android.deskclock" : contains(maker, "xiaomi") || contains(maker, "redmi") || contains(maker, "poco") ? "com.android.deskclock" : contains(maker, "motorola") || contains(maker, "moto") ? "com.motorola.cn.deskclock" : ""
+  let effective = clockPkg == "" ? guess : clockPkg
+
+  Box {
+    fill: true
+    if effective != "" {
+      Box { fill: true; onTap: androidApp(effective) }
+    }
+  Column {
+    fill: true
+    align: center
+    justify: center
+    if stack {
+      Column {
+        gap: 0
+        scroll: true
+        align: center
+        justify: center
+        for i in range(len(t) ?? 0) {
+          Text { text: sub(t, i, i + 1); fontSize: fsStack; align: center; maxLines: 1 }
+        }
+        if !tiny {
+          for i in range(len(ap) ?? 0) {
+            Text { text: sub(ap, i, i + 1); fontSize: round(fsStack * 0.7); style: muted; align: center; maxLines: 1; onTap: screen() }
+          }
+        }
+      }
+    } else {
+      if tiny {
+        Text { text: fmtTime(now, "h:mm"); fontSize: fsTiny; align: center; maxLines: 1 }
+      } else {
+        Row {
+          gap: 8
+          fill: width
+          align: center
+          justify: center
+          Text { text: fmtTime(now, "h:mm"); fontSize: fsWide; width: timeW; align: end; maxLines: 1 }
+          Text { text: fmtTime(now, "a"); fontSize: amWide; style: muted; width: amW; align: start; maxLines: 1; onTap: screen() }
+        }
+      }
+    }
+  }
+  }
+
+  screen {
+    title: "digital clock"
+    Column {
+      scroll: true
+      gap: 8
+      Text { text: "clock app"; style: muted }
+      Text { text: effective == "" ? "none selected yet" : effective; style: small; color: muted; maxLines: 1 }
+      if clockPkg == "" && guess != "" {
+        Text { text: "auto-selected from your phone"; style: small; color: muted }
+      }
+      if clockPkg != "" && clockPkg != guess {
+        Text { text: "your selection overrides the stock app"; style: small; color: muted }
+      }
+      if effective != "" {
+        Button { text: "open clock"; color: accent; onTap: { androidApp(effective); close() } }
+      }
+      Button { text: "Samsung"; onTap: { clockPkg = "com.sec.android.app.clockpackage"; androidApp("com.sec.android.app.clockpackage"); close() } }
+      Button { text: "Google / Pixel"; onTap: { clockPkg = "com.google.android.deskclock"; androidApp("com.google.android.deskclock"); close() } }
+      Button { text: "Xiaomi / AOSP"; onTap: { clockPkg = "com.android.deskclock"; androidApp("com.android.deskclock"); close() } }
+      Button { text: "Motorola"; onTap: { clockPkg = "com.motorola.cn.deskclock"; androidApp("com.motorola.cn.deskclock"); close() } }
+      Text { text: "custom package"; style: muted }
+      Input { text: draft; placeholder: "com.example.clock"; onChange: draft = value }
+      Text { text: "find it with App Inspector on the Play Store"; style: small; color: muted }
+      Button { text: "use custom"; color: muted; onTap: { clockPkg = trim(draft) == "" ? clockPkg : trim(draft); draft = ""; androidApp(effective); close() } }
+      Text { text: "tap the time to open · tap AM/PM to switch"; style: small; color: muted }
+    }
+  }
+}

@@ -1,0 +1,22 @@
+widget "matrix terminal" {
+  size: 6x4
+  minSize: 2x2
+  padding: 0
+
+  meta {
+    owl: 2
+    description: "A live terminal with green Matrix rain when idle. Tap to resume your shell; tap away to bring back the rain."
+    version: "1.1"
+    license: "MIT"
+    category: "system"
+  }
+  requires { pacman: ["bash", "foot", "tmux", "cmatrix"] }
+
+  // Separate tmux server: no changes to your normal tmux configuration.
+  // Focus changes swap windows; the shell keeps running behind the rain.
+  // Restart only the rain on resize: cmatrix can keep its original dimensions.
+  // Destroy this session when its terminal closes, including on widget reload.
+  Terminal {
+    command: 'exec tmux -L "owl-matrix-$$" -f /dev/null new-session -d -s matrix -n shell "bash -i" \; new-window -t matrix: -n rain "cmatrix -b -u 5 -C green" \; set-hook -w -t matrix:rain window-resized "respawn-pane -k -t matrix:rain" \; set-option -g status off \; set-option -g focus-events on \; set-hook -g client-focus-in "select-window -t matrix:shell" \; set-hook -g client-focus-out "select-window -t matrix:rain" \; set-hook -g client-attached "set-option -t matrix destroy-unattached on" \; select-window -t matrix:rain \; attach-session -t matrix'
+  }
+}

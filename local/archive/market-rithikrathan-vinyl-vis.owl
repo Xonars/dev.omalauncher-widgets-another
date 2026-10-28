@@ -1,0 +1,153 @@
+widget "vinyl-vis" {
+  page: 4
+  order: 2
+  size: 6x5
+  minSize: 3x3
+  padding: 0
+  background: alpha(background, 0)
+  requires { pacman: [] }
+  meta {
+    owl: 9
+    description: "A Trap Nation style vinyl with spinning album art and pulsing bars. Tap the disk to pause or resume playback"
+    version: "1.4"
+    license: "MIT"
+    category: "media"
+  }
+
+  // System theme red color
+  let stateColor = red
+
+  // Android media source for music playback and album art
+  source m = android.media
+  onTap: media("toggle")
+
+  Column {
+    gap: 0
+    Canvas {
+      weight: 1
+      fill: width
+      let centerX = width / 2
+      let centerY = height / 2
+
+      // Overall visual scale
+      let R = min(width, height) * 0.42
+
+      // Strict containment radius: bars will never overflow past this boundary
+      let maxAllowedR = min(width, height) * 0.46
+
+      // Ambient halo & celestial horizon
+      circle(centerX, centerY, R * 1.12, stroke: alpha(stateColor, 0.12), width: 1)
+
+      let isPlaying = m != null && m.playing == true
+
+      // The frame clock only while music plays: paused, the record and bars hold still and cost nothing
+      let t = isPlaying ? time : 0.0
+
+      // Bass kick on a fixed beat (the widget hears no audio)
+      let kick1 = pow(max(0.0, sin(t * 4.4)), 6.0)
+      let kick2 = pow(max(0.0, sin(t * 8.8 + 1.2)), 5.0) * 0.70
+      let kick = max(kick1, kick2)
+
+      // Lower limit / threshold: ONLY huge bass drops trigger tactile vibration and camera shudder
+      let hugeBass = kick > 0.65 ? (kick - 0.65) / 0.35 : 0.0
+
+      // Mechanical shudder and sub-bass vibration triggered strictly on huge bass
+      let subVibe = isPlaying && hugeBass > 0.0 ? sin(t * 44.0) * 0.025 * hugeBass : 0.0
+      let reverbTail = isPlaying && hugeBass > 0.0 ? sin(t * 28.0) * 0.015 * pow(hugeBass, 1.5) : 0.0
+      let bassPulse = isPlaying ? (hugeBass * 0.065 + subVibe + reverbTail) : sin(t * 2.0) * 0.010
+
+      // Tactile camera & subwoofer shake ONLY during huge bass drops
+      let shakeMag = isPlaying ? pow(hugeBass, 2.0) * 2.2 : 0.0
+      let curCenterX = centerX + sin(t * 56.0) * shakeMag
+      let curCenterY = centerY + cos(t * 62.0) * shakeMag
+
+      let vinylBounce = 1.0 + bassPulse
+
+      // Vinyl and center sticker dimensions (authentic LP proportions)
+      let vinylR = R * 0.64 * vinylBounce
+      let stickerR = vinylR * 0.52
+
+      // Counter-clockwise rotating vinyl record with album art center sticker
+      let vinylSpeed = isPlaying ? 55.0 : 18.0
+      let vinylDeg = -(t * vinylSpeed) % 360.0
+
+      rotate(vinylDeg, curCenterX, curCenterY) {
+        // 1. Vinyl outer dark disc body
+        circle(curCenterX, curCenterY, vinylR, fill: #0f0f12)
+
+        // 2. Center album art sticker (proportional, authentic LP size)
+        let stickerD = stickerR * 2.0
+        if m != null && m.art != null {
+          image(m.art, curCenterX - stickerR, curCenterY - stickerR, stickerD, stickerD)
+        } else {
+          circle(curCenterX, curCenterY, stickerR, fill: #1c1c22)
+          text("♪", curCenterX, curCenterY, size: 24, align: center, color: alpha(stateColor, 0.9))
+        }
+
+        // 3. Thick vinyl groove ring: completely covers square image corners with overlap
+        let grooveW = vinylR - stickerR
+        circle(curCenterX, curCenterY, (vinylR + stickerR) * 0.5, stroke: #0f0f12, width: grooveW + 8)
+
+        // 4. Subtle glossy vinyl micro-grooves
+        circle(curCenterX, curCenterY, stickerR + grooveW * 0.28, stroke: alpha(foreground, 0.06), width: 1)
+        circle(curCenterX, curCenterY, stickerR + grooveW * 0.52, stroke: alpha(foreground, 0.04), width: 1)
+        circle(curCenterX, curCenterY, stickerR + grooveW * 0.76, stroke: alpha(foreground, 0.06), width: 1)
+
+        // 5. Stylized vinyl run-out groove & outer rim
+        circle(curCenterX, curCenterY, vinylR, stroke: alpha(stateColor, 0.45), width: 1.5)
+        circle(curCenterX, curCenterY, stickerR, stroke: alpha(stateColor, 0.85), width: 2.5)
+
+        // 6. Turntable center spindle hole
+        circle(curCenterX, curCenterY, 5, fill: #08080a)
+        circle(curCenterX, curCenterY, 7, stroke: alpha(foreground, 0.35), width: 1)
+      }
+
+      // Inner reactive bass aura behind bars
+      circle(curCenterX, curCenterY, vinylR + 3, stroke: alpha(stateColor, 0.25 + 0.35 * kick), width: 1.5)
+
+      // 72 Radiating Spectrum Bars (Anchored, non-jittery, contained within widget boundaries)
+      for b in range(72) {
+        let barAng = (b / 72.0) * 6.28318 - 1.5708
+
+        // Bilateral symmetry (left and right channels mirror each other)
+        let normB = b < 36 ? b / 36.0 : (72 - b) / 36.0
+
+        // High-frequency reverb vibration flutter on bar tips during huge bass
+        let barVibe = sin(t * 48.0 + b * 2.5) * 0.08 * (hugeBass + 0.15)
+
+        // Frequency bands: Bass, Mids, Highs
+        let bFreq = pow(1.0 - normB, 2.0) * (kick * 1.55 + barVibe + sin(t * 9.5 + b * 0.4) * 0.25)
+        let mFreq = sin(normB * 3.14159) * (sin(t * 15.0 + b * 0.8) * 0.35 + 0.35) * (isPlaying ? 0.75 : 0.2)
+        let tFreq = pow(normB, 1.8) * (sin(t * 26.0 + b * 1.5) * 0.25 + 0.25) * (isPlaying ? 0.65 : 0.15)
+
+        let rawBarH = isPlaying ?
+          (bFreq * 0.58 + mFreq * 0.25 + tFreq * 0.12 + 0.04) * R * 0.52 :
+          (sin(barAng * 4.0 - t * 1.8) * 0.04 + 0.06) * R * 0.32
+
+        let rInner = vinylR + 3.5
+
+        // Strict containment: outer radius never exceeds maxAllowedR
+        let maxBarH = max(0.0, maxAllowedR - rInner)
+        let barH = min(maxBarH, rawBarH)
+        let barAlpha = clamp(0.70 + 0.30 * (rawBarH / (R * 0.32)), 0.65, 1.0)
+
+        let rOuter = rInner + barH
+
+        let x1 = curCenterX + cos(barAng) * rInner
+        let y1 = curCenterY + sin(barAng) * rInner
+        let x2 = curCenterX + cos(barAng) * rOuter
+        let y2 = curCenterY + sin(barAng) * rOuter
+
+        line(x1, y1, x2, y2, stroke: alpha(stateColor, barAlpha), width: 2.8, cap: round)
+      }
+    }
+    Row {
+      fill: width
+      height: 48
+      padding: [12, 0, 12, 6]
+      gap: 12
+      Button { text: "◀ Prev"; weight: 1; color: stateColor; onTap: media("previous") }
+      Button { text: "Next ▶"; weight: 1; color: stateColor; onTap: media("next") }
+    }
+  }
+}

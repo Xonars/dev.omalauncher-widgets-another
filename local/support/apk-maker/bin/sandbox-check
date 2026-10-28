@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -uo pipefail
+cache=${APKMAKER_CACHE:-$HOME/.cache/apk-maker}
+mkdir -p "$cache"
+p=$(mktemp -d "$cache/.sandbox-probe.XXXX") || exit 1
+trap 'rm -rf "$p"' EXIT
+printf sentinel > "$p/sentinel"
+bwrap --ro-bind / / --tmpfs "$p" -- /usr/bin/test ! -e "$p/sentinel" >/dev/null 2>&1

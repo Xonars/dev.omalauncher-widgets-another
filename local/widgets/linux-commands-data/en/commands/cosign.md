@@ -1,0 +1,123 @@
+# TAGLINE
+
+Container image signing and verification tool
+
+# TLDR
+
+**Sign container image (keyless)**
+
+```cosign sign [registry/image@sha256:digest]```
+
+**Sign with local key**
+
+```cosign sign --key [cosign.key] [registry/image@sha256:digest]```
+
+**Verify image signature (keyless)**
+
+```cosign verify --certificate-identity=[email] --certificate-oidc-issuer=[issuer] [image]```
+
+**Verify with public key**
+
+```cosign verify --key [cosign.pub] [registry/image@sha256:digest]```
+
+**Generate key pair**
+
+```cosign generate-key-pair```
+
+**Sign with annotation**
+
+```cosign sign -a [key=value] [registry/image@sha256:digest]```
+
+**Attach SBOM to image**
+
+```cosign attach sbom --sbom [sbom.json] [registry/image@sha256:digest]```
+
+# SYNOPSIS
+
+**cosign** _command_ [_options_] [_arguments_]
+
+# DESCRIPTION
+
+**cosign** is Sigstore's tool for signing and verifying container images and software artifacts. It supports keyless signing using OIDC identity or traditional key-based signing, providing cryptographic guarantees about image authenticity and integrity.
+
+The tool integrates with container registries to attach signatures and attestations as OCI artifacts. Keyless signing leverages short-lived certificates tied to identity providers like GitHub, Google, or Microsoft, eliminating the need to manage long-term signing keys. Signatures are recorded in Sigstore's transparency log (Rekor) for public verification and auditability.
+
+cosign also handles SBOMs (Software Bill of Materials), attestations, and other metadata, enabling comprehensive supply chain security. It works with various key management systems including cloud providers' KMS services and hardware security modules.
+
+# COMMANDS
+
+**sign**
+> Sign container image
+
+**verify**
+> Verify image signature
+
+**generate-key-pair**
+> Generate signing key pair
+
+**attach**
+> Attach artifacts (SBOM, attestation) to image
+
+**download**
+> Download signatures/artifacts
+
+**triangulate**
+> Find signature location for image
+
+**copy**
+> Copy signatures between images
+
+**clean**
+> Remove signatures from image
+
+# PARAMETERS
+
+**--key** _path|uri_
+> Key for signing/verification
+
+**--certificate** _path_
+> Certificate for signing
+
+**--certificate-chain** _path_
+> Certificate chain
+
+**--certificate-identity** _identity_
+> Expected identity in certificate
+
+**--certificate-oidc-issuer** _issuer_
+> Expected OIDC issuer
+
+**-a** _key=value_
+> Add annotation to signature
+
+# KEYLESS SIGNING
+
+Uses OIDC identity (GitHub, Google, etc.) with short-lived keys. Signatures recorded in transparency log.
+
+# KMS SUPPORT
+
+Supports AWS KMS, GCP KMS, Azure Key Vault, HashiCorp Vault via URI format.
+
+# CAVEATS
+
+Always sign by digest (@sha256:...) not tag. Multiple signatures can be attached to one image. Keyless requires internet for OIDC flow.
+
+# INSTALL
+
+```apt: sudo apt install cosign```
+
+```pacman: sudo pacman -S cosign```
+
+```apk: sudo apk add cosign```
+
+```zypper: sudo zypper install cosign```
+
+```brew: brew install cosign```
+
+```nix: nix profile install nixpkgs#cosign```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[docker](/man/docker)(1), [podman](/man/podman)(1)

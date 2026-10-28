@@ -1,0 +1,107 @@
+# TAGLINE
+
+Manage UEFI Secure Boot keys and signing
+
+# TLDR
+
+Show current **secure boot status**
+
+```sbctl status```
+
+**Create** custom secure boot keys
+
+```sbctl create-keys```
+
+**Enroll** keys with Microsoft certificates
+
+```sbctl enroll-keys -m```
+
+**List** files in the signing database
+
+```sbctl list-files```
+
+**Sign** an EFI binary and save to database
+
+```sbctl sign -s path/to/efi_binary```
+
+**Re-sign** all saved files
+
+```sbctl sign-all```
+
+**Verify** all EFI executables are signed
+
+```sbctl verify```
+
+# SYNOPSIS
+
+**sbctl** _command_ [_options_]
+
+# PARAMETERS
+
+**status**
+> Show secure boot status
+
+**create-keys**
+> Generate custom secure boot keys
+
+**enroll-keys**
+> Enroll keys into UEFI firmware
+
+**-m**, **--microsoft**
+> Include Microsoft UEFI vendor certificates
+
+**sign**
+> Sign EFI binary
+
+**-s**, **--save**
+> Save file to database for re-signing
+
+**sign-all**
+> Re-sign all saved files
+
+**verify**
+> Verify EFI executables are signed
+
+**list-files**
+> List files in the signing database
+
+**remove-file** _file_
+> Remove a file from the signing database
+
+**setup**
+> Automated setup of secure boot (create keys, sign, enroll)
+
+# DESCRIPTION
+
+**sbctl** is a user-friendly secure boot key manager. It simplifies creating, enrolling, and managing custom secure boot keys and signing EFI binaries.
+
+Custom keys allow booting only signed kernels and bootloaders, enhancing system security.
+
+# CONFIGURATION
+
+**/usr/share/secureboot/**
+> Default directory storing generated secure boot keys (PK, KEK, db) and the database of signed files.
+
+# CAVEATS
+
+Not enrolling Microsoft certificates (the **-m** flag) can brick some systems with Option ROMs that require Microsoft-signed drivers. Keys are stored in /usr/share/secureboot by default. Requires root privileges for all operations.
+
+# HISTORY
+
+Developed as a user-friendly alternative to manual secure boot key management tools.
+
+# INSTALL
+
+```pacman: sudo pacman -S sbctl```
+
+```apk: sudo apk add sbctl```
+
+```zypper: sudo zypper install sbctl```
+
+```nix: nix profile install nixpkgs#sbctl```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[mokutil](/man/mokutil)(1), [efibootmgr](/man/efibootmgr)(8)

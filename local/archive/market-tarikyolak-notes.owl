@@ -1,0 +1,244 @@
+widget "Notes" {
+size: 3x3
+minSize: 3x2
+padding: 10
+meta {
+owl: 11
+version: "1.1.0"
+license: "MIT"
+category: "productivity"
+description: "Add notes simply and easily. Copy, edit or delete your notes with a tap, or lock them to prevent accidental changes. Works offline and shows more notes when resized."
+}
+requires { pacman: [] }
+state notes = [] persist
+state locked = false persist
+state editingId = 0
+state confirmDeleteId = 0
+let previewCount = max(2, floor(((tileHeight ?? 150) - 55) / 34))
+onTap: screen()
+Column {
+fill: true
+gap: 6
+Row {
+Text { text: "NOTES"; color: accent; fontSize: 15; bold: true; weight: 1 }
+Text { text: locked ? "LOCKED" : "${len(notes)}"; color: muted; fontSize: 11 }
+}
+if len(notes) == 0 {
+Spacer { weight: 1 }
+Text { text: "Your space to write"; color: foreground; bold: true; fontSize: 16; align: center; maxLines: 2 }
+Text { text: locked ? "Unlock to add a note" : "Tap to add a note"; color: muted; fontSize: 11; align: center }
+Spacer { weight: 1 }
+} else {
+for n in notes.take(previewCount) key n.id {
+Column {
+padding: [8, 6]
+background: surface
+radius: 8 * corners
+Text {
+text: trim(n.body) == "" ? "Empty note" : n.body
+color: trim(n.body) == "" ? muted : foreground
+fontSize: 13
+maxLines: 1
+}
+}
+}
+Spacer { weight: 1 }
+Text { text: "Tap to open your notes"; color: muted; fontSize: 11 }
+}
+}
+screen {
+title: "Notes"
+Column {
+fill: true
+gap: 12
+padding: 12
+Row {
+gap: 10
+align: center
+Text { text: "NOTES"; color: accent; style: title; weight: 1 }
+Box {
+width: 36
+height: 28
+border: 1
+borderColor: accent
+radius: 4 * corners
+align: center
+onTap: {
+locked = !locked
+editingId = 0
+confirmDeleteId = 0
+}
+Text { text: locked ? "Unlock notes" : "Lock notes"; opacity: 0; width: 1; height: 1 }
+Canvas {
+width: 23
+height: 24
+if locked {
+path([[7, 10], [7, 7], [9, 4], [15, 4], [17, 7], [17, 10]], stroke: accent, width: 2, cap: round)
+} else {
+path([[7, 10], [7, 7], [9, 4], [15, 4], [17, 7]], stroke: accent, width: 2, cap: round)
+}
+rect(5, 10, 14, 11, radius: 2, stroke: accent, width: 2)
+line(12, 14, 12, 18, stroke: accent, width: 2)
+}
+}
+if !locked {
+Button {
+text: "+ New"
+onTap: {
+let id = random(1000000000) + 1
+notes = [{id: id, body: ""}] + notes
+editingId = id
+confirmDeleteId = 0
+}
+}
+if editingId != 0 {
+Box {
+width: 72
+height: 28
+background: accent
+radius: 4 * corners
+align: center
+onTap: editingId = 0
+Text { text: "Done"; color: background; fontSize: 14; bold: true; align: center; fill: width }
+}
+}
+}
+}
+Column {
+weight: 1
+scroll: true
+lazy: true
+gap: 12
+if len(notes) == 0 {
+Spacer { weight: 1 }
+Text { text: "No notes yet"; color: foreground; fontSize: 18; align: center }
+Text { text: locked ? "Unlock to create a note." : "Tap + New to start writing."; color: muted; fontSize: 13; align: center }
+Spacer { weight: 1 }
+}
+for n in notes key n.id {
+Column {
+padding: 10
+gap: 8
+background: surface
+radius: 10 * corners
+if editingId == n.id {
+Input {
+text: n.body
+placeholder: "Write your note here…"
+fontSize: 17
+underline: false
+focus: true
+height: 58
+fill: width
+padding: 10
+background: background
+radius: 8 * corners
+onChange: notes = notes.map(x => x.id == n.id ? merge(x, {body: value}) : x)
+onSubmit: editingId = 0
+}
+} else {
+Text {
+text: trim(n.body) == "" ? "Empty note — tap the pencil to write" : n.body
+color: trim(n.body) == "" ? muted : foreground
+fontSize: 16
+maxLines: 1
+}
+}
+if editingId == n.id {
+Column {
+padding: 10
+gap: 6
+background: background
+radius: 8 * corners
+Text { text: "LIVE PREVIEW"; color: muted; fontSize: 11; bold: true }
+Text {
+text: trim(n.body) == "" ? "Your note will wrap here as you type…" : n.body
+color: trim(n.body) == "" ? muted : foreground
+fontSize: 16
+}
+}
+}
+Row {
+gap: 14
+Spacer { weight: 1 }
+Box {
+width: 40
+height: 36
+border: 1
+borderColor: accent
+radius: 4 * corners
+align: center
+onTap: copy(n.body)
+Text { text: "Copy"; opacity: 0; width: 1; height: 1 }
+Canvas {
+width: 24
+height: 24
+rect(5, 4, 14, 17, radius: 1, stroke: accent, width: 2)
+rect(9, 8, 14, 17, radius: 1, stroke: accent, width: 2)
+}
+}
+if !locked {
+Box {
+width: 40
+height: 36
+border: 1
+borderColor: accent
+radius: 4 * corners
+align: center
+onTap: editingId = editingId == n.id ? 0 : n.id
+Text { text: editingId == n.id ? "Done editing" : "Edit"; opacity: 0; width: 1; height: 1 }
+Canvas {
+width: 24
+height: 24
+if editingId == n.id {
+path([[5, 15], [11, 21], [23, 7]], stroke: accent, width: 2.5, cap: round)
+} else {
+path([[5, 20], [6, 15], [18, 3], [23, 8], [11, 20]], closed: true, stroke: accent, width: 2)
+line(6, 15, 11, 20, stroke: accent, width: 2)
+}
+}
+}
+Box {
+width: 40
+height: 36
+border: 1
+borderColor: accent
+radius: 4 * corners
+align: center
+onTap: confirmDeleteId = n.id
+Text { text: "Delete"; opacity: 0; width: 1; height: 1 }
+Canvas {
+width: 24
+height: 24
+line(5, 7, 23, 7, stroke: red, width: 2)
+line(11, 4, 17, 4, stroke: red, width: 2)
+rect(8, 9, 12, 15, radius: 1, stroke: red, width: 2)
+line(12, 12, 12, 21, stroke: red, width: 1.8)
+line(16, 12, 16, 21, stroke: red, width: 1.8)
+}
+}
+}
+}
+if !locked && confirmDeleteId == n.id {
+Text { text: "Delete this note permanently?"; color: red; fontSize: 12; maxLines: 2 }
+Row {
+Button { text: "Cancel"; weight: 1; onTap: confirmDeleteId = 0 }
+Button {
+text: "Yes, delete"
+color: red
+weight: 1
+onTap: {
+notes = notes.filter(x => x.id != confirmDeleteId)
+if editingId == confirmDeleteId { editingId = 0 }
+confirmDeleteId = 0
+}
+}
+}
+}
+}
+}
+}
+Text { text: locked ? "Read only · Tap the lock to make changes" : "Saved on this phone · Works offline"; color: muted; fontSize: 10; maxLines: 2 }
+}
+}
+}

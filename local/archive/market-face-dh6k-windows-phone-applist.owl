@@ -1,0 +1,265 @@
+face "Windows phone applist" {
+  page: 0
+  meta {
+    owl: 10
+    description: "A Windows Phone inspired, searchable and alphabetized list of every installed app"
+    version: "1.0"
+    license: "MIT"
+    category: "productivity"
+  }
+
+  requires { pacman: [] }
+  statusBar: true
+  background: linear(0, 0, 0, 1, [alpha(background, 0.72), alpha(surface, 0.72)])
+  padding: 0
+
+  state query = ""
+  state letter = ""
+  state alphabetOpen = false
+  source apps = android.apps
+  source recent = android.recent
+
+  // android.recent is the launcher's cross-platform app registry: Linux entries
+  // are included there with their icon and launch key.
+  let linuxApps = (recent ?? []).filter(a => a.kind == "linux")
+  let allApps = (apps ?? []) + linuxApps
+  let showMostUsed = trim(query) == "" && letter == ""
+  let mostUsed = allApps
+    .filter(a => num(a.score, 0) > 0)
+    .sortBy(a => -num(a.score, 0))
+    .take(6)
+  let mostUsedKeys = mostUsed.map(a => a.key)
+  let matches = allApps
+    .filter(a => (trim(query) == "" || contains(lower(a.name), lower(trim(query)))) && (letter == "" || startsWith(upper(a.name), letter)))
+    .filter(a => !showMostUsed || !contains(mostUsedKeys, a.key))
+    .sortBy(a => lower(a.name))
+  let sections = values(groupBy(matches, a => upper(sub(a.name, 0, 1))))
+    .sortBy(g => upper(sub(g[0].name, 0, 1)))
+  let latinLetters = split("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "")
+  let extraLetters = allApps
+    .map(a => upper(sub(a.name, 0, 1)))
+    .filter(l => l != null && !contains(latinLetters, l))
+    .unique()
+    .sort()
+
+  component AppRow(a) {
+    Row {
+      gap: 16
+      align: center
+      padding: [10, 12]
+      fill: width
+      onTap: {
+        if a.kind == "linux" {
+          open(a.key)
+        } else {
+          androidApp(a.key)
+        }
+      }
+      if a.icon != null {
+        Image { src: a.icon; size: 44; fit: contain }
+      } else {
+        Box {
+          size: 44
+          radius: 4
+          background: accent
+          Text { text: upper(sub(a.name, 0, 1)); color: background; fontSize: 22; align: center; fill: true }
+        }
+      }
+      Text { text: a.name; fontSize: 19; maxLines: 1; weight: 1 }
+    }
+  }
+
+  Box {
+    fill: true
+    Row {
+      fill: true
+      height: tileHeight
+    Column {
+      weight: 1
+        fill: true
+        gap: 0
+        padding: [24, 20, 16, 0]
+
+        Row {
+          fill: width
+          align: center
+          Text { text: letter == "" ? "all apps" : "${letter} apps"; fontSize: 38; fontWeight: 300; letterSpacing: -1; padding: [0, 4, 0, 12]; weight: 1 }
+          if letter != "" {
+            Button {
+              text: "all apps"
+              color: accent
+              onTap: letter = ""
+            }
+          }
+        }
+
+        Row {
+          gap: 10
+          align: center
+          padding: [0, 0, 0, 16]
+          background: alpha(surface, 0.8)
+          radius: 2
+          Input {
+            text: query
+            placeholder: "search apps"
+            underline: false
+            fontSize: 17
+            weight: 1
+            onChange: {
+              query = value
+              letter = ""
+            }
+          }
+          if query == "" {
+            Box {
+              size: 32
+              Canvas {
+                fill: true
+                circle(width * 0.42, height * 0.42, 7, stroke: muted, width: 2)
+                line(width * 0.58, height * 0.58, width * 0.82, height * 0.82, stroke: muted, width: 2)
+              }
+            }
+          } else {
+            Box {
+              size: 32
+              onTap: { query = ""; letter = "" }
+              Text { text: "×"; fontSize: 28; color: muted; align: center; fill: true }
+            }
+          }
+        }
+
+        Column {
+          weight: 1
+          fill: true
+          scroll: true
+          gap: 0
+          if len(matches) == 0 {
+            Spacer { height: 36 }
+            Text { text: "no apps found"; color: muted; fontSize: 18; padding: [12, 0] }
+          } else {
+            Spacer { height: 18 }
+            if showMostUsed && len(mostUsed) > 0 {
+              Text {
+                text: "most used"
+                color: accent
+                fontSize: 16
+                fontWeight: 600
+                padding: [18, 12, 4, 4]
+              }
+              for a in mostUsed key a.key {
+                AppRow { a: a }
+              }
+            }
+            for group in sections key group[0].key {
+              Text {
+                text: upper(sub(group[0].name, 0, 1))
+                color: accent
+                fontSize: 22
+                fontWeight: 600
+                padding: [18, 12, 4, 4]
+                onTap: alphabetOpen = true
+              }
+              for a in group key a.key {
+                AppRow { a: a }
+              }
+            }
+            }
+          }
+          Spacer { height: screenInset }
+        }
+      }
+    }
+    // OWL does not expose a scroll offset, so this fixed rail mirrors the
+    // Windows Phone alphabet scrollbar. Tapping the rail opens the letter board.
+    Box {
+      width: 1
+      height: 1
+      Column {
+        opacity: 0
+        gap: 4
+        align: center
+        width: 12
+        fill: height
+        background: alpha(accent, 0.72)
+        radius: 6
+        Text { text: "A"; fontSize: 8; color: background; onTap: alphabetOpen = true }
+        Text { text: "•"; fontSize: 8; color: background; onTap: alphabetOpen = true }
+        Text { text: "Z"; fontSize: 8; color: background; onTap: alphabetOpen = true }
+      }
+  }
+
+  Row {
+    height: 88
+    fill: width
+    gap: 12
+    align: bottomEnd
+    padding: [8, 20, 20, screenInset]
+    Box {
+      size: 56
+      onTap: alphabetOpen = true
+      background: alpha(background, 0.92)
+      border: 2
+      borderColor: accent
+      radius: 10
+      Canvas {
+        fill: true
+        text("A", width * 0.35, height * 0.42, size: 16, color: accent, align: center)
+        text("Z", width * 0.65, height * 0.68, size: 16, color: accent, align: center)
+        line(width * 0.38, height * 0.53, width * 0.62, height * 0.53, stroke: accent, width: 2)
+        line(width * 0.52, height * 0.45, width * 0.62, height * 0.53, stroke: accent, width: 2)
+        line(width * 0.52, height * 0.61, width * 0.62, height * 0.53, stroke: accent, width: 2)
+      }
+      Popup {
+        visible: alphabetOpen
+        position: above
+        onDismiss: alphabetOpen = false
+        background: alpha(surface, 0.96)
+        radius: 12
+        padding: 16
+        Column {
+          gap: 10
+          width: 240
+          Flow {
+            gap: 10
+            for l in latinLetters {
+              Text {
+                text: l
+                width: 32
+                height: 32
+                align: center
+                color: len(allApps.filter(a => upper(sub(a.name, 0, 1)) == l)) > 0 ? accent : alpha(muted, 0.35)
+                fontSize: 22
+                onTap: {
+                  letter = l
+                  query = ""
+                  alphabetOpen = false
+                }
+              }
+            }
+          }
+          if len(extraLetters) > 0 {
+            Flow {
+              gap: 10
+              for l in extraLetters {
+                Text {
+                  text: l
+                  width: 32
+                  height: 32
+                  align: center
+                  color: accent
+                  fontSize: 22
+                  font: sans
+                  onTap: {
+                    letter = l
+                    query = ""
+                    alphabetOpen = false
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

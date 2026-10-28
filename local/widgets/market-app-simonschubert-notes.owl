@@ -1,0 +1,68 @@
+app "notes" {
+  meta { owl: 8; description: "Quick notes that stay on the phone: type one, tap it to edit, copy, share or delete it"; version: "1.0"; license: "MIT"; category: "productivity" }
+  title: "notes"
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M11 5h18l9 9v29H11z"/>
+    <path d="M29 5v9h9M17 24h15M17 32h10"/>
+  </svg>"""
+
+  source now = clock every 1m
+  // Newest first, each {t, at}; kept by the launcher, no file and no account.
+  state notes = [] persist
+  state open = -1
+  state editing = -1
+
+  Column {
+    gap: 10
+    fill: true
+    Input {
+      placeholder: "write a note…"
+      focus: true
+      clear: true
+      onSubmit: { notes = trim(value) == "" ? notes : ([{t: trim(value), at: now ?? 0}] + notes).take(200); open = -1; editing = -1 }
+    }
+    Text { text: len(notes) == 0 ? "nothing yet. notes stay on this phone." : len(notes) == 1 ? "1 note" : "${len(notes)} notes"; style: muted }
+    Column {
+      scroll: true
+      weight: 1
+      gap: 8
+      for n, i in notes {
+        Column {
+          gap: 4
+          padding: 10
+          border: 1
+          borderColor: open == i ? accent : border
+          onTap: { open = open == i ? -1 : i; editing = -1 }
+          if editing == i {
+            // Saved with the keyboard's send key; emptied, the note goes.
+            Input {
+              text: n.t
+              focus: true
+              onSubmit: { notes = trim(value) == "" ? notes.take(i) + notes.drop(i + 1) : notes.take(i) + [{t: trim(value), at: now ?? n.at}] + notes.drop(i + 1); editing = -1; open = -1 }
+            }
+          } else {
+            Text { text: n.t; maxLines: open == i ? 50 : 3 }
+          }
+          Text { text: fmtTime(n.at, "d MMM, HH:mm"); style: small; color: muted }
+          if open == i && editing != i {
+            Row {
+              gap: 8
+              Button { text: "edit"; onTap: editing = i }
+              Button { text: "copy"; onTap: copy(n.t) }
+              Button { text: "share"; onTap: share(n.t) }
+              Spacer { weight: 1 }
+              Button { text: "delete"; color: red; onTap: { notes = notes.take(i) + notes.drop(i + 1); open = -1 } }
+            }
+          }
+          if editing == i {
+            Row {
+              gap: 8
+              Text { text: "send key saves"; style: small; color: muted; weight: 1 }
+              Button { text: "cancel"; onTap: { editing = -1 } }
+            }
+          }
+        }
+      }
+    }
+  }
+}

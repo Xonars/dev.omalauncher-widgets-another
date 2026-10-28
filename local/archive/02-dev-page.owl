@@ -1,0 +1,44 @@
+page "Разработка" {
+  page: -2
+  meta { owl: 11; description: "Персональная страница: Разработка"; version: "1.0"; license: "MIT"; category: "productivity" }
+  padding: 0
+  background: alpha(background, 0.95)
+  let card = alpha(surface, 0.85)
+  source agents = android.agents
+  source recent = android.recent
+  state prompt = ""
+  Column {
+    fill: true; scroll: true; padding: [20, 16]; gap: 16
+    Text { text: "РАЗРАБОТКА"; style: label; color: accent; letterSpacing: 2 }
+    Text { text: "Инструменты и агенты"; fontSize: 28; fontWeight: 300; maxLines: 2 }
+    Column {
+      padding: 16; gap: 12; background: card; radius: 14 * corners
+      Text { text: "ЗАДАЧА ДЛЯ АГЕНТА"; style: label; color: accent }
+      Input { text: prompt; placeholder: "Что нужно сделать?"; onChange: prompt = value; onSubmit: { if trim(value) != "" { ask(value) } } }
+      Button { text: "Отправить"; onTap: { if trim(prompt) != "" { ask(prompt) } } }
+      Text { text: "Агент: ${agents.default.name ?? "не выбран"}"; style: small; color: muted; maxLines: 2 }
+    }
+    Text { text: "Установленные агенты"; style: title }
+    for a in (agents.installed ?? []) key a.key {
+      Row {
+        padding: 14; gap: 12; align: center; background: card; radius: 14 * corners; onTap: open(a.key)
+        Image { src: a.icon; size: 32 }
+        Column { weight: 1; Text { text: a.name; bold: true }; Text { text: a.description; style: small; color: muted; maxLines: 2 } }
+        Text { text: "→"; color: accent }
+      }
+    }
+    Button { text: "Настроить агентов"; onTap: launcher("agents") }
+    Text { text: "Недавние инструменты"; style: title }
+    for a in (recent ?? []).take(6) key a.key {
+      Row {
+        gap: 12; align: center; padding: 10; onTap: open(a.key)
+        Image { src: a.icon; size: 30 }
+        Text { text: a.name; weight: 1; maxLines: 1 }
+        Text { text: "→"; color: muted }
+      }
+    }
+    Button { text: "Терминал"; onTap: terminal("bash") }
+    Text { text: "APK Maker, обмен APK и GitHub — на странице плиток 2"; style: small; color: muted; maxLines: 3 }
+    Spacer { height: screenInset }
+  }
+}

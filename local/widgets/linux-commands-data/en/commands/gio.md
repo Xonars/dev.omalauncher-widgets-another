@@ -1,0 +1,136 @@
+# TAGLINE
+
+GNOME file operations utility supporting local and virtual filesystems
+
+# TLDR
+
+Open a file with its **default application**
+
+```gio open [path/to/file]```
+
+List a directory, including **virtual locations**
+
+```gio list [smb://server/share]```
+
+Show a file's **attributes**
+
+```gio info [path/to/file]```
+
+Show a **specific group of attributes**
+
+```gio info --attributes=[standard::*] [path/to/file]```
+
+Print a **remote file** to standard output
+
+```gio cat [sftp://host/path/to/file]```
+
+**Copy across backends**, from local disk to a remote share
+
+```gio copy [path/to/local] [sftp://host/path/]```
+
+**Move** a file
+
+```gio move [path/to/source] [path/to/destination]```
+
+Send a file to the **trash**
+
+```gio trash [path/to/file]```
+
+Delete **everything in the trash**
+
+```gio trash --empty```
+
+Delete a file **permanently**
+
+```gio remove [path/to/file]```
+
+Show the **tree** below a location
+
+```gio tree [path/to/directory]```
+
+**Mount** a remote share through GVfs
+
+```gio mount [smb://server/share]```
+
+**Unmount** it again
+
+```gio mount --unmount [smb://server/share]```
+
+**Watch a directory** and print changes as they happen
+
+```gio monitor [path/to/directory]```
+
+Mark a launcher **trusted** so it can be run
+
+```gio set [path/to/file.desktop] metadata::trusted true```
+
+# SYNOPSIS
+
+**gio** _command_ [_arguments_]
+
+# PARAMETERS
+
+**open** _FILE_
+> Open file with default application
+
+**list** _DIR_
+> List contents of directory
+
+**info** _FILE_
+> Display information about a file
+
+**copy** _SRC_ _DEST_
+> Copy files
+
+**move** _SRC_ _DEST_
+> Move files
+
+**trash** _FILE_
+> Move file to trash
+
+**remove** _FILE_
+> Delete file permanently
+
+**cat** _FILE_
+> Display file contents
+
+**launch** _DESKTOP_
+> Launch application from .desktop file
+
+**mime** _FILE_
+> Get or set MIME type handler
+
+**mount** _LOCATION_
+> Mount a location
+
+# DESCRIPTION
+
+**gio** is the GIO command-line tool for file operations in GNOME-based systems. It provides a unified interface for both local files and virtual filesystems (GVfs), including network locations, trash, and removable media.
+
+Unlike standard Unix commands, **gio** integrates with GNOME's infrastructure, respecting desktop settings for default applications, trash behavior, and virtual filesystem mounts. It can access locations like **smb://**, **sftp://**, **mtp://**, and **trash://**.
+
+# CAVEATS
+
+Requires GLib and GVfs to be properly installed. Some virtual filesystem operations require the gvfsd daemon running. Performance may be slower than native commands for local file operations.
+
+# HISTORY
+
+gio was introduced in GLib 2.50 (**2016**) as a unified command-line interface for GIO operations, consolidating various gvfs-* utilities into a single tool with subcommands.
+
+# INSTALL
+
+```apt: sudo apt install libglib2.0-bin```
+
+```dnf: sudo dnf install glib```
+
+```apk: sudo apk add glib```
+
+```brew: brew install glib```
+
+```nix: nix profile install nixpkgs#glib```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[xdg-open](/man/xdg-open)(1), [nautilus](/man/nautilus)(1)

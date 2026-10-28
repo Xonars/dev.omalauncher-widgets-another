@@ -1,0 +1,126 @@
+# TAGLINE
+
+STL mesh analysis, repair, and transformation tool
+
+# TLDR
+
+**Display information** about an STL file
+
+```admesh [path/to/model.stl]```
+
+**Repair and output** a fixed STL file
+
+```admesh --write-binary-stl=[output.stl] [input.stl]```
+
+**Convert STL to ASCII format**
+
+```admesh --write-ascii-stl=[output.stl] [input.stl]```
+
+**Fix all defects** in an STL file
+
+```admesh --fill-holes --normal-directions --normal-values [input.stl] --write-binary-stl=[output.stl]```
+
+**Scale a model** by a factor
+
+```admesh --scale=[2.0] [input.stl] --write-binary-stl=[output.stl]```
+
+**Translate a model** along axes
+
+```admesh --translate=[10,20,30] [input.stl] --write-binary-stl=[output.stl]```
+
+**Rotate around the X axis**
+
+```admesh --x-rotate=[90] [input.stl] --write-binary-stl=[output.stl]```
+
+# SYNOPSIS
+
+**admesh** [_options_] _input.stl_
+
+# PARAMETERS
+
+**-b** _file_, **--write-binary-stl** _file_
+> Output repaired mesh in binary STL format.
+
+**-a** _file_, **--write-ascii-stl** _file_
+> Output repaired mesh in ASCII STL format.
+
+**--fill-holes**
+> Fill holes in the mesh by adding triangles.
+
+**--normal-directions**
+> Fix normals to point outward consistently.
+
+**--normal-values**
+> Recalculate normal vectors for all facets.
+
+**-e**, **--exact**
+> Check each facet of the mesh for its 3 neighbors using exact vertex matching.
+
+**-n**, **--nearby**
+> Find and connect facets that are almost aligned but do not match exactly due to rounding errors.
+
+**-t** _tolerance_, **--tolerance** _tolerance_
+> Search distance used by **--nearby**. Defaults to the shortest edge length of the mesh.
+
+**-i** _n_, **--iterations** _n_
+> Number of times to run the nearby check with progressively larger tolerances (default: 2).
+
+**-u**, **--remove-unconnected**
+> Remove facets that have zero neighbors after the exact and nearby checks.
+
+**--scale** _factor_
+> Scale the model by the given factor.
+
+**--translate** _x,y,z_
+> Translate the mesh so its minimum x, y, z values are at the given coordinates.
+
+**--x-rotate**, **--y-rotate**, **--z-rotate** _angle_
+> Rotate model counterclockwise about the specified axis (in degrees).
+
+**--xy-mirror**, **--yz-mirror**, **--xz-mirror**
+> Mirror the mesh in the specified plane.
+
+**--merge** _file_
+> Merge another STL file into the input (no automatic translation).
+
+**-v**, **--verbose**
+> Display detailed processing information.
+
+# DESCRIPTION
+
+**ADMesh** is a tool for processing and repairing STL (stereolithography) files used in 3D printing and CAD applications. It diagnoses and fixes common mesh problems including gaps, holes, inverted normals, and disconnected facets that would cause printing failures.
+
+When run without output options, ADMesh analyzes the input file and reports statistics including facet count, volume, surface area, and detected errors. The repair algorithms can automatically fix most mesh issues, making it essential for preparing models for 3D printing.
+
+ADMesh supports both binary and ASCII STL formats and can convert between them. It also provides transformation operations for scaling, rotating, and translating models without requiring a full CAD application.
+
+# CAVEATS
+
+ADMesh processes only STL files; other 3D formats require conversion first. Very complex repairs may alter the original geometry. The **--exact** and **--nearby** algorithms may produce different results depending on mesh quality. Large files in ASCII format are significantly slower to process than binary.
+
+# HISTORY
+
+ADMesh was originally developed by **Anthony D. Martin** in the **mid-1990s** to repair STL files for rapid prototyping machines. It was open-sourced and has been maintained by the community since. The tool gained renewed popularity with the rise of consumer 3D printing in the **2010s** and is now commonly used alongside slicing software in FDM printing workflows.
+
+# INSTALL
+
+```apt: sudo apt install admesh```
+
+```dnf: sudo dnf install admesh```
+
+```aur: yay -S admesh```
+
+```brew: brew install admesh```
+
+<!-- packages: 2026-07-22 -->
+# SEE ALSO
+
+[meshlab](/man/meshlab)(1), [openscad](/man/openscad)(1), [blender](/man/blender)(1)
+
+# RESOURCES
+
+```[Source code](https://github.com/admesh/admesh)```
+
+```[Documentation](https://admesh.readthedocs.io/)```
+
+<!-- verified: 2026-06-11 -->

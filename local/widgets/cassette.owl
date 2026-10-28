@@ -1,0 +1,385 @@
+app "Cassette" {
+  meta { owl: 16; description: "Yandex Music client with search, library, downloads and Android media controls. English and Russian UI."; version: "1.8"; license: "MIT"; category: "media" }
+  requires { pacman: ["python", "mpv", "ffmpeg"] }
+  title: ""
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="9" width="42" height="30" rx="4"/><circle cx="15" cy="22" r="5"/><circle cx="33" cy="22" r="5"/><path d="M20 22h8M11 39l4-9h18l4 9"/></svg>"""
+  state token = null secret
+  state language = "ru" persist
+  let english = language == "en"
+  let labels = {"Главная": "Home", "Поиск": "Search", "Любимое": "Liked", "Плейлисты": "Playlists", "Волна": "My Wave", "Очередь": "Queue", "Скачанное": "Downloads", "Настройки": "Settings", "Треки": "Tracks", "Альбомы": "Albums", "Артисты": "Artists"}
+  state tab = "Главная"
+  state query = ""
+  state kind = "track"
+  state collection = ""
+  state owner = ""
+  state heading = ""
+  state artistId = ""
+  state artistName = ""
+  state waveRequest = 0
+  state queue = []
+  state index = -1
+  state repeatMode = false persist
+  state mixed = false
+  state message = ""
+  state mutation = null
+  state likePendingId = ""
+  state likePendingAdd = false
+  state likedPage = 0
+  state loadedId = ""
+  state ready = false
+  state wasPlaying = false
+  state playerView = false
+  source account = http(token == null ? null : "https://api.music.yandex.net/account/status", {Authorization: "OAuth ${token}"}) json status
+  let uid = account.out.result.account.uid
+  source search = http(token == null || query == "" ? null : "https://api.music.yandex.net/search?text=${enc(query)}&type=${enc(kind)}&page=0", {Authorization: "OAuth ${token}"}) json status
+  source likes = http(uid == null ? null : "https://api.music.yandex.net/users/${enc(uid)}/likes/tracks", {Authorization: "OAuth ${token}"}) json status
+  let allLikedIds = (likes.out.result.library.tracks ?? []).map(t => str(t.id))
+  let likedIds = allLikedIds.drop(likedPage * 150).take(150)
+  source likedTracks = http(uid == null || len(likedIds) == 0 ? null : "https://api.music.yandex.net/tracks?track-ids=${enc(join(likedIds, ","))}", {Authorization: "OAuth ${token}"}) json status
+  source playlists = http(uid == null ? null : "https://api.music.yandex.net/users/${enc(uid)}/playlists/list", {Authorization: "OAuth ${token}"}) json status
+  source playlist = http(collection == "" || owner == "" ? null : "https://api.music.yandex.net/users/${enc(owner)}/playlists/${enc(collection)}", {Authorization: "OAuth ${token}"}) json status
+  source album = http(collection == "" || owner != "" ? null : "https://api.music.yandex.net/albums/${enc(collection)}/with-tracks", {Authorization: "OAuth ${token}"}) json status
+  source artistInfo = http(artistId == "" ? null : "https://api.music.yandex.net/artists/${enc(artistId)}/brief-info", {Authorization: "OAuth ${token}"}) json status
+  source artistTracks = http(artistId == "" ? null : "https://api.music.yandex.net/artists/${enc(artistId)}/tracks?page=0&page-size=100", {Authorization: "OAuth ${token}"}) json status
+  source wave = http(token == null || tab != "Волна" || waveRequest == 0 ? null : "https://api.music.yandex.net/rotor/station/user:onyourwave/tracks?settings2=true&reload=${int(waveRequest)}", {Authorization: "OAuth ${token}"}) json status
+  source player = cmd("python /root/.config/omalauncher/widgets/cassette/player.py status") every 1s json
+  source localTracks = cmd("python /root/.config/omalauncher/widgets/cassette/player.py library") every 30s json
+  let current = queue[index]
+  let currentArtist = join((current.artists ?? []).map(a => a.name), ", ")
+  let currentCover = current.coverUri == null ? "" : "https://${replace(current.coverUri, "%%", "600x600")}"
+  let currentLiked = current.id != null && (likePendingId == str(current.id) ? likePendingAdd : contains(allLikedIds, str(current.id)))
+  source download = http(current.id == null || str(current.id) == "" || current.local ? null : "https://api.music.yandex.net/tracks/${enc(current.id)}/download-info", {Authorization: "OAuth ${token}"}) json status
+  let audio = (download.out.result ?? []).filter(d => d.codec == "mp3").sortBy(d => -d.bitrateInKbps)[0]
+  let rows = artistId != "" ? (artistTracks.out.result.tracks ?? []) : collection != "" ? (owner != "" ? (playlist.out.result.tracks ?? []).map(t => t.track) : flatten(album.out.result.volumes ?? [])) : tab == "Любимое" ? (likedTracks.out.result ?? []) : tab == "Очередь" ? queue : tab == "Скачанное" ? (localTracks ?? []) : tab == "Волна" ? (wave.out.result.sequence ?? []).map(t => t.track) : (search.out.result.tracks.results ?? [])
+  let rowsLoading = artistId != "" ? artistInfo == null || artistTracks == null : collection != "" ? (owner != "" ? playlist == null : album == null) : tab == "Любимое" ? likes == null || len(likedIds) > 0 && likedTracks == null : tab == "Скачанное" ? localTracks == null : tab == "Волна" ? waveRequest != 0 && wave == null : tab == "Поиск" && query != "" ? search == null : false
+  let emptyHint = artistId != "" ? (english ? "No tracks available for this artist" : "У исполнителя нет доступных треков") : tab == "Очередь" ? (english ? "The queue is empty — add tracks with +" : "Очередь пуста — добавьте треки через +") : tab == "Скачанное" ? (english ? "Downloaded tracks will appear here" : "Здесь появятся сохранённые треки") : tab == "Любимое" ? (english ? "No liked tracks yet" : "В избранном пока нет треков") : tab == "Волна" ? (english ? "No recommendations available" : "Не удалось подобрать музыку") : (english ? "Enter a search to find music" : "Введите запрос, чтобы найти музыку")
+  let apiError = account != null && !account.ok ? (english ? "Sign-in failed: HTTP ${account.code}. Check your token and connection." : "Вход не выполнен: HTTP ${account.code}. Проверьте токен и доступность сервиса.") : account.out.error != null ? "${account.out.error.message}" : ""
+  let contentError = artistId != "" && artistInfo != null && !artistInfo.ok ? (english ? "Could not load artist · HTTP ${artistInfo.code}" : "Не удалось загрузить исполнителя · HTTP ${artistInfo.code}") : artistId != "" && artistTracks != null && !artistTracks.ok ? (english ? "Could not load artist tracks · HTTP ${artistTracks.code}" : "Не удалось загрузить треки исполнителя · HTTP ${artistTracks.code}") : collection != "" && owner != "" && playlist != null && !playlist.ok ? (english ? "Could not load playlist · HTTP ${playlist.code}" : "Не удалось загрузить плейлист · HTTP ${playlist.code}") : collection != "" && owner == "" && album != null && !album.ok ? (english ? "Could not load album · HTTP ${album.code}" : "Не удалось загрузить альбом · HTTP ${album.code}") : tab == "Волна" && wave != null && !wave.ok ? (english ? "My Wave is unavailable · HTTP ${wave.code}" : "Моя волна сейчас недоступна · HTTP ${wave.code}") : tab == "Любимое" && likes != null && !likes.ok ? (english ? "Could not read likes · HTTP ${likes.code}" : "Не удалось прочитать любимое · HTTP ${likes.code}") : tab == "Любимое" && likedTracks != null && !likedTracks.ok ? (english ? "Could not load liked tracks · HTTP ${likedTracks.code}" : "Не удалось загрузить любимое · HTTP ${likedTracks.code}") : tab == "Плейлисты" && playlists != null && !playlists.ok ? (english ? "Could not load playlists · HTTP ${playlists.code}" : "Не удалось загрузить плейлисты · HTTP ${playlists.code}") : tab == "Поиск" && search != null && !search.ok ? (english ? "Search unavailable · HTTP ${search.code}" : "Поиск недоступен · HTTP ${search.code}") : ""
+  back: playerView || artistId != "" || collection != "" || tab != "Главная"
+  onBack: { if playerView { playerView = false } else if artistId != "" { artistId = ""; artistName = "" } else { collection = ""; tab = "Главная" } }
+  on current {
+    ready = false
+    wasPlaying = false
+    if value.local {
+      loadedId = str(value.id)
+      run("python /root/.config/omalauncher/widgets/cassette/player.py play-local ${sh(value.path)} ${sh(value.id)} ${sh(value.title)} ${sh(join((value.artists ?? []).map(a => a.name), ", "))} ${sh("")}")
+      ready = true
+    }
+  }
+  on download first {
+    if value.ok && audio.downloadInfoUrl != null && loadedId != str(current.id) {
+      loadedId = str(current.id)
+      run("python /root/.config/omalauncher/widgets/cassette/player.py play ${sh(audio.downloadInfoUrl)} ${sh(current.id)} ${sh(current.title)} ${sh(currentArtist)} ${sh(currentCover)}")
+      ready = true
+    }
+  }
+  on player first {
+    if !value.connected || value.idle {
+      mediaSession(null)
+    } else {
+      mediaSession({
+        title: value.title ?? current.title ?? "",
+        artist: value.artist ?? currentArtist,
+        album: current.albums[0].title ?? "",
+        duration: value.duration ?? current.durationMs / 1000,
+        position: value.position ?? 0,
+        playing: value.connected && !value.idle && !value.paused,
+        commands: {
+          play: "python /root/.config/omalauncher/widgets/cassette/player.py play-control",
+          pause: "python /root/.config/omalauncher/widgets/cassette/player.py pause-control",
+          stop: "python /root/.config/omalauncher/widgets/cassette/player.py stop",
+          seek: "python /root/.config/omalauncher/widgets/cassette/player.py seek",
+        },
+      })
+    }
+    if ready && value.connected && !value.idle { wasPlaying = true }
+    if ready && wasPlaying && value.idle && value.error == "" {
+      wasPlaying = false
+      ready = false
+      if index + 1 < len(queue) { index = index + 1 }
+      else if repeatMode {
+        if len(queue) == 1 && current.local {
+          run("python /root/.config/omalauncher/widgets/cassette/player.py play-local ${sh(current.path)} ${sh(current.id)} ${sh(current.title)} ${sh(currentArtist)} ${sh(currentCover)}")
+          ready = true
+        } else if len(queue) == 1 && audio.downloadInfoUrl != null {
+          run("python /root/.config/omalauncher/widgets/cassette/player.py play ${sh(audio.downloadInfoUrl)} ${sh(current.id)} ${sh(current.title)} ${sh(currentArtist)} ${sh(currentCover)}")
+          ready = true
+        } else { index = 0 }
+      }
+    }
+  }
+  on mutation {
+    message = value.ok && value.out.error == null ? (likePendingAdd ? (english ? "Added to liked tracks" : "Добавлено в любимое") : (english ? "Removed from liked tracks" : "Удалено из любимого")) : (english ? "Error: ${value.out.error.message ?? value.err ?? value.code}" : "Ошибка: ${value.out.error.message ?? value.err ?? value.code}")
+    likePendingId = ""
+    refresh()
+  }
+  on wave first { waveRequest = 0 }
+  component FavoriteButton(big = false) {
+    Box {
+      visible: !current.local && current.id != null
+      size: big ? 52 : 44
+      radius: big ? 26 : 22
+      background: currentLiked ? alpha(accent, 0.16) : alpha(foreground, 0.06)
+      align: center
+      onTap: {
+        if likePendingId == "" {
+          let likedBefore = currentLiked
+          haptic()
+          likePendingId = str(current.id)
+          likePendingAdd = !likedBefore
+          if likedBefore { mutation = post("https://api.music.yandex.net/users/${enc(uid)}/likes/tracks/remove", "track-ids=${enc(current.id)}", {Authorization: "OAuth ${token}", "Content-Type": "application/x-www-form-urlencoded"}) }
+          else { mutation = post("https://api.music.yandex.net/users/${enc(uid)}/likes/tracks/add-multiple", "track-ids=${enc(current.id)}", {Authorization: "OAuth ${token}", "Content-Type": "application/x-www-form-urlencoded"}) }
+        }
+      }
+      Text { text: likePendingId == str(current.id) ? "…" : currentLiked ? "♥" : "♡"; color: accent; fontSize: big ? 28 : 25; align: center }
+    }
+  }
+  component Track(t, items) {
+    Row {
+      gap: 10; padding: [4, 10]; fill: width
+      onTap: { queue = items; index = indexOf(items.map(x => str(x.id)), str(t.id)); message = "" }
+      Box {
+        width: 48; height: 48; background: alpha(accent, 0.12); radius: 9; clip: true; align: center
+        if t.coverUri != null { Image { src: "https://${replace(t.coverUri, "%%", "100x100")}"; fill: true; fit: cover; label: (english ? "Cover for ${t.title}" : "Обложка ${t.title}") } }
+        else { Text { text: t.local ? "↓" : "♪"; align: center; color: accent; fontSize: 20 } }
+      }
+      Column { weight: 1; gap: 3
+        Text { text: t.title ?? (english ? "Unavailable track" : "Недоступный трек"); maxLines: 1; bold: current.id == t.id; color: current.id == t.id ? accent : foreground }
+        Text { text: join((t.artists ?? []).map(a => a.name), ", "); style: small; color: muted; maxLines: 1; onTap: {
+          if !t.local && t.artists[0].id != null { artistId = str(t.artists[0].id); artistName = t.artists[0].name; collection = "" }
+        } }
+      }
+      Text { text: fmtTime((t.durationMs ?? 0) / 1000, "m:ss", "UTC"); style: small; color: muted }
+      Box { size: 40; radius: 20; background: alpha(accent, 0.1); align: center; onTap: {
+        haptic()
+        if contains(queue.map(x => str(x.id)), str(t.id)) { message = (english ? "Track is already queued" : "Трек уже в очереди") }
+        else { queue = flatten([queue, [t]]); message = (english ? "Added to queue" : "Добавлено в очередь") }
+      }
+        Text { text: contains(queue.map(x => str(x.id)), str(t.id)) ? "✓" : "+"; fontSize: 22; color: accent; align: center }
+      }
+    }
+  }
+  component Transport(big = false) {
+    Column {
+      gap: big ? 14 : 8
+      Slider { value: player.position ?? 0; max: max(1, player.duration ?? current.durationMs / 1000); onChange: run("python /root/.config/omalauncher/widgets/cassette/player.py seek ${sh(value)}") }
+      Row {
+        Text { text: fmtTime(player.position ?? 0, "m:ss", "UTC"); color: muted; style: small }
+        Spacer { weight: 1 }
+        Text { text: fmtTime(player.duration ?? current.durationMs / 1000, "m:ss", "UTC"); color: muted; style: small }
+      }
+      Row { fill: width; justify: center; align: center; gap: big ? 8 : 6
+        Box { size: big ? 52 : 46; radius: 26; background: repeatMode ? alpha(accent, 0.2) : alpha(foreground, 0.06); align: center; onTap: { haptic(); repeatMode = !repeatMode }
+          Text { text: "↻"; fontSize: big ? 27 : 23; color: repeatMode ? accent : muted; align: center }
+        }
+        Box { size: big ? 56 : 48; radius: 28; background: alpha(foreground, 0.08); align: center; onTap: { haptic(); if index > 0 { index = index - 1 } else { run("python /root/.config/omalauncher/widgets/cassette/player.py seek 0") } }
+          Text { text: "⏮"; fontSize: big ? 29 : 25; align: center }
+        }
+        Box { size: big ? 68 : 56; radius: 34; background: accent; align: center; onTap: {
+          haptic()
+          if player.idle && current.local { run("python /root/.config/omalauncher/widgets/cassette/player.py play-local ${sh(current.path)} ${sh(current.id)} ${sh(current.title)} ${sh(currentArtist)} ${sh(currentCover)}"); ready = true }
+          else if player.idle && audio.downloadInfoUrl != null { run("python /root/.config/omalauncher/widgets/cassette/player.py play ${sh(audio.downloadInfoUrl)} ${sh(current.id)} ${sh(current.title)} ${sh(currentArtist)} ${sh(currentCover)}"); ready = true }
+          else { run("python /root/.config/omalauncher/widgets/cassette/player.py toggle") }
+        } Text { text: player.paused || player.idle ? "▶" : "Ⅱ"; fontSize: big ? 30 : 25; color: background; align: center } }
+        Box { size: big ? 56 : 48; radius: 28; background: alpha(foreground, 0.08); align: center; onTap: { haptic(); if index + 1 < len(queue) { index = index + 1 } else if repeatMode { index = 0 } }
+          Text { text: "⏭"; fontSize: big ? 29 : 25; align: center }
+        }
+        Box { size: big ? 52 : 46; radius: 26; background: current.local ? alpha(green, 0.16) : alpha(foreground, 0.06); align: center; onTap: { haptic(); if !current.local && audio.downloadInfoUrl != null { message = run("python /root/.config/omalauncher/widgets/cassette/player.py download ${sh(audio.downloadInfoUrl)} ${sh(join((current.artists ?? []).map(a => a.name), ", ") + " - " + current.title)}") } }
+          Text { text: current.local ? "✓" : "↓"; fontSize: big ? 26 : 23; color: current.local ? green : foreground; align: center }
+        }
+      }
+    }
+  }
+  Column {
+    padding: [16, 8]; gap: 12
+    if playerView && current != null {
+      Column {
+        weight: 1; gap: 20; padding: [8, 12]
+        Row {
+          Text { text: "‹"; fontSize: 34; padding: 8; onTap: playerView = false }
+          Text { text: (english ? "Now playing" : "Сейчас играет"); style: title; weight: 1; align: center }
+          FavoriteButton { big: true }
+        }
+        Box {
+          weight: 1; fill: width; align: center; background: linear(0, 0, 1, 1, [alpha(accent, 0.24), surface]); radius: 22; clip: true
+          if current.coverUri != null { Image { src: "https://${replace(current.coverUri, "%%", "600x600")}"; fill: true; fit: cover; label: (english ? "Cover for ${current.title}" : "Обложка ${current.title}") } }
+          else { Text { text: "♪"; fontSize: 120; color: alpha(accent, 0.75); align: center } }
+        }
+        Column { gap: 5
+          Text { text: current.title; fontSize: 28; bold: true; align: center; maxLines: 2 }
+          Text { text: join((current.artists ?? []).map(a => a.name), ", "); fontSize: 18; color: accent; align: center; maxLines: 2; onTap: {
+            if !current.local && current.artists[0].id != null { artistId = str(current.artists[0].id); artistName = current.artists[0].name; collection = ""; playerView = false }
+          } }
+          if current.local { Text { text: (english ? "Downloaded to this device" : "Скачано на устройство"); style: small; color: green; align: center } }
+        }
+        Transport { big: true }
+        if player.error != null && player.error != "" { Text { text: player.error; color: red; style: small; align: center } }
+      }
+    } else {
+    Row {
+      align: center
+      Column { weight: 1; gap: 0
+        Text { text: (english ? "CASSETTE" : "КАССЕТА"); fontSize: 28; bold: true; letterSpacing: 2 }
+        Row { gap: 6; align: center
+          Text { text: uid == null ? (english ? "Yandex Music · OWL" : "Яндекс Музыка · OWL") : account.out.result.account.displayName; style: small; color: muted }
+          if uid != null { Text { text: "●"; fontSize: 8; color: account.ok ? green : red } }
+        }
+      }
+      Box { size: 46; radius: 14; background: surface; align: center; onTap: { haptic(); tab = "Настройки"; collection = "" }
+        Text { text: "⚙"; fontSize: 23; align: center }
+      }
+    }
+    if token == null || tab == "Настройки" { Row { gap: 8
+      Text { text: "Language / Язык"; style: small; color: muted }
+      Button { text: "English"; color: english ? accent : muted; onTap: { language = "en"; message = "" } }
+      Button { text: "Русский"; color: english ? muted : accent; onTap: { language = "ru"; message = "" } }
+    } }
+    if token == null {
+      Column { weight: 1; scroll: true; gap: 18; padding: [4, 24]
+        Text { text: (english ? "Your music.\nYour Cassette." : "Ваша музыка.\nВ вашей Кассете."); fontSize: 30; bold: true }
+        Text { text: (english ? "Sign in with a Yandex Music OAuth token. The launcher stores it as an encrypted secret." : "Войдите с OAuth-токеном Яндекс Музыки. Он хранится зашифрованным средствами лаунчера."); color: muted }
+        Button { text: (english ? "Open Yandex sign-in" : "Открыть вход Яндекса"); onTap: url("https://oauth.yandex.ru/authorize?response_type=token&client_id=23cabbbdc6cd418abb4b39c32c41195d") }
+        Text { text: (english ? "After signing in, copy access_token from the address bar (before &), or paste the full URL." : "После входа скопируйте значение access_token из адресной строки (до &). Можно вставить и весь адрес."); style: small; color: muted }
+        Input { placeholder: (english ? "OAuth token or sign-in redirect URL" : "OAuth-токен или адрес после входа"); password: true; onSubmit: token = contains(value, "access_token=") ? split(split(value, "access_token=")[1], "&")[0] : trim(value) }
+        Text { text: (english ? "Search · likes · playlists · albums\nMy Wave · queue · downloads" : "Поиск · любимое · плейлисты · альбомы\nМоя волна · очередь · скачивание"); color: accent }
+      }
+    } else {
+      Flow { gap: 6
+        for name in ["Главная", "Поиск", "Любимое", "Плейлисты", "Волна", "Очередь", "Скачанное"] {
+          Text { text: english ? get(labels, name, name) : name; padding: [10, 8]; radius: 8; background: tab == name && artistId == "" ? alpha(accent, 0.2) : surface; color: tab == name && artistId == "" ? accent : muted; onTap: { tab = name; collection = ""; artistId = ""; artistName = ""; if name == "Волна" { waveRequest = waveRequest + 1 } } }
+        }
+      }
+      if apiError != "" { Text { text: apiError; color: red } }
+      if message != "" { Text { text: message; style: small; color: accent; maxLines: 2; onTap: message = "" } }
+      if tab == "Настройки" {
+        Column { weight: 1; scroll: true; gap: 16
+          Text { text: english ? get(labels, "Настройки") : "Настройки"; style: title }
+          Text { text: (english ? "Quality: best available MP3.\nDownloads: ~/Music/Cassette\nMP3, M4A, OGG, OPUS, FLAC and WAV supported.\nAudio keeps playing after you close this screen." : "Качество: лучший доступный MP3.\nЗагрузки: ~/Music/Cassette\nПоддерживаются MP3, M4A, OGG, OPUS, FLAC и WAV.\nЗвук продолжает играть после закрытия окна."); color: muted }
+          Button { text: (english ? "Downloaded tracks (${len(localTracks ?? [])})" : "Скачанные треки (${len(localTracks ?? [])})"); onTap: { tab = "Скачанное"; collection = "" } }
+          Button { text: (english ? "Stop playback" : "Остановить музыку"); onTap: { ready = false; wasPlaying = false; run("python /root/.config/omalauncher/widgets/cassette/player.py stop") } }
+          Button { text: (english ? "Sign out" : "Выйти из аккаунта"); onTap: { run("python /root/.config/omalauncher/widgets/cassette/player.py stop"); token = null; queue = []; index = -1; loadedId = ""; tab = "Главная"; collection = ""; query = ""; ready = false; wasPlaying = false } }
+          Text { text: (english ? "Inspired by Rirusha/Cassette. This is an independent OWL app. Playback depends on your subscription and Yandex API availability." : "Создано по функциональности Rirusha/Cassette. Это отдельное OWL-приложение. Воспроизведение зависит от подписки и доступности API Яндекса."); style: small; color: muted }
+          Button { text: (english ? "Original project" : "Исходный проект"); onTap: url("https://github.com/Rirusha/Cassette") }
+        }
+      } else {
+        if tab == "Главная" || tab == "Поиск" {
+          Input { text: query; placeholder: (english ? "Tracks, artists, albums…" : "Треки, исполнители, альбомы…"); onSubmit: { query = trim(value); tab = "Поиск"; collection = ""; artistId = ""; artistName = "" } }
+          if tab == "Поиск" {
+            Flow { gap: 8
+              for choice in [{id: "track", label: "Треки"}, {id: "album", label: "Альбомы"}, {id: "artist", label: "Артисты"}, {id: "playlist", label: "Плейлисты"}] {
+                Text { text: english ? get(labels, choice.label, choice.label) : choice.label; padding: [6, 8]; color: kind == choice.id ? accent : muted; onTap: kind = choice.id }
+              }
+            }
+          }
+        }
+        if collection != "" { Text { text: "‹ ${heading}"; style: title; onTap: collection = "" } }
+        if artistId != "" { Text { text: (english ? "‹ Artist" : "‹ Исполнитель"); color: accent; onTap: { artistId = ""; artistName = "" } } }
+        Column {
+          weight: 1; lazy: true; gap: 2
+          if artistId != "" {
+            Column { gap: 12; padding: [4, 14]; align: center
+              Box { size: 112; radius: 56; clip: true; align: center; background: linear(0, 0, 1, 1, [alpha(accent, 0.35), surface])
+                if artistInfo.out.result.artist.cover.uri != null { Image { src: "https://${replace(artistInfo.out.result.artist.cover.uri, "%%", "300x300")}"; fill: true; fit: cover; label: (english ? "Photo of ${artistName}" : "Фото ${artistName}") } }
+                else { Text { text: "♫"; fontSize: 48; color: accent; align: center } }
+              }
+              Text { text: artistInfo.out.result.artist.name ?? artistName; fontSize: 26; bold: true; align: center; maxLines: 2 }
+              Text { text: rowsLoading ? (english ? "Loading artist…" : "Загружаем карточку…") : (english ? "Popular tracks" : "Популярные треки"); style: small; color: muted; align: center }
+            }
+          }
+          if tab == "Главная" && collection == "" && artistId == "" {
+            Column { gap: 16; padding: [0, 12]
+              Text { text: (english ? "Listen now" : "Слушать сейчас"); style: title }
+              Column { padding: 22; radius: 16; background: linear(0, 0, 1, 1, [alpha(accent, 0.35), surface]); gap: 10; onTap: { tab = "Волна"; waveRequest = waveRequest + 1 }
+                Text { text: (english ? "≈  My Wave" : "≈  Моя волна"); fontSize: 26; bold: true }
+                Text { text: (english ? "Music picked for you" : "Музыка, которая подходит вам"); color: muted }
+              }
+              Row { gap: 12
+                Column { weight: 1; padding: 18; background: surface; radius: 12; onTap: tab = "Любимое"
+                  Text { text: "♥"; fontSize: 28; color: accent }
+                  Text { text: (english ? "Liked tracks" : "Мне нравится"); bold: true }
+                  Text { text: (english ? "${len(likes.out.result.library.tracks ?? [])} tracks" : "${len(likes.out.result.library.tracks ?? [])} треков"); style: small; color: muted }
+                }
+                Column { weight: 1; padding: 18; background: surface; radius: 12; onTap: tab = "Плейлисты"
+                  Text { text: "≡"; fontSize: 28; color: accent }
+                  Text { text: english ? get(labels, "Плейлисты") : "Плейлисты"; bold: true }
+                  Text { text: (english ? "Your collection" : "Ваша коллекция"); style: small; color: muted }
+                }
+              }
+            }
+          } else if tab == "Плейлисты" && collection == "" && artistId == "" {
+            if playlists == null { Text { text: (english ? "Loading playlists…" : "Загружаем плейлисты…"); color: muted; padding: [8, 16] } }
+            for p in playlists.out.result ?? [] {
+              Row { padding: [4, 16]; onTap: { collection = str(p.kind); owner = str(p.owner.uid); heading = p.title }
+                Text { text: "≡"; color: accent; fontSize: 26 }
+                Column { weight: 1
+                  Text { text: p.title; bold: true }
+                  Text { text: (english ? "${p.trackCount} tracks" : "${p.trackCount} треков"); color: muted; style: small }
+                }
+                Text { text: "›" }
+              }
+            }
+          } else if tab == "Поиск" && kind != "track" && collection == "" && artistId == "" {
+            for a in kind == "album" ? (search.out.result.albums.results ?? []) : kind == "artist" ? (search.out.result.artists.results ?? []) : (search.out.result.playlists.results ?? []) {
+              Row { padding: [4, 14]; onTap: {
+                if kind == "album" { collection = str(a.id); owner = ""; heading = a.title }
+                else if kind == "playlist" { collection = str(a.kind); owner = str(a.owner.uid); heading = a.title }
+                else { artistId = str(a.id); artistName = a.name; collection = "" }
+              }
+                Text { text: kind == "artist" ? "♫" : "▣"; color: accent; fontSize: 26 }
+                Text { text: a.title ?? a.name; weight: 1; maxLines: 2 }
+                Text { text: "›"; color: muted }
+              }
+            }
+          } else {
+            if len(rows) > 0 {
+              Row { padding: [0, 6]
+                Button { text: (english ? "▶ Play" : "▶ Слушать"); onTap: { queue = rows; index = 0 } }
+                Button { text: (english ? "⤨ Shuffle" : "⤨ Перемешать"); onTap: { queue = shuffle(rows); index = 0; mixed = true } }
+              }
+              for t in rows { Track { t: t; items: rows } }
+              if tab == "Любимое" {
+                Row {
+                  if likedPage > 0 { Button { text: (english ? "← Previous" : "← Раньше"); onTap: likedPage = likedPage - 1 } }
+                  Text { text: "${likedPage * 150 + 1}–${min((likedPage + 1) * 150, len(likes.out.result.library.tracks ?? []))}"; style: small; color: muted }
+                  if (likedPage + 1) * 150 < len(likes.out.result.library.tracks ?? []) { Button { text: (english ? "Next →" : "Дальше →"); onTap: likedPage = likedPage + 1 } }
+                }
+              }
+              if tab == "Волна" { Button { text: waveRequest != 0 ? (english ? "Refreshing…" : "Обновляем…") : (english ? "Refresh My Wave" : "Обновить волну"); onTap: { if waveRequest == 0 { waveRequest = 1 } } } }
+            } else {
+              Column { align: center; gap: 10; padding: [24, 28]
+                Text { text: rowsLoading ? "…" : "♫"; fontSize: 34; color: rowsLoading ? muted : accent; align: center }
+                Text { text: rowsLoading ? (english ? "Loading music…" : "Загружаем музыку…") : contentError != "" ? (english ? "Could not load data" : "Не удалось получить данные") : emptyHint; color: muted; align: center; maxLines: 2 }
+                if !rowsLoading && contentError == "" { Button { text: (english ? "Refresh" : "Обновить"); onTap: refresh() } }
+              }
+            }
+          }
+          if contentError != "" {
+            Column { align: center; gap: 8; padding: [12, 16]
+              Text { text: contentError; color: red; align: center; maxLines: 3 }
+              Button { text: (english ? "Retry" : "Повторить"); onTap: refresh() }
+            }
+          }
+        }
+      }
+      if current != null {
+        Column { padding: 12; gap: 8; background: surface; radius: 14
+          Row { onTap: playerView = true
+            Column { weight: 1; gap: 2
+              Text { text: current.title; bold: true; maxLines: 1 }
+              Text { text: join((current.artists ?? []).map(a => a.name), ", "); style: small; color: accent; maxLines: 1; onTap: {
+                if !current.local && current.artists[0].id != null { artistId = str(current.artists[0].id); artistName = current.artists[0].name; collection = "" }
+              } }
+            }
+            FavoriteButton { }
+            Text { text: "⌃"; color: muted; fontSize: 22; padding: 6 }
+          }
+          Transport { }
+          if player.error != null && player.error != "" { Text { text: player.error; color: red; style: small } }
+          if download != null && !download.ok { Text { text: (english ? "Audio unavailable: HTTP ${download.code}" : "Аудио недоступно: HTTP ${download.code}"); color: red; style: small } }
+          if download.ok && audio == null { Text { text: (english ? "No audio available. Check your subscription." : "Нет доступного аудио. Проверьте подписку."); color: red; style: small } }
+        }
+      }
+    }
+    }
+  }
+}

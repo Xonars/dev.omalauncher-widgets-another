@@ -1,0 +1,1062 @@
+widget "timesheet" {
+  meta {
+    owl: 10
+    description: "A weekly timesheet that measures worked hours against an average day, keeps a running balance, and turns that balance into holidays."
+    version: "1.0"
+    license: "MIT"
+    category: "productivity"
+  }
+
+  page: 1
+  order: 4
+  size: 4x3
+  minSize: 3x2
+  padding: 10
+
+  requires { pacman: ["gawk"] }
+
+  state weeks = [] persist
+  state avgWeekHrs = 38.3333 persist
+  state avgWeekText = "38.33" persist
+  state holidayDays = 0 persist
+  state holidayText = "0.00" persist
+  state includeWeekend = false persist
+  state saveMd = true persist
+  state saveTxt = false persist
+  state saveCsv = false persist
+  state openWeek = "" persist
+  state pane = "weeks"
+  state savedId = ""
+  state savedAt = 0
+  state settingsSavedAt = 0
+  state pendingSection = ""
+  state pendingTag = ""
+  state confirmRemove = ""
+
+  source now = clock every 1s
+
+  let dayNames = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
+
+  let weekendDays = range(2).map(i => ({
+    amIn: "", amOut: "", pmIn: "", pmOut: "",
+    amInM: null, amOutM: null, pmInM: null, pmOutM: null, done: false
+  }))
+  let stdDays = range(5).map(i => ({
+    amIn: "08:30", amOut: "12:40", pmIn: "13:00", pmOut: "16:30",
+    amInM: 510, amOutM: 760, pmInM: 780, pmOutM: 990, done: false
+  })) + weekendDays
+
+  let dayCount = includeWeekend ? 7 : 5
+  let calcDayCount = 7
+  let editBoxW = max(48, ((screenWidth ?? 348) - 181.5) / 2)
+  let avgDayMin = avgWeekHrs * 12
+  let avgDayMinR = round(avgDayMin)
+  let avgDayText = pad(floor(avgDayMinR / 60), 2, "0") + ":" + pad(avgDayMinR % 60, 2, "0")
+
+  let amMins = weeks.map(w => w.days.map(d => (d.done ?? false) && d.amInM != null && d.amOutM != null && d.amOutM > d.amInM ? d.amOutM - d.amInM : null))
+  let pmMins = weeks.map(w => w.days.map(d => (d.done ?? false) && d.pmInM != null && d.pmOutM != null && d.pmOutM > d.pmInM ? d.pmOutM - d.pmInM : null))
+  let dayMins = weeks.map((w, wi) => range(calcDayCount).map(di => (amMins[wi][di] == null && pmMins[wi][di] == null) ? null : (amMins[wi][di] ?? 0) + (pmMins[wi][di] ?? 0)))
+  let dayDiffs = dayMins.map((ds, wi) => ds.map((a, di) => a == null ? null : (di >= 5 ? a : a - avgDayMin)))
+  let amMinsAll = weeks.map(w => w.days.map(d => d.amInM != null && d.amOutM != null && d.amOutM > d.amInM ? d.amOutM - d.amInM : null))
+  let pmMinsAll = weeks.map(w => w.days.map(d => d.pmInM != null && d.pmOutM != null && d.pmOutM > d.pmInM ? d.pmOutM - d.pmInM : null))
+  let dayMinsAll = weeks.map((w, wi) => range(dayCount).map(di => (di >= 5 && !(w.days[di].done ?? false)) ? null : ((amMinsAll[wi][di] == null && pmMinsAll[wi][di] == null) ? null : (amMinsAll[wi][di] ?? 0) + (pmMinsAll[wi][di] ?? 0))))
+  let dayDiffsAll = dayMinsAll.map((ds, wi) => ds.map((a, di) => a == null ? null : (di >= 5 ? a : a - avgDayMin)))
+  let weekWorked = dayMins.map(ds => sum(ds.filter(a => a != null)))
+  let weekTargetCount = dayMins.map(ds => len(ds.take(5).filter(a => a != null)))
+  let weekDiff = dayDiffs.map(ds => sum(ds.filter(a => a != null)))
+  let cumDiff = sum(weekDiff)
+  let holidayBalance = holidayDays + (avgDayMin > 0 ? cumDiff / avgDayMin : 0)
+
+  let negTone = "#ff5f6d"
+  let cumTone = cumDiff > 0.5 ? green : cumDiff < -0.5 ? negTone : muted
+  let cumAbs = abs(round(cumDiff))
+  let cumText = pad(floor(cumAbs / 60), 2, "0") + "h:" + pad(cumAbs % 60, 2, "0") + "m"
+  let holidayTone = holidayBalance < 0 ? negTone : holidayBalance > holidayDays + 0.004 ? green : accent
+
+  let balanceDays = avgDayMin > 0 ? cumDiff / avgDayMin : 0
+  let axisDays = max(1, ceil(abs(balanceDays)))
+  let barLo = balanceDays < -1 ? -axisDays : -1
+  let barHi = balanceDays > 1 ? axisDays : 1
+  let barZero = -barLo / (barHi - barLo)
+  let barDot = clamp((balanceDays - barLo) / (barHi - barLo), 0, 1)
+  let barLoDays = abs(barLo)
+  let barHiDays = abs(barHi)
+  let barLoText = "- " + barLoDays + (barLoDays == 1 ? " day" : " days")
+  let barHiText = "+ " + barHiDays + (barHiDays == 1 ? " day" : " days")
+  let dayBalanceText = fixed(balanceDays, 2) + " days"
+
+  let topWeek = len(weeks) > 0 ? weeks[0] : null
+  let openId = openWeek != "" && openWeek != "none" ? openWeek : (openWeek == "" && topWeek != null ? topWeek.id : "")
+  let footerWeek = openId == "" ? null : weeks.find(x => x.id == openId)
+  let footerWi = footerWeek == null ? -1 : weeks.indexOf(footerWeek)
+  let nextWk = topWeek == null ? "" : fmtTime((parseTime(topWeek.date + " 12:00", "dd/MM/yy HH:mm") ?? topWeek.monday) + 604800, "ww")
+  let fwDfs = footerWi >= 0 ? (dayDiffs[footerWi] ?? []) : []
+  let fwHasWeekend = footerWeek != null && footerWeek.days.drop(5).any(d => (d.done ?? false) || (d.amIn ?? "") != "" || (d.amOut ?? "") != "" || (d.pmIn ?? "") != "" || (d.pmOut ?? "") != "")
+  let fwDayCount = footerWeek == null ? dayCount : (includeWeekend || fwHasWeekend ? 7 : 5)
+  let fwWorked = footerWi >= 0 ? (weekWorked[footerWi] ?? 0) : 0
+  let fwCnt = footerWi >= 0 ? (weekTargetCount[footerWi] ?? 0) : 0
+  let fwTarget = avgDayMin * fwCnt
+  let fwDiff = footerWi >= 0 ? (weekDiff[footerWi] ?? 0) : 0
+  let fwRun = footerWi >= 0 ? sum(weekDiff.drop(footerWi)) : 0
+  let fwTone = fwDiff > 0.5 ? green : fwDiff < -0.5 ? negTone : muted
+  let fwAbs = abs(round(fwDiff))
+  let fwText = floor(fwAbs / 60) + ":" + pad(fwAbs % 60, 2, "0")
+  let fwSignedText = (fwDiff > 0.5 ? "+" : fwDiff < -0.5 ? "-" : "") + fwText
+  let fwRAbs = abs(round(fwRun))
+  let fwRunText = floor(fwRAbs / 60) + ":" + pad(fwRAbs % 60, 2, "0")
+  let fwRunSignedText = (fwRun > 0.5 ? "+" : fwRun < -0.5 ? "-" : "") + fwRunText
+  let fwWorkedMin = round(fwWorked)
+  let fwWorkedText = floor(fwWorkedMin / 60) + ":" + pad(fwWorkedMin % 60, 2, "0")
+  let fwTargetMin = round(fwTarget)
+  let fwTargetText = floor(fwTargetMin / 60) + ":" + pad(fwTargetMin % 60, 2, "0")
+  let fwSaved = footerWeek != null && savedId == footerWeek.id && now != null && now - savedAt < 3
+  let fwAmTexts = footerWeek == null ? [] : range(fwDayCount).map(di => (footerWeek.days[di].amInM != null && footerWeek.days[di].amOutM != null && footerWeek.days[di].amOutM > footerWeek.days[di].amInM) ? fmtTime(footerWeek.days[di].amInM * 60, "HH:mm", "UTC") + "-" + fmtTime(footerWeek.days[di].amOutM * 60, "HH:mm", "UTC") : "—")
+  let fwPmTexts = footerWeek == null ? [] : range(fwDayCount).map(di => (footerWeek.days[di].pmInM != null && footerWeek.days[di].pmOutM != null && footerWeek.days[di].pmOutM > footerWeek.days[di].pmInM) ? fmtTime(footerWeek.days[di].pmInM * 60, "HH:mm", "UTC") + "-" + fmtTime(footerWeek.days[di].pmOutM * 60, "HH:mm", "UTC") : "—")
+  let fwRowLines = footerWeek == null ? [] : range(fwDayCount).map(di => "| " + dayNames[di] + " | " + fwAmTexts[di] + " | " + fwPmTexts[di] + " | " + ((footerWeek.days[di].done ?? false) ? "✓" : "—") + " | " + (fwDfs[di] == null ? "—" : floor(round(fwDfs[di] + avgDayMin) / 60) + ":" + pad(round(fwDfs[di] + avgDayMin) % 60, 2, "0")) + " | " + (fwDfs[di] == null ? "—" : (fwDfs[di] > 0.5 ? "+" : fwDfs[di] < -0.5 ? "-" : "") + floor(abs(round(fwDfs[di])) / 60) + ":" + pad(abs(round(fwDfs[di])) % 60, 2, "0")) + " |")
+  let fwSectionText = footerWeek == null ? "" : join(["<!-- owl-week:" + footerWeek.id + " -->", "## Week " + footerWeek.week + " — " + footerWeek.date, "", "| Day | AM | PM | ✓ | Worked | ± vs avg |", "|:--|:--|:--|:-:|--:|--:|"] + fwRowLines + ["", "**Worked** " + fwWorkedText + " · **Target** " + fwTargetText + " · **Week** " + fwSignedText + " · **Running** " + fwRunSignedText + " · **Holidays** " + fixed(holidayBalance, 2) + " d", "<!-- /owl-week:" + footerWeek.id + " -->"], "\n") + "\n"
+  let saveExts = (saveMd ? [".md"] : []) + (saveTxt ? [".txt"] : []) + (saveCsv ? [".csv"] : [])
+  let saveFileName = "timesheet" + join(saveExts, " ")
+  let settingsSaved = now != null && now - settingsSavedAt < 3
+  let settingsSectionText = join([
+    "<!-- owl-settings -->",
+    "**Average week** " + fixed(avgWeekHrs, 2) + " h · **Average day** " + avgDayText + " · **Holidays set** " + fixed(holidayDays, 2) + " d",
+    "<!-- /owl-settings -->"
+  ], "\n") + "\n"
+  let weekendUsedByWeek = weeks.map(w => w.days.drop(5).any(d => (d.done ?? false) || (d.amIn ?? "") != "" || (d.amOut ?? "") != "" || (d.pmIn ?? "") != "" || (d.pmOut ?? "") != ""))
+  let exportDayCounts = weeks.map((w, wi) => (includeWeekend || weekendUsedByWeek[wi]) ? 7 : 5)
+  let exportAmTexts = weeks.map((w, wi) => range(exportDayCounts[wi]).map(di => (w.days[di].amInM != null && w.days[di].amOutM != null && w.days[di].amOutM > w.days[di].amInM) ? fmtTime(w.days[di].amInM * 60, "HH:mm", "UTC") + "-" + fmtTime(w.days[di].amOutM * 60, "HH:mm", "UTC") : "—"))
+  let exportPmTexts = weeks.map((w, wi) => range(exportDayCounts[wi]).map(di => (w.days[di].pmInM != null && w.days[di].pmOutM != null && w.days[di].pmOutM > w.days[di].pmInM) ? fmtTime(w.days[di].pmInM * 60, "HH:mm", "UTC") + "-" + fmtTime(w.days[di].pmOutM * 60, "HH:mm", "UTC") : "—"))
+  let exportRows = weeks.map((w, wi) => range(exportDayCounts[wi]).map(di => "| " + dayNames[di] + " | " + exportAmTexts[wi][di] + " | " + exportPmTexts[wi][di] + " | " + ((w.days[di].done ?? false) ? "✓" : "—") + " | " + ((dayMins[wi][di] == null) ? "—" : floor(round(dayMins[wi][di]) / 60) + ":" + pad(round(dayMins[wi][di]) % 60, 2, "0")) + " | " + ((dayDiffs[wi][di] == null) ? "—" : (dayDiffs[wi][di] > 0.5 ? "+" : dayDiffs[wi][di] < -0.5 ? "-" : "") + floor(abs(round(dayDiffs[wi][di])) / 60) + ":" + pad(abs(round(dayDiffs[wi][di])) % 60, 2, "0")) + " |"))
+  let exportWorkedTexts = weekWorked.map(v => floor(round(v) / 60) + ":" + pad(round(v) % 60, 2, "0"))
+  let exportTargetTexts = weekTargetCount.map(c => floor(round(avgDayMin * c) / 60) + ":" + pad(round(avgDayMin * c) % 60, 2, "0"))
+  let exportWeekTexts = weekDiff.map(v => (v > 0.5 ? "+" : v < -0.5 ? "-" : "") + floor(abs(round(v)) / 60) + ":" + pad(abs(round(v)) % 60, 2, "0"))
+  let exportRunTexts = weeks.map((w, wi) => sum(weekDiff.drop(wi))).map(v => (v > 0.5 ? "+" : v < -0.5 ? "-" : "") + floor(abs(round(v)) / 60) + ":" + pad(abs(round(v)) % 60, 2, "0"))
+  let exportSections = weeks.map((w, wi) => join([
+    "<!-- owl-week:" + w.id + " -->",
+    "## Week " + w.week + " — " + w.date,
+    "",
+    "| Day | AM | PM | ✓ | Worked | ± vs avg |",
+    "|:--|:--|:--|:-:|--:|--:|"
+  ] + exportRows[wi] + [
+    "",
+    "**Worked** " + exportWorkedTexts[wi] + " · **Target** " + exportTargetTexts[wi] + " · **Week** " + exportWeekTexts[wi] + " · **Running** " + exportRunTexts[wi] + " · **Holidays** " + fixed(holidayBalance, 2) + " d",
+    "<!-- /owl-week:" + w.id + " -->"
+  ], "\n"))
+  let exportCsvRows = flatten(weeks.map((w, wi) => range(exportDayCounts[wi]).map(di => join([
+    "${w.week}",
+    w.date,
+    dayNames[di],
+    w.days[di].amInM == null ? "" : fmtTime(w.days[di].amInM * 60, "HH:mm", "UTC"),
+    w.days[di].amOutM == null ? "" : fmtTime(w.days[di].amOutM * 60, "HH:mm", "UTC"),
+    w.days[di].pmInM == null ? "" : fmtTime(w.days[di].pmInM * 60, "HH:mm", "UTC"),
+    w.days[di].pmOutM == null ? "" : fmtTime(w.days[di].pmOutM * 60, "HH:mm", "UTC"),
+    (w.days[di].done ?? false) ? "yes" : "no",
+    dayMins[wi][di] == null ? "" : floor(round(dayMins[wi][di]) / 60) + ":" + pad(round(dayMins[wi][di]) % 60, 2, "0"),
+    dayDiffs[wi][di] == null ? "" : (dayDiffs[wi][di] < -0.5 ? "-" : "") + floor(abs(round(dayDiffs[wi][di])) / 60) + ":" + pad(abs(round(dayDiffs[wi][di])) % 60, 2, "0")
+  ], ","))))
+  let fullTimesheetCsv = join(["week,date,day,am_in,am_out,pm_in,pm_out,done,worked,vs_avg"] + exportCsvRows, "\n") + "\n"
+  let fullTimesheetText = "# Timesheet\n\n" + settingsSectionText + "\n" + join(exportSections, "\n\n") + "\n"
+  let orderedWeeks = reverse(weeks)
+  let labelStep = max(1, floor((len(weeks) + 7) / 8))
+  let dailyDeltas = flatten(reverse(dayDiffsAll)).map(d => d ?? 0)
+  let dayDone = flatten(reverse(weeks.map(w => w.days.map(d => d.done ?? false).take(dayCount))))
+  let accum = [0] + scan(dailyDeltas, (s, d) => s + d, 0)
+  let accumMin = (accum.sortBy(v => v).first() ?? 0)
+  let accumMax = (accum.sortBy(v => v).last() ?? 0)
+  let accumDataLo = min(0, accumMin)
+  let accumDataHi = max(0, accumMax)
+  let accumPad = max(avgDayMin * 0.08, (accumDataHi - accumDataLo) * 0.12)
+  let accumLo = accumDataLo - accumPad
+  let accumHi = accumDataHi + accumPad
+  let chartTone = cumDiff < -0.5 ? negTone : accent
+
+  when len(weeks) == 0 && now != null {
+    let dow = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].indexOf(fmtTime(now, "EEE", null, "en")) + 1
+    let sod = int(fmtTime(now, "H") ?? 0) * 3600 + int(fmtTime(now, "m") ?? 0) * 60 + int(fmtTime(now, "s") ?? 0)
+    let mon = now - sod - (dow - 1) * 86400 + 43200
+    let wid = "${fmtTime(mon, 'ww')}-${mon}"
+    weeks = [{
+      id: wid,
+      week: int(fmtTime(mon, "ww")),
+      monday: mon,
+      date: fmtTime(mon, "dd/MM/yy"),
+      days: stdDays
+    }]
+    openWeek = wid
+  }
+
+  when includeWeekend && now != null && len(weeks.filter(w => len(w.days) < 7)) > 0 {
+    weeks = weeks.map(w => len(w.days) < 7 ? set(w, "days", w.days + weekendDays) : w)
+  }
+
+  onTap: { pane = "weeks"; screen() }
+
+  Column {
+    fill: true
+    gap: 5
+    justify: spaceBetween
+
+    Row {
+      Text { text: "TIMESHEET"; style: label; color: muted; letterSpacing: 1.2 }
+      Text {
+        text: topWeek == null ? "" : "W${topWeek.week} · ${topWeek.date}"
+        style: label
+        color: muted
+        weight: 1
+        align: end
+        maxLines: 1
+      }
+    }
+
+    Row {
+      align: center
+      gap: 10
+      Column {
+        gap: 0
+        weight: 1
+        Text {
+          text: cumText
+          fontSize: clamp((tileWidth ?? 240) * 0.105, 18, 38)
+          fontWeight: 500
+          color: cumTone
+          letterSpacing: -0.5
+          maxLines: 1
+        }
+      }
+      Column {
+        gap: 0
+        width: clamp((tileWidth ?? 240) * 0.30, 68, 104)
+        align: end
+        Text {
+          text: fixed(holidayBalance, 2)
+          fontSize: clamp((tileWidth ?? 240) * 0.072, 16, 20)
+          fontWeight: 500
+          color: holidayTone
+          align: end
+          maxLines: 1
+        }
+        Text { text: "HOLIDAYS"; style: label; color: muted; align: end; letterSpacing: 1.2; fontSize: 8 }
+      }
+    }
+
+    Canvas {
+      height: 34
+      fill: width
+      let midY = 7
+      let trackL = 8
+      let trackR = width - 8
+      let zeroX = trackL + (trackR - trackL) * barZero
+      let dotX = trackL + (trackR - trackL) * barDot
+      line(trackL, midY, trackR, midY, stroke: alpha(border, 0.9), width: 2, cap: round)
+      line(zeroX, 0, zeroX, 14, stroke: alpha(foreground, 0.45), width: 1)
+      circle(dotX, midY, 7, fill: alpha(cumTone, 0.16))
+      circle(dotX, midY, 4, fill: cumTone)
+      text(barLoText, trackL, 17, size: 8, align: start, color: muted)
+      text(barHiText, trackR, 17, size: 8, align: end, color: muted)
+      text(dayBalanceText, clamp(dotX, 32, width - 32), 28, size: 9, align: center, color: cumTone)
+    }
+
+    Canvas {
+      height: clamp((tileHeight ?? 260) * 0.36, 62, 140)
+      fill: width
+      visible: (tileHeight ?? 260) > 150
+      let padX = 10
+      let topY = 4
+      let botY = height - 10
+      let n = len(accum)
+      let spanY = max(1, accumHi - accumLo)
+      let zeroY = topY + accumHi / spanY * (botY - topY)
+      let pts = range(n).map(i => [
+        n <= 1 ? width / 2 : padX + (width - padX * 2) * i / (n - 1),
+        topY + (accumHi - accum[i]) / spanY * (botY - topY)
+      ])
+      let lx = pts[n - 1][0]
+      let ly = pts[n - 1][1]
+      if (n > 1) {
+        for i in range(n - 1) {
+          let x0 = pts[i][0]
+          let y0 = pts[i][1]
+          let x1 = pts[i + 1][0]
+          let y1 = pts[i + 1][1]
+          if (dayDone[i] ?? false) {
+            path([[x0, y0], [x1, y1], [x1, zeroY], [x0, zeroY]], closed: true, fill: alpha(chartTone, 0.12))
+            line(x0, y0, x1, y1, stroke: chartTone, width: 2, cap: butt)
+          } else {
+            path([[x0, y0], [x1, y1], [x1, zeroY], [x0, zeroY]], closed: true, fill: alpha(chartTone, 0.055))
+            for d in range(5) {
+              let t0 = d / 5
+              let t1 = t0 + 0.55 / 5
+              line(x0 + (x1 - x0) * t0, y0 + (y1 - y0) * t0,
+                   x0 + (x1 - x0) * t1, y0 + (y1 - y0) * t1,
+                   stroke: chartTone, width: 2, cap: butt)
+            }
+          }
+        }
+      }
+      line(padX, zeroY, width - padX, zeroY, stroke: alpha(foreground, 0.2), width: 1)
+      circle(lx, ly, 7, fill: alpha(chartTone, 0.18))
+      circle(lx, ly, 3, fill: chartTone)
+      let nw = len(weeks)
+      for wi in range(nw) {
+        if ((wi + 1) % labelStep == 0 || wi == nw - 1) {
+          let x = nw <= 1 ? width / 2 : padX + (width - padX * 2) * ((wi * 5 + 2.5) / (nw * 5))
+          text("W${orderedWeeks[wi].week}", x, clamp(zeroY + 9, 8, height - 2), size: 7, align: "center", color: muted)
+        }
+      }
+    }
+  }
+
+  screen {
+    title: "timesheet"
+
+    Box {
+      fill: true
+      Column {
+        fill: true
+        gap: 8
+        padding: [0, 0, 0, 0]
+
+      Column {
+        gap: 4
+        padding: 8
+        fill: width
+        background: alpha(surface, 0.45)
+        radius: 16 * corners
+
+        Row {
+          fill: width
+          align: center
+          gap: 10
+          Column {
+            gap: 0
+            weight: 1
+            Text {
+              text: cumText
+              fontSize: 30
+              fontWeight: 500
+              color: cumTone
+              letterSpacing: -0.5
+              maxLines: 1
+            }
+          }
+          Column {
+            gap: 1
+            width: 132
+            align: end
+            Text {
+              text: fixed(holidayBalance, 2)
+              fontSize: 26
+              fontWeight: 500
+              color: holidayTone
+              align: end
+              maxLines: 1
+            }
+            Text { text: "HOLIDAYS"; style: label; color: muted; align: end; letterSpacing: 1.5; fontSize: 8 }
+          }
+        }
+
+        Canvas {
+          height: 34
+          fill: width
+          let midY = 7
+          let trackL = 10
+          let trackR = width - 10
+          let zeroX = trackL + (trackR - trackL) * barZero
+          let dotX = trackL + (trackR - trackL) * barDot
+          line(trackL, midY, trackR, midY, stroke: alpha(border, 0.9), width: 2, cap: round)
+          line(zeroX, 0, zeroX, 14, stroke: alpha(foreground, 0.45), width: 1)
+          circle(dotX, midY, 7, fill: alpha(cumTone, 0.16))
+          circle(dotX, midY, 4, fill: cumTone)
+          text(barLoText, trackL, 17, size: 8, align: start, color: muted)
+          text(barHiText, trackR, 17, size: 8, align: end, color: muted)
+          text(dayBalanceText, clamp(dotX, 32, width - 32), 28, size: 9, align: center, color: cumTone)
+        }
+
+        Canvas {
+          height: 80
+          fill: width
+          let padX = 8
+          let topY = 6
+          let botY = height - 10
+          let n = len(accum)
+          let spanY = max(1, accumHi - accumLo)
+          let zeroY = topY + accumHi / spanY * (botY - topY)
+          let pts = range(n).map(i => [
+            n <= 1 ? width / 2 : padX + (width - padX * 2) * i / (n - 1),
+            topY + (accumHi - accum[i]) / spanY * (botY - topY)
+          ])
+          let lx = pts[n - 1][0]
+          let ly = pts[n - 1][1]
+          if (n > 1) {
+            for i in range(n - 1) {
+              let x0 = pts[i][0]
+              let y0 = pts[i][1]
+              let x1 = pts[i + 1][0]
+              let y1 = pts[i + 1][1]
+              if (dayDone[i] ?? false) {
+                path([[x0, y0], [x1, y1], [x1, zeroY], [x0, zeroY]], closed: true, fill: alpha(chartTone, 0.12))
+                line(x0, y0, x1, y1, stroke: chartTone, width: 2.5, cap: butt)
+              } else {
+                path([[x0, y0], [x1, y1], [x1, zeroY], [x0, zeroY]], closed: true, fill: alpha(chartTone, 0.055))
+                for d in range(5) {
+                  let t0 = d / 5
+                  let t1 = t0 + 0.55 / 5
+                  line(x0 + (x1 - x0) * t0, y0 + (y1 - y0) * t0,
+                       x0 + (x1 - x0) * t1, y0 + (y1 - y0) * t1,
+                       stroke: chartTone, width: 2.5, cap: butt)
+                }
+              }
+            }
+          }
+          line(padX, zeroY, width - padX, zeroY, stroke: alpha(foreground, 0.2), width: 1)
+          circle(lx, ly, 8, fill: alpha(chartTone, 0.18))
+          circle(lx, ly, 3.5, fill: chartTone)
+          let nw = len(weeks)
+          for wi in range(nw) {
+            if ((wi + 1) % labelStep == 0 || wi == nw - 1) {
+              let x = nw <= 1 ? width / 2 : padX + (width - padX * 2) * ((wi * 5 + 2.5) / (nw * 5))
+              text("W${orderedWeeks[wi].week}", x, clamp(zeroY + 9, 8, height - 2), size: 8, align: "center", color: muted)
+            }
+          }
+        }
+      }
+
+      Box {
+        weight: 1
+        clip: true
+        Column {
+          scroll: true
+          gap: 8
+          fill: true
+          padding: [0, 0, 0, 0]
+
+          if pane == "weeks" {
+            for w, wi in weeks key w.id {
+              let act = dayMins[wi] ?? []
+              let dfs = dayDiffs[wi] ?? []
+              let worked = weekWorked[wi] ?? 0
+              let cnt = weekTargetCount[wi] ?? 0
+              let target = avgDayMin * cnt
+              let wdiff = weekDiff[wi] ?? 0
+              let running = sum(weekDiff.drop(wi))
+              let tone = wdiff > 0.5 ? green : wdiff < -0.5 ? negTone : muted
+              let wAbs = abs(round(wdiff))
+              let wText = floor(wAbs / 60) + ":" + pad(wAbs % 60, 2, "0")
+              let rAbs = abs(round(running))
+              let runText = floor(rAbs / 60) + ":" + pad(rAbs % 60, 2, "0")
+              let wSignedText = (wdiff > 0.5 ? "+" : wdiff < -0.5 ? "-" : "") + wText
+              let runSignedText = (running > 0.5 ? "+" : running < -0.5 ? "-" : "") + runText
+              let workedMin = round(worked)
+              let workedText = floor(workedMin / 60) + ":" + pad(workedMin % 60, 2, "0")
+              let targetMin = round(target)
+              let targetText = floor(targetMin / 60) + ":" + pad(targetMin % 60, 2, "0")
+              let saved = savedId == w.id && now != null && now - savedAt < 3
+              let isOpen = openWeek == w.id || (openWeek == "" && wi == 0)
+              let amTexts = range(dayCount).map(di => (w.days[di].amInM != null && w.days[di].amOutM != null && w.days[di].amOutM > w.days[di].amInM) ? fmtTime(w.days[di].amInM * 60, "HH:mm", "UTC") + "-" + fmtTime(w.days[di].amOutM * 60, "HH:mm", "UTC") : "—")
+              let pmTexts = range(dayCount).map(di => (w.days[di].pmInM != null && w.days[di].pmOutM != null && w.days[di].pmOutM > w.days[di].pmInM) ? fmtTime(w.days[di].pmInM * 60, "HH:mm", "UTC") + "-" + fmtTime(w.days[di].pmOutM * 60, "HH:mm", "UTC") : "—")
+              let rowLines = range(dayCount).map(di => "| " + dayNames[di] + " | " + amTexts[di] + " | " + pmTexts[di] + " | " + ((w.days[di].done ?? false) ? "✓" : "—") + " | " + (act[di] == null ? "—" : floor(round(act[di]) / 60) + ":" + pad(round(act[di]) % 60, 2, "0")) + " | " + (dfs[di] == null ? "—" : (dfs[di] > 0.5 ? "+" : dfs[di] < -0.5 ? "-" : "") + floor(abs(round(dfs[di])) / 60) + ":" + pad(abs(round(dfs[di])) % 60, 2, "0")) + " |")
+              let sectionText = join(["<!-- owl-week:" + w.id + " -->", "## Week " + w.week + " — " + w.date, "", "| Day | AM | PM | ✓ | Worked | ± vs avg |", "|:--|:--|:--|:-:|--:|--:|"] + rowLines + ["", "**Worked** " + workedText + " · **Target** " + targetText + " · **Week** " + wSignedText + " · **Running** " + runSignedText + " · **Holidays** " + fixed(holidayBalance, 2) + " d", "<!-- /owl-week:" + w.id + " -->"], "\n") + "\n"
+
+              Column {
+                gap: 0
+                fill: width
+
+                Row {
+                  fill: width
+                  align: center
+                  padding: [6, 6, 9, 6]
+                  onTap: openWeek = isOpen ? "none" : w.id
+
+                  Column {
+                    gap: 0
+                    weight: 1
+                    Text {
+                      spans: [
+                        {text: "W${w.week}", bold: true, color: foreground},
+                        {text: "  ${w.date}", color: muted}
+                      ]
+                      style: body
+                      fontSize: 13
+                      maxLines: 1
+                    }
+                  }
+                  Text { text: wSignedText; width: 54; align: end; style: body; fontSize: 13; color: tone; maxLines: 1 }
+                  Box {
+                    width: 24
+                    align: center
+                    Text {
+                      text: isOpen ? "▾" : "▸"
+                      style: body
+                      fontSize: 13
+                      color: accent
+                      align: center
+                    }
+                  }
+                }
+
+                Box { height: 1; fill: width; background: alpha(border, 0.35) }
+
+                if isOpen {
+                  Column {
+                    fill: width
+                    gap: 3
+                    padding: [6, 8, 6, 8]
+
+                    for d, di in w.days.take(dayCount) {
+                      let dd = dfs[di]
+                      let ddAbs = abs(round(dd))
+                      let ddText = dd == null ? "—" : (dd > 0.5 ? "+" : dd < -0.5 ? "-" : "") + floor(ddAbs / 60) + ":" + pad(ddAbs % 60, 2, "0")
+                      let ddTone = dd == null ? muted : dd > 0.5 ? green : dd < -0.5 ? negTone : muted
+                      let done = d.done ?? false
+                      Row {
+                        fill: width
+                        align: center
+                        padding: [3, 0]
+                        Text {
+                          text: dayNames[di]
+                          style: small
+                          bold: true
+                          color: dd == null ? muted : foreground
+                          width: 30
+                        }
+                        Column {
+                          weight: 1
+                          gap: 3
+                          Row {
+                            fill: width
+                            align: center
+                            gap: 0
+                            Text { text: "AM"; style: label; color: muted; width: 20; fontSize: 10 }
+                                                        Box {
+                              weight: 1
+                              height: 26
+                              align: center
+                              background: alpha(background, 0.45)
+                              border: 1
+                              borderColor: d.amIn != "" && d.amInM == null ? alpha(negTone, 0.7) : alpha(border, 0.55)
+                              radius: 6 * corners
+                              Input {
+                                text: d.amIn
+                                placeholder: "00:00"
+                                color: done ? foreground : muted
+                                width: 42
+                                fontSize: 12
+                                underline: false
+                                background: alpha(background, 0)
+                                border: 0
+                                padding: [0, 0]                                onChange: {
+                                  let raw = trim(value)
+                                  let ps = split(raw, ":")
+                                  let digits = replace(raw, ":", "")
+                                  let colonOk = len(ps) == 2
+                                  let digitOk = len(digits) == 4 && match(digits, "^[0-9]{4}$") != null
+                                  let hh = colonOk ? num(ps[0], -1) : digitOk ? num(sub(digits, 0, 2), -1) : -1
+                                  let mm = colonOk ? num(ps[1], -1) : digitOk ? num(sub(digits, 2, 4), -1) : -1
+                                  let ok = (colonOk || digitOk) && hh >= 0 && hh < 24 && mm >= 0 && mm < 60
+                                  let shown = digitOk && ok ? pad(hh, 2, "0") + ":" + pad(mm, 2, "0") : value
+                                  weeks = set(weeks, wi, set(w, "days", set(w.days, di,
+                                    set(set(d, "amIn", shown), "amInM", ok ? hh * 60 + mm : null))))
+                                }
+                              }
+                            }
+                            Text { text: "-"; width: 10; align: center; style: small; color: muted }
+                                                        Box {
+                              weight: 1
+                              height: 26
+                              align: center
+                              background: alpha(background, 0.45)
+                              border: 1
+                              borderColor: d.amOut != "" && (d.amOutM == null || (d.amInM != null && d.amOutM != null && d.amOutM <= d.amInM)) ? alpha(negTone, 0.7) : alpha(border, 0.55)
+                              radius: 6 * corners
+                              Input {
+                                text: d.amOut
+                                placeholder: "00:00"
+                                color: done ? foreground : muted
+                                width: 42
+                                fontSize: 12
+                                underline: false
+                                background: alpha(background, 0)
+                                border: 0
+                                padding: [0, 0]                                onChange: {
+                                  let raw = trim(value)
+                                  let ps = split(raw, ":")
+                                  let digits = replace(raw, ":", "")
+                                  let colonOk = len(ps) == 2
+                                  let digitOk = len(digits) == 4 && match(digits, "^[0-9]{4}$") != null
+                                  let hh = colonOk ? num(ps[0], -1) : digitOk ? num(sub(digits, 0, 2), -1) : -1
+                                  let mm = colonOk ? num(ps[1], -1) : digitOk ? num(sub(digits, 2, 4), -1) : -1
+                                  let ok = (colonOk || digitOk) && hh >= 0 && hh < 24 && mm >= 0 && mm < 60
+                                  let shown = digitOk && ok ? pad(hh, 2, "0") + ":" + pad(mm, 2, "0") : value
+                                  weeks = set(weeks, wi, set(w, "days", set(w.days, di,
+                                    set(set(d, "amOut", shown), "amOutM", ok ? hh * 60 + mm : null))))
+                                }
+                              }
+                            }
+                          }
+                          Row {
+                            fill: width
+                            align: center
+                            gap: 0
+                            Text { text: "PM"; style: label; color: muted; width: 20; fontSize: 10 }
+                                                        Box {
+                              weight: 1
+                              height: 26
+                              align: center
+                              background: alpha(background, 0.45)
+                              border: 1
+                              borderColor: d.pmIn != "" && d.pmInM == null ? alpha(negTone, 0.7) : alpha(border, 0.55)
+                              radius: 6 * corners
+                              Input {
+                                text: d.pmIn
+                                placeholder: "00:00"
+                                color: done ? foreground : muted
+                                width: 42
+                                fontSize: 12
+                                underline: false
+                                background: alpha(background, 0)
+                                border: 0
+                                padding: [0, 0]                                onChange: {
+                                  let raw = trim(value)
+                                  let ps = split(raw, ":")
+                                  let digits = replace(raw, ":", "")
+                                  let colonOk = len(ps) == 2
+                                  let digitOk = len(digits) == 4 && match(digits, "^[0-9]{4}$") != null
+                                  let hh = colonOk ? num(ps[0], -1) : digitOk ? num(sub(digits, 0, 2), -1) : -1
+                                  let mm = colonOk ? num(ps[1], -1) : digitOk ? num(sub(digits, 2, 4), -1) : -1
+                                  let ok = (colonOk || digitOk) && hh >= 0 && hh < 24 && mm >= 0 && mm < 60
+                                  let shown = digitOk && ok ? pad(hh, 2, "0") + ":" + pad(mm, 2, "0") : value
+                                  weeks = set(weeks, wi, set(w, "days", set(w.days, di,
+                                    set(set(d, "pmIn", shown), "pmInM", ok ? hh * 60 + mm : null))))
+                                }
+                              }
+                            }
+                            Text { text: "-"; width: 10; align: center; style: small; color: muted }
+                                                        Box {
+                              weight: 1
+                              height: 26
+                              align: center
+                              background: alpha(background, 0.45)
+                              border: 1
+                              borderColor: d.pmOut != "" && (d.pmOutM == null || (d.pmInM != null && d.pmOutM != null && d.pmOutM <= d.pmInM)) ? alpha(negTone, 0.7) : alpha(border, 0.55)
+                              radius: 6 * corners
+                              Input {
+                                text: d.pmOut
+                                placeholder: "00:00"
+                                color: done ? foreground : muted
+                                width: 42
+                                fontSize: 12
+                                underline: false
+                                background: alpha(background, 0)
+                                border: 0
+                                padding: [0, 0]                                onChange: {
+                                  let raw = trim(value)
+                                  let ps = split(raw, ":")
+                                  let digits = replace(raw, ":", "")
+                                  let colonOk = len(ps) == 2
+                                  let digitOk = len(digits) == 4 && match(digits, "^[0-9]{4}$") != null
+                                  let hh = colonOk ? num(ps[0], -1) : digitOk ? num(sub(digits, 0, 2), -1) : -1
+                                  let mm = colonOk ? num(ps[1], -1) : digitOk ? num(sub(digits, 2, 4), -1) : -1
+                                  let ok = (colonOk || digitOk) && hh >= 0 && hh < 24 && mm >= 0 && mm < 60
+                                  let shown = digitOk && ok ? pad(hh, 2, "0") + ":" + pad(mm, 2, "0") : value
+                                  weeks = set(weeks, wi, set(w, "days", set(w.days, di,
+                                    set(set(d, "pmOut", shown), "pmOutM", ok ? hh * 60 + mm : null))))
+                                }
+                              }
+                            }
+                          }
+                        }
+                        Text { text: ddText; width: 54; align: end; style: body; color: ddTone; maxLines: 1 }
+                        Box {
+                          width: 24
+                          height: 24
+                          align: center
+                          radius: 6 * corners
+                          background: done ? alpha(green, 0.18) : alpha(background, 0.2)
+                          border: 1
+                          borderColor: done ? alpha(green, 0.7) : alpha(border, 0.55)
+                          onTap: {
+                            weeks = set(weeks, wi, set(w, "days", set(w.days, di,
+                              set(d, "done", !done))))
+                          }
+                          Text {
+                            text: done ? "󰄬" : ""
+                            font: icon
+                            fontSize: 12
+                            color: green
+                            align: center
+                          }
+                        }
+                      }
+                      if di < dayCount - 1 {
+                        Box { height: 1; fill: width; background: alpha(border, 0.28); padding: [0, 38, 0, 0] }
+                      }
+                    }
+
+                    Row {
+                      fill: width
+                      align: center
+                      gap: 10.3
+                      padding: [61, 6, 0, 2]
+                      Box {
+                      width: editBoxW
+                      height: 26
+                      align: center
+                      background: alpha(accent, 0.09)
+                      radius: 8 * corners
+                      border: 1
+                      borderColor: alpha(accent, 0.3)
+                      onTap: {
+                        if len(weeks) > 0 {
+                          let mon = (parseTime(weeks[0].date + " 12:00", "dd/MM/yy HH:mm") ?? weeks[0].monday) + 604800
+                          let wid = "${fmtTime(mon, 'ww')}-${mon}"
+                          weeks = [{
+                            id: wid,
+                            week: int(fmtTime(mon, "ww")),
+                            monday: mon,
+                            date: fmtTime(mon, "dd/MM/yy"),
+                            days: stdDays
+                          }] + weeks
+                          openWeek = wid
+                        }
+                      }
+                      Text { text: "add W${nextWk}"; fontSize: 12; color: accent; align: center; maxLines: 1 }
+                    }
+                    Box {
+                      width: editBoxW
+                      height: 26
+                      align: center
+                      background: confirmRemove == footerWeek.id ? alpha(negTone, 0.16) : alpha(background, 0.35)
+                      radius: 8 * corners
+                      border: 1
+                      borderColor: confirmRemove == footerWeek.id ? alpha(negTone, 0.55) : alpha(border, 0.55)
+                      onTap: {
+                        if (confirmRemove == footerWeek.id) {
+                          weeks = weeks.filter(x => x.id != footerWeek.id)
+                          if (openId == footerWeek.id) { openWeek = "none" }
+                          if (savedId == footerWeek.id) { savedId = "" }
+                          confirmRemove = ""
+                        } else {
+                          confirmRemove = footerWeek.id
+                        }
+                      }
+                      Text { text: confirmRemove == footerWeek.id ? "sure?" : "delete"; fontSize: 12; color: negTone; align: center; maxLines: 1 }
+                    }
+                    Box {
+                      width: editBoxW
+                      height: 26
+                      align: center
+                      background: fwSaved ? alpha(green, 0.16) : alpha(accent, 0.14)
+                      radius: 8 * corners
+                      border: 1
+                      borderColor: fwSaved ? alpha(green, 0.45) : alpha(accent, 0.3)
+                      onTap: {
+                        pendingSection = fwSectionText
+                        pendingTag = footerWeek.id
+                        run("f=\"$HOME/Downloads/timesheet.md\"; mkdir -p \"$(dirname \"$f\")\"; [ -s \"$f\" ] || { echo '# Timesheet'; echo; } > \"$f\"; tmp=$(mktemp); printf %s ${sh(pendingSection)} > \"$tmp\"; awk -v tag=${sh(pendingTag)} -v sec=\"$tmp\" 'BEGIN { while ((getline l < sec) > 0) s = s l ORS } $0 == \"<!-- owl-week:\" tag \" -->\" { printf \"%s\", s; skip=1; found=1; next } skip && $0 == \"<!-- /owl-week:\" tag \" -->\" { skip=0; next } skip { next } { print } END { if (!found) { print \"\"; printf \"%s\", s } }' \"$f\" > \"$f.new\"; mv \"$f.new\" \"$f\"; rm -f \"$tmp\"")
+                        savedId = footerWeek.id
+                        savedAt = now
+                      }
+                      Row {
+                        align: center
+                        justify: center
+                        Text { text: fwSaved ? "saved ✓" : "save"; style: body; color: fwSaved ? green : accent; maxLines: 1 }
+                      }
+                    }
+                  }
+                  }
+                }
+              }
+              if wi < len(weeks) - 1 {
+                Box { height: 1; fill: width; background: alpha(border, 0.28) }
+              }
+            }
+          } else {
+            Column {
+              gap: 8
+              fill: width
+
+              Text { text: "SET AVERAGE WEEK (MON-FRI)"; style: label; color: muted; letterSpacing: 1.2 }
+              Row {
+                align: center
+                gap: 10
+                Column {
+                  gap: 0
+                  weight: 1
+                  Row {
+                    align: end
+                    gap: 4
+                    Text { text: fixed(avgWeekHrs, 2); fontSize: 32; fontWeight: 500; color: accent; maxLines: 1 }
+                    Text { text: "hours"; style: small; color: muted; padding: [0, 0, 0, 4] }
+                  }
+                  Text { text: "avg day ${avgDayText}"; style: small; color: muted }
+                }
+                Box {
+                  width: 84
+                  height: 30
+                  align: center
+                  background: alpha(background, 0.45)
+                  border: 1
+                  borderColor: alpha(border, 0.55)
+                  radius: 6 * corners
+                  Input {
+                    text: avgWeekText
+                    width: 44
+                    fontSize: 13
+                    underline: false
+                    background: alpha(background, 0)
+                    border: 0
+                    padding: [0, 0]
+                    onChange: {
+                      avgWeekText = value
+                      let v = num(value, -1)
+                      if v >= 0 && v <= 80 { avgWeekHrs = v }
+                    }
+                  }
+                }
+              }
+              Slider {
+                value: avgWeekHrs
+                min: 0
+                max: 60
+                step: 0.25
+                live: true
+                onChange: {
+                  avgWeekHrs = value
+                  avgWeekText = fixed(value, 2)
+                }
+              }
+              Row {
+                fill: width
+                align: center
+                gap: 8
+                padding: [2, 0, 0, 0]
+                Text { text: "Add Sat & Sun to your week"; style: body; color: foreground; weight: 1; maxLines: 1 }
+                Box {
+                  width: 24
+                  height: 24
+                  align: center
+                  radius: 6 * corners
+                  background: includeWeekend ? alpha(green, 0.18) : alpha(background, 0.2)
+                  border: 1
+                  borderColor: includeWeekend ? alpha(green, 0.7) : alpha(border, 0.55)
+                  onTap: {
+                    let next = !includeWeekend
+                    includeWeekend = next
+                    if (next) {
+                      weeks = weeks.map(w => len(w.days) < 7 ? set(w, "days", w.days + weekendDays) : w)
+                    }
+                  }
+                  Text { text: includeWeekend ? "󰄬" : ""; font: icon; fontSize: 12; color: green; align: center }
+                }
+              }
+            }
+
+            Box { height: 1; fill: width; background: alpha(border, 0.35) }
+
+            Column {
+              gap: 8
+              fill: width
+
+              Text { text: "SET HOLIDAYS"; style: label; color: muted; letterSpacing: 1.2 }
+              Row {
+                align: center
+                gap: 6
+                Text { text: fixed(holidayDays, 2); fontSize: 32; fontWeight: 500; color: accent; maxLines: 1 }
+                Text { text: "days"; style: small; color: muted; padding: [6, 0, 0, 0] }
+                Box { weight: 1; height: 1 }
+                Box {
+                  width: 34
+                  height: 30
+                  align: center
+                  background: alpha(background, 0.45)
+                  border: 1
+                  borderColor: alpha(accent, 0.3)
+                  radius: 8 * corners
+                  onTap: { let v = max(0, holidayDays - 1); holidayDays = v; holidayText = fixed(v, 2) }
+                  Text { text: "-"; style: title; color: accent; align: center; width: 34 }
+                }
+                Box {
+                  width: 34
+                  height: 30
+                  align: center
+                  background: alpha(background, 0.45)
+                  border: 1
+                  borderColor: alpha(accent, 0.3)
+                  radius: 8 * corners
+                  onTap: { let v = holidayDays + 1; holidayDays = v; holidayText = fixed(v, 2) }
+                  Text { text: "+"; style: title; color: accent; align: center; width: 34 }
+                }
+                Box {
+                  width: 84
+                  height: 30
+                  align: center
+                  background: alpha(background, 0.45)
+                  border: 1
+                  borderColor: alpha(border, 0.55)
+                  radius: 6 * corners
+                  Input {
+                    text: holidayText
+                    width: 44
+                    fontSize: 13
+                    underline: false
+                    background: alpha(background, 0)
+                    border: 0
+                    padding: [0, 0]
+                    onChange: {
+                      holidayText = value
+                      let v = num(value, -1)
+                      if v >= 0 { holidayDays = v }
+                    }
+                  }
+                }
+              }
+              Box { height: 1; fill: width; background: alpha(border, 0.35) }
+
+              Column {
+                gap: 8
+                fill: width
+                Text { text: "Select folder to save to"; style: body; color: foreground; maxLines: 1 }
+                Row {
+                  fill: width
+                  align: center
+                  gap: 8
+                  Box {
+                    width: 34
+                    height: 30
+                    align: center
+                    background: alpha(background, 0.35)
+                    border: 1
+                    borderColor: alpha(accent, 0.3)
+                    radius: 8 * corners
+                    onTap: run("omarchy-files \"$HOME/Downloads\"")
+                    Canvas {
+                      width: 20
+                      height: 20
+                      path([[2, 6], [2, 17], [18, 17], [18, 8], [9, 8], [7, 5], [2, 5]], closed: true, fill: alpha(accent, 0.16), stroke: accent, width: 1.2)
+                    }
+                  }
+                  Column {
+                    gap: 1
+                    weight: 1
+                    Text { text: "Launcher Files/Home/Downloads"; style: small; color: foreground; maxLines: 2 }
+                    Text { text: saveFileName; style: small; color: muted; maxLines: 1 }
+                  }
+                  Box {
+                    width: 68
+                    height: 28
+                    align: center
+                    background: settingsSaved ? alpha(green, 0.16) : alpha(accent, 0.14)
+                    radius: 8 * corners
+                    border: 1
+                    borderColor: settingsSaved ? alpha(green, 0.45) : alpha(accent, 0.3)
+                    onTap: {
+                      if len(saveExts) > 0 {
+                        if (saveMd) {
+                          run("tmp=$(mktemp); printf %s ${sh(fullTimesheetText)} > \"$tmp\"; mkdir -p \"$HOME/Downloads\"; cp \"$tmp\" \"$HOME/Downloads/timesheet.md\"; rm -f \"$tmp\"")
+                        }
+                        if (saveTxt) {
+                          run("tmp=$(mktemp); printf %s ${sh(fullTimesheetText)} > \"$tmp\"; mkdir -p \"$HOME/Downloads\"; cp \"$tmp\" \"$HOME/Downloads/timesheet.txt\"; rm -f \"$tmp\"")
+                        }
+                        if (saveCsv) {
+                          run("tmp=$(mktemp); printf %s ${sh(fullTimesheetCsv)} > \"$tmp\"; mkdir -p \"$HOME/Downloads\"; cp \"$tmp\" \"$HOME/Downloads/timesheet.csv\"; rm -f \"$tmp\"")
+                        }
+                        settingsSavedAt = now
+                      }
+                    }
+                    Row {
+                      align: center
+                      justify: center
+                      Text { text: settingsSaved ? "saved ✓" : "save"; style: body; color: settingsSaved ? green : accent; maxLines: 1 }
+                    }
+                  }
+                }
+                Row {
+                  fill: width
+                  align: center
+                  gap: 8
+                  padding: [0, 0, 0, 0]
+                  Text { text: "save as:"; style: small; color: muted; maxLines: 1 }
+                  Row {
+                    align: center
+                    gap: 5
+                    Text { text: ".md"; style: small; color: foreground; maxLines: 1 }
+                    Box {
+                      width: 20
+                      height: 20
+                      align: center
+                      radius: 5 * corners
+                      background: saveMd ? alpha(green, 0.18) : alpha(background, 0.2)
+                      border: 1
+                      borderColor: saveMd ? alpha(green, 0.7) : alpha(accent, 0.3)
+                      onTap: saveMd = !saveMd
+                      Text { text: saveMd ? "󰄬" : ""; font: icon; fontSize: 10; color: green; align: center }
+                    }
+                  }
+                  Row {
+                    align: center
+                    gap: 5
+                    Text { text: ".txt"; style: small; color: foreground; maxLines: 1 }
+                    Box {
+                      width: 20
+                      height: 20
+                      align: center
+                      radius: 5 * corners
+                      background: saveTxt ? alpha(green, 0.18) : alpha(background, 0.2)
+                      border: 1
+                      borderColor: saveTxt ? alpha(green, 0.7) : alpha(accent, 0.3)
+                      onTap: saveTxt = !saveTxt
+                      Text { text: saveTxt ? "󰄬" : ""; font: icon; fontSize: 10; color: green; align: center }
+                    }
+                  }
+                  Row {
+                    align: center
+                    gap: 5
+                    Text { text: ".csv"; style: small; color: foreground; maxLines: 1 }
+                    Box {
+                      width: 20
+                      height: 20
+                      align: center
+                      radius: 5 * corners
+                      background: saveCsv ? alpha(green, 0.18) : alpha(background, 0.2)
+                      border: 1
+                      borderColor: saveCsv ? alpha(green, 0.7) : alpha(accent, 0.3)
+                      onTap: saveCsv = !saveCsv
+                      Text { text: saveCsv ? "󰄬" : ""; font: icon; fontSize: 10; color: green; align: center }
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+        }
+      }
+    }
+      Row {
+        fill: width
+        height: 30
+        justify: end
+        padding: [0, 0, 24, 0]
+        offset: [0, -42]
+        Box {
+          width: 34
+          height: 30
+          align: center
+          radius: 8 * corners
+          background: alpha(background, 0)
+          border: pane != "weeks" ? 1 : 0
+          borderColor: alpha(accent, 0.55)
+          onTap: pane = pane == "settings" ? "weeks" : "settings"
+          Text {
+            text: pane != "weeks" ? "<" : "⚙"
+            font: sans
+            fontSize: 20
+            color: accent
+            align: center
+            maxLines: 1
+          }
+        }
+      }
+    }
+  }
+}

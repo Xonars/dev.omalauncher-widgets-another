@@ -1,0 +1,103 @@
+# TAGLINE
+
+secure password and key storage daemon
+
+# TLDR
+
+**Start keyring daemon**
+
+```gnome-keyring-daemon --start```
+
+**Start with specific components**
+
+```gnome-keyring-daemon --start --components=secrets,ssh```
+
+**Replace running daemon**
+
+```gnome-keyring-daemon --replace```
+
+**Store a secret via CLI**
+
+```secret-tool store --label="My Secret" service myapp```
+
+**Lookup secret**
+
+```secret-tool lookup service myapp```
+
+# SYNOPSIS
+
+**gnome-keyring-daemon** [_options_]
+
+# PARAMETERS
+
+**--start**
+> Start daemon if not running.
+
+**--replace**
+> Replace running daemon.
+
+**--components** _list_
+> Components: secrets, pkcs11, ssh.
+
+**--daemonize**
+> Run as daemon.
+
+**-f**, **--foreground**
+> Run in foreground.
+
+**--unlock**
+> Read a password from stdin and unlock the login keyring, or create it if it does not exist.
+
+**-l**, **--login**
+> Read login password from stdin (used by PAM).
+
+**-C**, **--control-directory** _directory_
+> Directory for creating communication sockets.
+
+**-V**, **--version**
+> Print version and exit.
+
+# DESCRIPTION
+
+**GNOME Keyring** is a daemon that stores secrets, passwords, and keys. It provides secure storage for applications and handles SSH key management.
+
+The keyring is typically started at login and unlocked with the user's password. Applications access it through libsecret or the Secret Service D-Bus API.
+
+# COMPONENTS
+
+- **secrets**: Password/secret storage
+- **ssh**: SSH agent (replaces ssh-agent)
+- **pkcs11**: PKCS#11 smart card support
+
+# CONFIGURATION
+
+**~/.local/share/keyrings/**
+> Directory containing keyring data files.
+
+# CAVEATS
+
+Usually started by desktop session. SSH component may conflict with ssh-agent. Keyring locked when session locks. Non-GNOME desktops may need manual setup.
+
+# HISTORY
+
+GNOME Keyring was created for the GNOME desktop to provide secure credential storage. It implements the freedesktop.org Secret Service specification for cross-desktop compatibility.
+
+# INSTALL
+
+```apt: sudo apt install gnome-keyring```
+
+```dnf: sudo dnf install gnome-keyring```
+
+```pacman: sudo pacman -S gnome-keyring```
+
+```apk: sudo apk add gnome-keyring```
+
+```zypper: sudo zypper install gnome-keyring```
+
+```nix: nix profile install nixpkgs#gnome-keyring```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[secret-tool](/man/secret-tool)(1), [ssh-agent](/man/ssh-agent)(1), [gpg](/man/gpg)(1)

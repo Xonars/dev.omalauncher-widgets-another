@@ -1,0 +1,282 @@
+app "linux commands" {
+  requires { pacman: ["bash", "pacman", "grep", "python"] }
+  meta { owl: 8; description: "The Linux Command Library: 9,000+ commands with examples and options, cheat sheets and terminal tips"; version: "1.6"; license: "Apache-2.0"; category: "dev" }
+  title: tab == "settings" ? (ru ? "Настройки" : "Settings") : sel != "" ? sel : basic != "" ? get(ru ? titlesRu : titles, basic, basic) : (ru ? "Команды Linux" : "linux commands")
+  // Back goes from a page to the one before it (a command's "see also" chain), then to the list.
+  back: sel != "" || basic != ""
+  onBack: { was = sel == "" || prev == "" || url == "commands/${prev}.md" ? null : page; url = sel == "" || prev == "" ? url : "commands/${prev}.md"; basic = ""; sel = prev; back = drop(back, 1); copied = "" }
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="4" y="7" width="40" height="34" rx="4"/>
+    <path d="m12 17 8 7-8 7M27 31h9"/>
+  </svg>"""
+
+  let TIPS = "tips.md"
+
+  state language = "ru" persist
+  let ru = language == "ru"
+  state tab = "commands" persist
+  // The Linux Command Library app's own tab icons.
+  asset puzzle = base64"PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0iI2ZmZiIgZD0iTTIwLDljMCwtMS4xIC0wLjksLTIgLTIsLTJoLTMuMmMtMC40LDAgLTAuNiwtMC40IC0wLjQsLTAuN0MxNC43LDUuNyAxNSw1IDE1LDQuNUMxNSwzLjEgMTMuOSwyIDEyLjUsMlMxMCwzLjEgMTAsNC41YzAsMC41IDAuMywxLjIgMC42LDEuOEMxMC44LDYuNiAxMC41LDcgMTAuMiw3SDZDNC45LDcgNCw3LjkgNCw5bDAsMi40YzAsMC42IDAuNiwxLjEgMS4yLDAuOWMwLjUsLTAuMiAxLC0wLjMgMS4zLC0wLjNDNy45LDEyIDksMTMuMSA5LDE0LjVDOSwxNS45IDcuOSwxNyA2LjUsMTdjLTAuMywwIC0wLjgsLTAuMSAtMS4zLC0wLjNDNC42LDE2LjYgNCwxNyA0LDE3LjZMNCwyMGMwLDEuMSAwLjksMiAyLDJoMTJjMS4xLDAgMiwtMC45IDIsLTJWOXoiLz48L3N2Zz4="
+  asset idea = base64"PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0iI2ZmZiIgZD0iTTExLjkwNiwyQzguMjA2LDIuMSA1LjEsNS4wODggNSw4LjY4OEM0LjksMTEuMDg3IDYuMDEyLDEzLjI5NCA3LjgxMywxNC41OTRDOC42MTMsMTUuMTk0IDksMTYuMSA5LDE3TDE1LDE3QzE1LDE2LjEgMTUuMzk0LDE1LjE5NCAxNi4wOTQsMTQuNTk0QzE3Ljg5NCwxMy4zOTQgMTksMTEuMyAxOSw5QzE5LDUuMSAxNS44MDYsMS45IDExLjkwNiwyek05LDE4TDksMTlDOSwyMC4xNjkgOS42MjYsMjAuNjcyIDEwLjU2MywyMC44NzVDMTAuNzQzLDIxLjUgMTEuMzMzLDIyIDEyLDIyQzEyLjY2NywyMiAxMy4yNTcsMjEuNSAxMy40MzgsMjAuODc1QzE0LjM3NCwyMC42NzIgMTUsMjAuMTY5IDE1LDE5TDE1LDE4TDksMTh6Ii8+PC9zdmc+"
+  asset search = base64"PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0iI2ZmZiIgZD0iTTE1LjUsMTRoLTAuNzlsLTAuMjgsLTAuMjdDMTUuNDEsMTIuNTkgMTYsMTEuMTEgMTYsOS41IDE2LDUuOTEgMTMuMDksMyA5LjUsM1MzLDUuOTEgMyw5LjUgNS45MSwxNiA5LjUsMTZjMS42MSwwIDMuMDksLTAuNTkgNC4yMywtMS41N2wwLjI3LDAuMjh2MC43OWw1LDQuOTlMMjAuNDksMTlsLTQuOTksLTV6TTkuNSwxNEM3LjAxLDE0IDUsMTEuOTkgNSw5LjVTNy4wMSw1IDkuNSw1IDE0LDcuMDEgMTQsOS41IDExLjk5LDE0IDkuNSwxNHoiLz48L3N2Zz4="
+  asset settingsIcon = base64"PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjZmZmIiBzdHJva2Utd2lkdGg9IjIiPjxjaXJjbGUgY3g9IjEyIiBjeT0iMTIiIHI9IjQiLz48cGF0aCBkPSJNMTAgMmg0bDEgMyAzIDEgMyA0djRsLTMgMS0xIDMtMyAzaC00bC0xLTMtMy0xLTMtM3YtNGwzLTEgMS0zeiIvPjwvc3ZnPg=="
+  state q = ""
+  // The command or basics page shown ("" for the lists), and the commands to go back to.
+  state sel = ""
+  state basic = ""
+  state back = []
+  // The local page path. Results include their path and language to avoid showing stale content.
+  state url = "tips.md"
+  state was = null
+  state copied = ""
+
+  source idx = file("~/.config/omalauncher/widgets/linux-commands-data/en/commands/index.txt")
+  source bidx = file("~/.config/omalauncher/widgets/linux-commands-data/en/basics/index.txt")
+  // Installed packages, when Linux is: libraries and language modules are left out, so the
+  // list stays under owl's 1000 items. Packages with a page in the library show on the start page.
+  source pkgs = cmd("pacman -Qq | grep -Ev '^(lib|python-|perl-|lua-|ruby-|node-|haskell-|ttf-|otf-|noto-|xorg-|qt[56]-|gst)'") every 10m optional
+  // Read the selected page from the local snapshot; language and path identify the result.
+  source page = cmd("python ~/.config/omalauncher/widgets/linux-commands-data/read-page.py ${sh(language)} ${sh(url)}") every 24h json
+
+  let ready = page != null && page.path == url && page.lang == language
+  let doc = ready && page.ok ? page.out : ""
+
+  // The index has 9,000+ lines and lists stop at 1000, so it's searched as one text.
+  let qq = replace(trim(q), '\E', "")
+  let starts = qq == "" || idx == null ? [] : matchAll(idx, '(?im)^\Q' + qq + '\E[^\n]*(?=\.md$)')
+  let inside = qq == "" || idx == null ? [] : matchAll(idx, '(?im)^[^\n]+\Q' + qq + '\E[^\n]*(?=\.md$)').filter(n => !startsWith(lower(n), lower(qq)))
+  let exact = starts.filter(n => lower(n) == lower(qq))
+  let hits = (exact + starts.filter(n => lower(n) != lower(qq)).sort() + inside.sort()).take(80)
+  let names = idx == null ? "" : "\n${idx}\n"
+  let mine = pkgs == null || idx == null ? [] : lines(pkgs).filter(p => contains(names, "\n${trim(p)}.md\n")).map(p => trim(p))
+  let popular = ["tar", "grep", "find", "ssh", "git", "curl", "sed", "awk", "rsync", "systemctl", "pacman", "chmod", "ps", "ffmpeg", "tmux", "journalctl"]
+
+  // A command page: its sections in the order the app shows them.
+  let FIRST = ["TLDR", "NAME", "SYNOPSIS", "DESCRIPTION", "PARAMETERS", "OPTIONS", "EXAMPLES", "CONFIGURATION"]
+  let LAST = ["INSTALL", "CAVEATS", "HISTORY", "AUTHOR", "SEE ALSO", "RESOURCES"]
+  let secs = sel == "" ? [] : split("\n" + doc, "\n# ").drop(1).map(s => match(s, '^([^\n]*)\n?([\s\S]*)$'))
+  let tagline = trim((secs.find(s => s[0] == "TAGLINE") ?? ["", ""])[1])
+  let shown = secs.filter(s => s[0] != "TAGLINE" && trim(s[1]) != "").sortBy(s => indexOf(FIRST, s[0]) >= 0 ? indexOf(FIRST, s[0]) : indexOf(LAST, s[0]) >= 0 ? 89 + indexOf(LAST, s[0]) : 50)
+  let prev = first(back) ?? ""
+
+  let titles = {aitools: "AI tools", backupimaging: "Backup & Imaging", compressionarchiving: "Compression & Archiving", cryptocurrencies: "Cryptocurrencies", emacstexteditor: "Emacs Text Editor", filesfolders: "Files & Folders", git: "Git", hackingtools: "Hacking tools", input: "Input", json: "JSON", microtexteditor: "Micro Text Editor", nanotexteditor: "Nano Text Editor", network: "Network", oneliners: "One-liners", packagemanager: "Package manager", picotexteditor: "Pico Text Editor", printing: "Printing", regularexpressions: "Regular Expressions", searchfind: "Search & Find", shellscripting: "Shell Scripting", ssh: "SSH", systemcontrol: "System control", systeminformation: "System information", systemrecovery: "System Recovery", terminalgames: "Terminal games", textprocessing: "Text Processing", tmux: "Tmux", usersgroups: "Users & Groups", videoaudio: "Video & Audio", vimtexteditor: "VIM Text Editor"}
+  let titlesRu = {"aitools": "Инструменты ИИ", "backupimaging": "Резервные копии и образы", "compressionarchiving": "Архивация и сжатие", "cryptocurrencies": "Криптовалюты", "emacstexteditor": "Редактор Emacs", "filesfolders": "Файлы и папки", "git": "Git", "hackingtools": "Инструменты безопасности", "input": "Ввод", "json": "JSON", "microtexteditor": "Редактор Micro", "nanotexteditor": "Редактор Nano", "network": "Сеть", "oneliners": "Однострочные команды", "packagemanager": "Управление пакетами", "picotexteditor": "Редактор Pico", "printing": "Печать", "regularexpressions": "Регулярные выражения", "searchfind": "Поиск", "shellscripting": "Сценарии оболочки", "ssh": "SSH", "systemcontrol": "Управление системой", "systeminformation": "Информация о системе", "systemrecovery": "Восстановление системы", "terminalgames": "Игры в терминале", "textprocessing": "Обработка текста", "tmux": "Tmux", "usersgroups": "Пользователи и группы", "videoaudio": "Видео и аудио", "vimtexteditor": "Редактор Vim"}
+  let sectionRu = {"TLDR": "Краткие примеры", "NAME": "Название", "SYNOPSIS": "Синтаксис", "DESCRIPTION": "Описание", "PARAMETERS": "Параметры", "OPTIONS": "Опции", "EXAMPLES": "Примеры", "CONFIGURATION": "Настройка", "INSTALL": "Установка", "CAVEATS": "Особенности", "HISTORY": "История", "AUTHOR": "Автор", "RESOURCES": "Ресурсы", "SEE ALSO": "Смотрите также"}
+  let basics = bidx == null ? [] : lines(bidx).map(l => replace(trim(l), ".md", "")).sortBy(b => lower(get(ru ? titlesRu : titles, b, b)))
+
+  // A tab of the bottom bar, as in the mobile app: an icon in a pill when it's the one open, and its name.
+  component Tab(name, icon) {
+    Column {
+      weight: 1
+      align: center
+      gap: 4
+      padding: [0, 6]
+      onTap: { tab = name; sel = ""; basic = ""; back = []; was = name != "tips" || url == TIPS ? null : page; url = name == "tips" ? TIPS : url; haptic() }
+      Box {
+        align: center
+        width: 48
+        height: 32
+        Image { src: icon; size: 24; tint: tab == name ? foreground : muted }
+      }
+      Text { text: ru ? get({basics: "Основы", tips: "Советы", commands: "Команды", settings: "Настройки"}, name, name) : name; style: small; align: center; maxLines: 1; bold: tab == name; color: tab == name ? foreground : muted }
+    }
+  }
+
+  // A command name that opens its page; from a command page, back returns to it.
+  component Chip(name, push = false) {
+    Text {
+      text: name; font: mono; style: small; align: center; maxLines: 1; width: len(name) * 8 + 22; padding: [0, 6]; radius: 3 * corners
+      background: alpha(foreground, 0.06)
+      onTap: { back = push ? [sel] + back : []; was = url == "commands/${name}.md" ? null : page; url = "commands/${name}.md"; sel = name; copied = "" }
+    }
+  }
+
+  // One line of a page, or one ``` block, with the markdown taken out.
+  component Block(b, flags = false, install = false) {
+    let unlinked = join(matchAll(b, '\[([^\]]*)\]\([^)]*\)|([^\[]+|\[)').map(m => m[0] + m[1]), "")
+    let plain = join(matchAll(unlinked, '[^*_`]+|(?<!\*)\*(?!\*)|(?<=[A-Za-z0-9])_(?=[A-Za-z0-9])'), "")
+    // A table's |---| line under its header is left out.
+    let kind = startsWith(b, "```") ? "code" : startsWith(b, "|") ? (match(b, '^[|:\- ]+$') == null ? "row" : "rule") : startsWith(b, "> ") ? "option" : startsWith(b, "## ") ? "heading" : startsWith(b, "- ") ? "bullet" : flags && startsWith(b, "**") ? "flag" : "text"
+    let code = match(unlinked, '^```(?:[a-z]*\n)?([\s\S]*?)\n?```$')[0] ?? unlinked
+    // An install line reads "pacman: sudo pacman -S tar"; only the command is copied.
+    let cmd = install ? match(code, '^[\w-]+: (.*)$')[0] ?? code : code
+    let cells = split(trim(plain), "|")
+    if kind == "code" {
+      Text {
+        text: code; font: mono; style: small; fill: width; padding: [10, 8]; radius: 4 * corners
+        color: copied == cmd ? accent : foreground
+        background: copied == cmd ? alpha(accent, 0.12) : alpha(foreground, 0.06)
+        onTap: { copy(cmd); copied = cmd; haptic() }
+      }
+    }
+    if kind == "row" {
+      Row {
+        gap: 10
+        align: top
+        for c in cells.drop(1).take(max(len(cells) - 2, 0)) { Text { text: trim(c); style: small; weight: 1 } }
+      }
+    }
+    if kind == "option" { Text { text: trim(drop(plain, 2)); color: muted; padding: [16, 0, 0, 4] } }
+    if kind == "heading" { Text { text: trim(drop(plain, 3)); bold: true; padding: [0, 10, 0, 0] } }
+    if kind == "bullet" { Text { text: "•  ${trim(drop(plain, 2))}"; padding: [8, 0, 0, 0] } }
+    if kind == "flag" { Text { text: plain; font: mono; color: accent } }
+    if kind == "text" { Text { text: plain } }
+  }
+
+  component Body(md, flags = false, install = false) {
+    Column {
+      gap: 8
+      fill: width
+      // Fenced blocks (one line or several), then every other line; page titles and comments are left out.
+      // Install lines put Arch's first.
+      for b in matchAll(md, '```[^`\n]*\n[\s\S]*?\n```|```[^\n]*?```|[^\n]+').filter(l => !startsWith(l, "# ") && !startsWith(l, "<!--")).sortBy(l => install && !startsWith(l, "```pacman") ? 1 : 0) {
+        Block { b: b; flags: flags; install: install }
+      }
+    }
+  }
+
+  component Status() {
+    if !ready {
+      Text { text: ru ? "Загрузка…" : "loading…"; color: muted }
+    } else {
+      if !page.ok {
+        Text { text: ru ? "Локальная страница не найдена" : "Local page not found"; color: muted }
+        Button { text: ru ? "Повторить" : "try again"; onTap: refresh() }
+      }
+    }
+  }
+
+  Column {
+    fill: true
+    gap: 0
+    // The pages keep a margin; the bar below runs to the screen's edges.
+    Column {
+      weight: 1
+      gap: 10
+      padding: [12, 0, 12, 10]
+      if tab == "settings" {
+        Column {
+          gap: 16
+          Text { text: ru ? "Язык" : "Language"; style: title }
+          Button { text: language == "ru" ? "● Русский" : "Русский"; onTap: { language = "ru"; copied = "" } }
+          Button { text: language == "en" ? "● English" : "English"; onTap: { language = "en"; copied = "" } }
+          Text { text: ru ? "Справочник хранится на устройстве и работает без интернета. Русские примеры — tldr; если перевода нет, показан английский оригинал." : "The library is stored on this device and works offline. Russian examples come from tldr; untranslated pages use the English original."; color: muted }
+          Text { text: "Linux Command Library · Apache 2.0\ntldr-pages · CC BY 4.0"; style: small; color: muted }
+        }
+      }
+      if tab == "commands" && sel == "" {
+        Row {
+          align: center
+          Input { text: q; placeholder: ru ? "Поиск команд" : "search commands"; weight: 1; onChange: { q = value; copied = "" } }
+          if q != "" {
+            Text { text: "✕"; color: muted; width: 32; align: center; onTap: q = "" }
+          }
+        }
+        Column {
+          scroll: true
+          weight: 1
+          gap: 2
+          if idx == null {
+            Text { text: ru ? "Загрузка списка команд…" : "loading the command list…"; color: muted }
+          } else {
+            if qq == "" {
+              Text { text: len(mine) > 0 ? (ru ? "Установлены (${len(mine)})" : "installed (${len(mine)})") : (ru ? "Популярные" : "popular"); style: label; color: muted; padding: [0, 6, 0, 4] }
+              Flow {
+                gap: 6
+                for n in len(mine) > 0 ? mine : popular key n { Chip { name: n } }
+              }
+            } else {
+              if len(hits) == 0 {
+                Text { text: ru ? "Нет команд по запросу «${qq}»" : "no command matches “${qq}”"; color: muted }
+              }
+              for n in hits key n {
+                Text { text: n; font: mono; fill: width; maxLines: 1; padding: [4, 9]; onTap: { back = []; was = url == "commands/${n}.md" ? null : page; url = "commands/${n}.md"; sel = n; copied = "" } }
+              }
+            }
+          }
+        }
+      }
+
+      if tab == "commands" && sel != "" {
+        Column {
+          scroll: true
+          weight: 1
+          gap: 10
+          Status { }
+          if ready && page.ok {
+            if ru && !page.translated { Text { text: "Перевода пока нет — английский оригинал"; style: small; color: muted } }
+            if tagline != "" {
+              Text { text: tagline; color: muted }
+            }
+            for s in shown key s[0] {
+              Text { text: ru ? get(sectionRu, s[0], lower(s[0])) : lower(s[0]); style: label; color: accent; padding: [0, 10, 0, 0] }
+              if s[0] == "SEE ALSO" {
+                Flow {
+                  gap: 6
+                  for l in matchAll(s[1], '\[([^\]]+)\]\(/man/([^)]+)\)') { Chip { name: l[1]; push: true } }
+                }
+              }
+              if s[0] == "RESOURCES" {
+                for l in matchAll(s[1], '\[([^\]]+)\]\((https?://[^)\s]+)\)') {
+                  Text { text: "${l[0]} ↗"; color: accent; padding: [0, 4]; onTap: url(l[1]) }
+                }
+              }
+              if s[0] != "SEE ALSO" && s[0] != "RESOURCES" {
+                Body { md: s[1]; flags: s[0] == "PARAMETERS" || s[0] == "OPTIONS"; install: s[0] == "INSTALL" }
+              }
+            }
+          }
+        }
+      }
+
+      if tab == "basics" && basic == "" {
+        Column {
+          scroll: true
+          weight: 1
+          gap: 2
+          if bidx == null {
+            Text { text: ru ? "Загрузка…" : "loading…"; color: muted }
+          }
+          for b in basics key b {
+            Text { text: get(ru ? titlesRu : titles, b, b); fill: width; maxLines: 1; padding: [4, 10]; onTap: { was = url == "basics/${b}.md" ? null : page; url = "basics/${b}.md"; basic = b; copied = "" } }
+          }
+        }
+      }
+
+      if tab == "basics" && basic != "" {
+        Column {
+          scroll: true
+          weight: 1
+          gap: 10
+          Status { }
+          if ready && page.ok {
+            if ru && !page.translated { Text { text: "Перевода пока нет — английский оригинал"; style: small; color: muted } }
+            Body { md: doc }
+          }
+        }
+      }
+
+      if tab == "tips" {
+        Column {
+          scroll: true
+          weight: 1
+          gap: 10
+          Status { }
+          if ready && page.ok {
+            if ru && !page.translated { Text { text: "Перевода пока нет — английский оригинал"; style: small; color: muted } }
+            Body { md: doc }
+          }
+        }
+      }
+    }
+
+    Box { height: 1; fill: width; background: alpha(muted, 0.25) }
+    Row {
+      gap: 0
+      Tab { name: "basics"; icon: puzzle }
+      Tab { name: "tips"; icon: idea }
+      Tab { name: "commands"; icon: search }
+      Tab { name: "settings"; icon: settingsIcon }
+    }
+  }
+}

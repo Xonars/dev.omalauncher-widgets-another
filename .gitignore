@@ -1,8 +1,6 @@
-index.json
-_site/
-base/
-changed.txt
-deps.txt
-apps.json
-store-icon.*
-collage/
+__pycache__/
+*.pyc
+.env
+*.keystore
+*.jks
+local.properties

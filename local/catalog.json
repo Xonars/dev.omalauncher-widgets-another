@@ -1,0 +1,229 @@
+[
+  {
+    "file": "local/widgets/42-battery-time.owl",
+    "kind": "widget",
+    "name": "Время аккумулятора",
+    "origin": "local/customized"
+  },
+  {
+    "file": "local/widgets/70-apk-share.owl",
+    "kind": "app",
+    "name": "APK Share",
+    "origin": "local/customized",
+    "catalog_file": "apps/xonars/apk-share/app.owl"
+  },
+  {
+    "file": "local/widgets/76-oma-update-app.owl",
+    "kind": "app",
+    "name": "OMA · обновление",
+    "origin": "local/customized",
+    "catalog_file": "apps/xonars/oma-update-app/app.owl"
+  },
+  {
+    "file": "local/widgets/80-owl-guide.owl",
+    "kind": "app",
+    "name": "OWL справочник",
+    "origin": "local/customized",
+    "catalog_file": "apps/xonars/owl-guide/app.owl"
+  },
+  {
+    "file": "local/widgets/81-developer-guide.owl",
+    "kind": "app",
+    "name": "Справочник разработчика",
+    "origin": "local/customized",
+    "catalog_file": "apps/xonars/developer-guide/app.owl"
+  },
+  {
+    "file": "local/widgets/apk-maker-app.owl",
+    "kind": "app",
+    "name": "APK Maker",
+    "origin": "local/customized",
+    "catalog_file": "apps/xonars/apk-maker-app/app.owl"
+  },
+  {
+    "file": "local/widgets/cassette.owl",
+    "kind": "app",
+    "name": "Cassette",
+    "origin": "local/customized",
+    "catalog_file": "apps/xonars/cassette/app.owl"
+  },
+  {
+    "file": "local/widgets/chess-app.owl",
+    "kind": "app",
+    "name": "Шахматы",
+    "origin": "local/customized",
+    "catalog_file": "apps/xonars/chess-app/app.owl"
+  },
+  {
+    "file": "local/widgets/controls.owl",
+    "kind": "panel",
+    "name": "controls",
+    "origin": "local/customized"
+  },
+  {
+    "file": "local/widgets/drawer.owl",
+    "kind": "panel",
+    "name": "app drawer",
+    "origin": "local/customized"
+  },
+  {
+    "file": "local/widgets/keybar-commands.owl",
+    "kind": "keybar",
+    "name": "commands",
+    "origin": "local/customized"
+  },
+  {
+    "file": "local/widgets/keybar.owl",
+    "kind": "keybar",
+    "name": "terminal key bar",
+    "origin": "local/customized"
+  },
+  {
+    "file": "local/widgets/local-storage.owl",
+    "kind": "widget",
+    "name": "storage",
+    "origin": "local/customized"
+  },
+  {
+    "file": "local/widgets/local-tweaks.owl",
+    "kind": "widget",
+    "name": "tweaks",
+    "origin": "local/customized"
+  },
+  {
+    "file": "local/widgets/market-app-alqtest-miami-night-call.owl",
+    "kind": "app",
+    "name": "Майами · Ночной звонок",
+    "origin": "market copy"
+  },
+  {
+    "file": "local/widgets/market-app-perminder-klair-solitaire.owl",
+    "kind": "app",
+    "name": "solitaire",
+    "origin": "market copy"
+  },
+  {
+    "file": "local/widgets/market-app-placq-reader.owl",
+    "kind": "app",
+    "name": "Reader",
+    "origin": "market copy"
+  },
+  {
+    "file": "local/widgets/market-app-placq-send-files.owl",
+    "kind": "app",
+    "name": "Send Files to Linux",
+    "origin": "market copy"
+  },
+  {
+    "file": "local/widgets/market-app-simonschubert-bastion.owl",
+    "kind": "app",
+    "name": "bastion",
+    "origin": "market copy"
+  },
+  {
+    "file": "local/widgets/market-app-simonschubert-checkmate.owl",
+    "kind": "app",
+    "name": "checkmate",
+    "origin": "market copy"
+  },
+  {
+    "file": "local/widgets/market-app-simonschubert-linux-commands.owl",
+    "kind": "app",
+    "name": "linux commands",
+    "origin": "market copy"
+  },
+  {
+    "file": "local/widgets/market-app-simonschubert-notes.owl",
+    "kind": "app",
+    "name": "notes",
+    "origin": "market copy"
+  },
+  {
+    "file": "local/widgets/market-app-simonschubert-pixel-cafe.owl",
+    "kind": "app",
+    "name": "pixel cafe",
+    "origin": "market copy"
+  },
+  {
+    "file": "local/widgets/market-app-simonschubert-pixel-park.owl",
+    "kind": "app",
+    "name": "pixel park",
+    "origin": "market copy"
+  },
+  {
+    "file": "local/widgets/market-app-simonschubert-power-atlas.owl",
+    "kind": "app",
+    "name": "Атлас энергии",
+    "origin": "market copy"
+  },
+  {
+    "file": "local/widgets/market-app-vanyapoker-corsair.owl",
+    "kind": "app",
+    "name": "corsair",
+    "origin": "market copy"
+  },
+  {
+    "file": "local/widgets/market-lupu60-dock.owl",
+    "kind": "widget",
+    "name": "dock",
+    "origin": "market copy"
+  },
+  {
+    "file": "local/widgets/market-rcrohmana-breakout.owl",
+    "kind": "app",
+    "name": "breakout",
+    "origin": "market copy"
+  },
+  {
+    "file": "local/widgets/market-reymarch995-codex-usage.owl",
+    "kind": "widget",
+    "name": "codex usage",
+    "origin": "market copy"
+  },
+  {
+    "file": "local/widgets/market-simonschubert-fetch.owl",
+    "kind": "widget",
+    "name": "fetch",
+    "origin": "market copy"
+  },
+  {
+    "file": "local/widgets/market-simonschubert-now-playing.owl",
+    "kind": "widget",
+    "name": "now-playing",
+    "origin": "market copy"
+  },
+  {
+    "file": "local/widgets/market-sougstron-yandex-weather.owl",
+    "kind": "widget",
+    "name": "yandex weather",
+    "origin": "market copy"
+  },
+  {
+    "file": "local/widgets/noboru.owl",
+    "kind": "app",
+    "name": "Noboru · Манга",
+    "origin": "local/customized",
+    "catalog_file": "apps/xonars/noboru/app.owl"
+  },
+  {
+    "file": "local/widgets/omagit.owl",
+    "kind": "app",
+    "name": "omagit",
+    "origin": "local/customized",
+    "catalog_file": "apps/xonars/omagit/app.owl"
+  },
+  {
+    "file": "local/widgets/pinterest-wallswap.owl",
+    "kind": "app",
+    "name": "Pinterest wallswap",
+    "origin": "local/customized",
+    "catalog_file": "apps/xonars/pinterest-wallswap/app.owl"
+  },
+  {
+    "file": "local/widgets/quiet-reader.owl",
+    "kind": "app",
+    "name": "Тихая читалка",
+    "origin": "local/customized",
+    "catalog_file": "apps/xonars/quiet-reader/app.owl"
+  }
+]

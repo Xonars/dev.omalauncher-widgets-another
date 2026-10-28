@@ -1,0 +1,180 @@
+page "Сегодня" {
+  page: 0
+  meta { owl: 11; description: "Обзор дня: погода, будильник, общие Markdown задачи, быстрая заметка, музыка и избранные приложения"; version: "1.2"; license: "MIT"; category: "productivity" }
+  requires { pacman: ["python"] }
+  padding: 0
+  background: linear(0, 0, 0, 1, [alpha(background, 0.95), alpha(background, 0.8), alpha(background, 0.95)])
+  source now = clock every 1m
+  source bat = android.battery
+  source alarm = android.alarm
+  source m = android.media
+  source apps = android.apps
+  state city = "" persist
+  source wx = http("https://wttr.in/${enc(city)}?format=j1&lang=ru") every 30m timeout 20s json status
+  source data = cmd("python ~/.config/omalauncher/widgets/today-hub/data.py read") every 10s json
+  let cur = wx.out.current_condition[0]
+  let items = data.items ?? []
+  state pinned = null persist
+  state choosingApps = false
+  state appSearch = ""
+  state appPage = 0
+  let suggested = (apps ?? []).filter(a => !a.system || a.score > 0).sortBy(a => -a.score).take(4)
+  on apps first {
+    if pinned == null && len(apps) > 0 { pinned = suggested.map(a => a.key) }
+  }
+  let top = pinned == null ? suggested : pinned.map(k => find(apps ?? [], a => a.key == k)).filter(a => a != null)
+  let clockApp = find(apps ?? [], a => a.package == alarm.app) ?? find(apps ?? [], a => contains(lower(a.package), "deskclock") || contains(lower(a.name), "часы") || lower(a.name) == "clock")
+  let choices = (apps ?? []).filter(a => appSearch == "" || contains(lower(a.name), lower(appSearch))).sortBy(a => lower(a.name))
+  let card = alpha(surface, 0.85)
+  let secondary = mix(muted, foreground, 0.45)
+  state draft = ""
+  state editing = false
+
+  Column {
+    fill: true
+    scroll: true
+    padding: [20, 16]
+    gap: 14
+    Row {
+      align: center
+      Text { text: "СЕГОДНЯ"; style: label; color: accent; letterSpacing: 2; weight: 1 }
+      Text { text: bat == null ? "" : "${bat.level}%${bat.charging ? " · зарядка" : ""}"; style: small; color: secondary }
+    }
+    Text { text: fmtTime(now, "HH:mm"); fontSize: 76; fontWeight: 200; letterSpacing: -3 }
+    Text { text: capitalize(fmtTime(now, "EEEE, d MMMM", null, "ru")); color: secondary }
+    Row {
+      gap: 12
+      align: top
+      Column {
+        weight: 1; height: 132; padding: 12; gap: 6; background: card; radius: 14 * corners
+        onTap: { choosingApps = false; editing = false; screen() }
+        Text { text: "ПОГОДА"; style: label; color: accent }
+        Text { text: cur == null ? (wx == null ? "Загрузка…" : "Нет данных") : "${cur.temp_C}°"; fontSize: cur == null ? 16 : 32; maxLines: 1 }
+        Text { text: cur == null ? "" : "Ощущается ${cur.FeelsLikeC}°"; style: small; color: secondary; maxLines: 1 }
+        Text { text: cur == null ? "Нажмите для настройки" : wx.out.nearest_area[0].areaName[0].value; style: small; color: secondary; maxLines: 1 }
+      }
+      Column {
+        weight: 1; height: 132; padding: 12; gap: 6; background: card; radius: 14 * corners
+        onTap: { if clockApp != null { androidApp(clockApp.key) } else { notify("Часы", "Приложение Часы не найдено") } }
+        Text { text: "БУДИЛЬНИК"; style: label; color: accent }
+        Text { text: alarm.set ? fmtTime(alarm.time, "HH:mm") : "Не установлен"; fontSize: alarm.set ? 32 : 16; maxLines: 2 }
+        Text { text: alarm.set ? fmtTime(alarm.time, "EEE, d MMM", null, "ru") : "Открыть часы →"; style: small; color: secondary }
+      }
+    }
+    Column {
+      padding: 14; gap: 10; background: card; radius: 14 * corners
+      Row {
+        align: center
+        Text { text: "ЗАДАЧИ"; style: label; color: accent; weight: 1 }
+        Button { text: "Все · ${len(items)}"; onTap: { choosingApps = false; editing = false; screen() } }
+      }
+      if data == null { Text { text: "Загрузка…"; color: secondary } }
+      else if len(items) == 0 { Text { text: "Нет задач — можно выдохнуть"; color: secondary } }
+      for item in items.take(3) key item.line {
+        Row {
+          align: center
+          Text { text: item.text; weight: 1; maxLines: 2; fontSize: 14 }
+          Button { text: "Готово"; onTap: run("python ~/.config/omalauncher/widgets/today-hub/data.py done ${int(item.line)} ${sh(item.text)}") }
+        }
+      }
+      Input { placeholder: "Добавить задачу…"; color: foreground; clear: true; onSubmit: run("python ~/.config/omalauncher/widgets/today-hub/data.py add ${sh(value)}") }
+    }
+    Column {
+      padding: 14; gap: 8; background: card; radius: 14 * corners
+      Row {
+        align: center
+        Text { text: "БЫСТРАЯ ЗАМЕТКА"; style: label; color: accent; weight: 1 }
+        Button { text: "Записать"; onTap: { choosingApps = false; draft = data.note ?? ""; editing = true; screen() } }
+      }
+      Text { text: data.note == "" || data.note == null ? "Одна мысль, которую важно помнить" : data.note; maxLines: 3; color: data.note == "" || data.note == null ? secondary : foreground }
+    }
+    if m.available && m.title != null {
+      Row {
+        padding: 12; gap: 10; align: center; background: card; radius: 14 * corners
+        Column {
+          weight: 1; onTap: media("open")
+          Text { text: m.title; maxLines: 1; bold: true }
+          Text { text: m.artist ?? m.app; maxLines: 1; style: small; color: secondary }
+        }
+        Button { text: m.playing ? "Пауза" : "Играть"; onTap: media("toggle") }
+        Button { text: "→"; onTap: media("next") }
+      }
+    }
+    Row {
+      align: center
+      Text { text: "ЗАКРЕПЛЁННЫЕ"; style: label; color: accent; weight: 1 }
+      Button { text: "⚙"; onTap: { choosingApps = true; appSearch = ""; appPage = 0; screen() } }
+    }
+    Grid {
+      columns: 4; gap: 10
+      for a in top key a.key {
+        Column {
+          align: center; gap: 6; padding: [0, 8]; onTap: androidApp(a.key)
+          Image { src: a.icon; size: 40 }
+          Text { text: a.name; style: small; maxLines: 1; align: center }
+        }
+      }
+    }
+    Button { text: "Все приложения"; fill: width; onTap: launcher("drawer") }
+    Text { text: "Слева: Работа · Разработка · Система · Отдых"; style: small; color: secondary; align: center; maxLines: 2 }
+    Spacer { height: screenInset }
+  }
+  screen {
+    title: choosingApps ? "Закреплённые приложения" : editing ? "Быстрая заметка" : "День подробно"
+    Column {
+      padding: 12; gap: 14; scroll: true
+      if choosingApps {
+        Text { text: "Выбрано ${len(pinned ?? [])} из 4"; color: secondary }
+        Text { text: "Снимите отметку, чтобы освободить место. Порядок на главной — порядок выбора."; style: small; color: secondary; maxLines: 3 }
+        Input { text: appSearch; placeholder: "Найти приложение…"; onChange: { appSearch = value; appPage = 0 } }
+        Button { text: "Готово"; onTap: close() }
+        Row {
+          align: center
+          Button { text: "←"; onTap: appPage = max(0, appPage - 1) }
+          Text { text: "${appPage + 1} / ${max(1, ceil(len(choices) / 12))}"; weight: 1; align: center; color: secondary }
+          Button { text: "→"; onTap: appPage = min(max(0, ceil(len(choices) / 12) - 1), appPage + 1) }
+        }
+        for a in choices.drop(appPage * 12).take(12) key a.key {
+          Row {
+            align: center; gap: 10
+            Image { src: a.icon; size: 32 }
+            Column {
+              weight: 1
+              Text { text: a.name; maxLines: 2 }
+              if a.profile != null { Text { text: a.profile == "work" ? "Рабочий профиль" : "Копия"; style: small; color: secondary } }
+            }
+            Button {
+              text: contains(pinned ?? [], a.key) ? "✓" : "+"
+              color: contains(pinned ?? [], a.key) ? accent : secondary
+              onTap: {
+                if contains(pinned ?? [], a.key) { pinned = (pinned ?? []).filter(k => k != a.key) }
+                else if len(pinned ?? []) < 4 { pinned = (pinned ?? []) + [a.key] }
+                else { notify("Закреплённые приложения", "Можно выбрать до четырёх приложений") }
+              }
+            }
+          }
+        }
+      } else if editing {
+        Input { text: draft; placeholder: "Что нужно запомнить?"; focus: true; onChange: draft = value; onSubmit: { run("python ~/.config/omalauncher/widgets/today-hub/data.py note ${sh(value)}"); close() } }
+        Button { text: "Сохранить"; onTap: { run("python ~/.config/omalauncher/widgets/today-hub/data.py note ${sh(draft)}"); close() } }
+        Text { text: "Заметка сохраняется между перезапусками"; style: muted; color: secondary }
+      } else {
+        Text { text: "Все задачи"; style: title }
+        for item in items key item.line {
+          Row {
+            align: center
+            Text { text: item.text; weight: 1; maxLines: 4 }
+            Button { text: "Готово"; onTap: run("python ~/.config/omalauncher/widgets/today-hub/data.py done ${int(item.line)} ${sh(item.text)}") }
+          }
+        }
+        Input { placeholder: "Добавить задачу…"; clear: true; onSubmit: run("python ~/.config/omalauncher/widgets/today-hub/data.py add ${sh(value)}") }
+        Text { text: "Общий список с виджетом Todo"; style: muted; color: secondary }
+        Text { text: "Погода"; style: title }
+        Text { text: cur == null ? "Погода недоступна. Повторите запрос позже." : (cur.lang_ru[0].value ?? cur.weatherDesc[0].value); maxLines: 3 }
+        Input { text: city; placeholder: "Город (пусто — определить по IP)"; onSubmit: { city = trim(value); refresh() } }
+        Text { text: "Введите город и нажмите отправить. Автоопределение по IP может ошибаться."; style: muted; color: secondary; maxLines: 3 }
+        Button { text: "Обновить данные"; onTap: refresh() }
+      }
+    }
+  }
+}

@@ -1,0 +1,127 @@
+# TAGLINE
+
+kernel ring buffer message viewer
+
+# TLDR
+
+Show **kernel messages**
+
+```sudo dmesg```
+
+Show kernel **error messages**
+
+```sudo dmesg -l err```
+
+**Follow** kernel messages in real-time
+
+```sudo dmesg -w```
+
+Show messages with **human-readable timestamps**
+
+```sudo dmesg -T```
+
+Show messages in **human-readable** form
+
+```sudo dmesg -H```
+
+**Colorize** output
+
+```sudo dmesg -L```
+
+Filter messages by **facility**
+
+```sudo dmesg -f kern```
+
+# SYNOPSIS
+
+**dmesg** [_-l level_] [_-f facility_] [_-T_] [_-H_] [_-w_] [_-L_]
+
+# DESCRIPTION
+
+**dmesg** prints and controls the kernel ring buffer, which contains messages from the kernel including hardware detection, driver loading, and system events. It is essential for debugging hardware and driver issues.
+
+# PARAMETERS
+
+**-l, --level level**
+> Restrict output to specified log levels (emerg, alert, crit, err, warn, notice, info, debug)
+
+**-f, --facility facility**
+> Restrict output to specified facilities (kern, user, mail, daemon, etc.)
+
+**-T, --ctime**
+> Print human-readable timestamps
+
+**-H, --human**
+> Enable human-readable output with colors and timestamps
+
+**-w, --follow**
+> Wait for new messages (like tail -f)
+
+**-L, --color**
+> Colorize output
+
+**-c, --read-clear**
+> Clear the ring buffer after printing
+
+**-C, --clear**
+> Clear the ring buffer without printing
+
+**-n, --console-level level**
+> Set level of messages printed to console
+
+**-k, --kernel**
+> Print kernel messages only
+
+**-u, --userspace**
+> Print userspace messages only
+
+**--time-format** _format_
+> Timestamp format: ctime, reltime, delta, iso, raw
+
+**--since** _time_
+> Display records since the specified time
+
+**--until** _time_
+> Display records until the specified time
+
+**-J, --json**
+> Output in JSON format
+
+**-t, --notime**
+> Do not print kernel timestamps
+
+**-r, --raw**
+> Print raw message buffer with log-level prefixes
+
+**-x, --decode**
+> Decode facility and level to human-readable prefixes
+
+# CAVEATS
+
+Requires root privileges on most systems. The **-w** (follow) option requires kernel 3.5.0+ (for /dev/kmsg). The **-T** and **-H** options are util-linux userspace features and do not require a specific kernel version.
+
+# HISTORY
+
+Part of **util-linux** package. The kernel ring buffer has been part of Linux since early versions, providing essential diagnostic information.
+
+# INSTALL
+
+```apt: sudo apt install util-linux```
+
+```dnf: sudo dnf install util-linux```
+
+```pacman: sudo pacman -S util-linux```
+
+```apk: sudo apk add dmesg```
+
+```zypper: sudo zypper install util-linux```
+
+```brew: brew install util-linux```
+
+```nix: nix profile install nixpkgs#util-linux```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[journalctl](/man/journalctl)(1), [tail](/man/tail)(1)

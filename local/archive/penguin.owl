@@ -1,0 +1,262 @@
+// Penguin Pet — adapted from the MIT-licensed OmaLauncher Owl widget.
+// Original Owl widget: OmaLauncher project; penguin artwork and modifications created separately.
+widget "penguin" {
+  meta {
+    owl: 3
+    description: "A cute pixel-art penguin pet. Hatch it, feed it fish, pet it, and watch it sleep at night or dance to music. Age and progress are saved automatically."
+    version: "1.0"
+    license: "MIT"
+    category: "fun"
+  }
+
+  size: 2x2
+  minSize: 2x2
+  requires { pacman: [] }
+
+  source now = clock every 1s
+  source bat = android.battery
+  source m = android.media
+
+  state born = 0 persist
+  state fed = 0 persist
+  state pets = 0 persist
+  state tapAt = -100
+  state tapNow = 0
+  state tapKind = ""
+
+  let hour = num(fmtTime(now, "H"))
+  let hatched = born > 0
+  let asleep = hatched && (hour >= 23 || hour < 7)
+  let hungry = hatched && now - fed > 8 * 3600
+  let dancing = m.playing == true
+  let tired = bat != null && bat.level < 20 && !bat.charging
+  let mood = !hatched ? "egg" : asleep ? "asleep" : hungry ? "hungry" : dancing ? "dancing" : tired ? "tired" : "content"
+  let day = floor((now - born) / 86400) + 1
+  let ago = now - fed < 3600 ? "${max(floor((now - fed) / 60), 1)}m" : "${floor((now - fed) / 3600)}h"
+
+  let penguinArt = [
+    "............p...........",
+    "........ppppppppp.......",
+    ".......ppppppppppp......",
+    "......ppppppppppppp.....",
+    ".....ppwwwwpppwwwwpp....",
+    ".....pwwwwwwpwwwwwwp....",
+    ".....pwwwwwwpwwwwwwp....",
+    "....ppwwwwwwpwwwwwwpp...",
+    ".....pwwwwwwpwwwwwwp....",
+    ".....pwwwwwwwwwwwwwp....",
+    ".....ppwwwkkkkwwwwpp....",
+    "....pppwwwwkkwwwwwppp...",
+    "...ppppwwwwwwwwwwwpppp..",
+    "..ppppwwwwwwwwwwwwwpppp.",
+    "..ppppwwwwwwwwwwwwwpppp.",
+    "..ppppwwwwwwwwwwwwwpppp.",
+    ".pppppwwwwwwwwwwwwwppppp",
+    "..ppppwwwwwwwwwwwwwpppp.",
+    "..pppppwwwwwwwwwwwppppp.",
+    "..pppppwwwwwwwwwwwppppp.",
+    "...ppp.pwwwwwwwwwp.ppp..",
+    "....bbbbbbbwwwbbbbbbb...",
+    "...bbbbbbbbbpbbbbbbbbb..",
+    "....bbbbbbb...bbbbbbb..."
+  ]
+
+  let eggArt = [
+    "..eeee..",
+    ".eeeeee.",
+    ".eeeeee.",
+    "eeeeeeee",
+    "eeeeseee",
+    "eseeeeee",
+    "eeeeeese",
+    "eeeeeeee",
+    ".eeeeee.",
+    "..eeee.."
+  ]
+
+  let shellLeft = eggArt.take(5).map(r => sub(r, 0, 4))
+  let shellRight = eggArt.take(5).map(r => sub(r, 4, 8))
+  let heartArt = [".h.h.", "hhhhh", "hhhhh", ".hhh.", "..h.."]
+  let fishArt = ["..c..", ".cccd", "ccccc", ".cccd", "..c.."]
+
+  let pal = {
+    p: #171B25,
+    w: #FFFFFF,
+    e: #111111,
+    k: #FF9900,
+    f: #171B25,
+    b: #FF9900,
+    s: #CDEFFF,
+    h: #FF6384,
+    c: #39C9E8,
+    d: #167BA8
+  }
+
+  let bodyPal = {p: pal.p, w: pal.w, e: pal.e, k: pal.k, f: pal.f}
+  let feetPal = {b: pal.b}
+
+  Column {
+    gap: 2
+
+    Canvas {
+      weight: 1
+      fill: width
+
+      onTap: {
+        tapKind = !hatched ? "hatch" : asleep ? "peek" : hungry ? "feed" : "pet"
+        tapAt = time
+        tapNow = now
+        fed = !hatched || (hungry && !asleep) ? now : fed
+        pets = hatched && !asleep && !hungry ? pets + 1 : pets
+        born = hatched ? born : now
+      }
+
+      let p = clamp(floor(min(width / 26, height / 29)), 2, 8)
+      let s = p + 0.5
+      let since = time >= tapAt && now - tapNow < 5 ? time - tapAt : 1000
+      let groundY = floor((height - 3 * p) / p) * p
+      let ox = floor((width / 2 - 12 * p) / p) * p
+      let oy = groundY - 24 * p
+
+      if asleep {
+        for c in range(25) {
+          let i = c % 5 - 2
+          let j = floor(c / 5) - 2
+          if i * i + j * j <= 5 && (i + 1) * (i + 1) + (j + 1) * (j + 1) > 4 {
+            rect(2 * p + (i + 2) * p, 2 * p + (j + 2) * p, s, s, fill: yellow)
+          }
+        }
+        for k in range(5) {
+          let sx = floor(width * (0.28 + 0.14 * k) / p) * p
+          let sy = (2 + (k * 7) % 5) * p
+          rect(sx, sy, p, p, fill: alpha(foreground, 0.3 + 0.5 * abs(sin(time * 0.8 + k * 1.9))))
+        }
+      }
+
+      rect(0, groundY, width, p * 2, fill: mix(cyan, background, 0.72))
+      rect(0, groundY + p, width, p, fill: mix(cyan, background, 0.82))
+      rect(floor(width * 0.15 / p) * p, groundY - p, 2 * p, p, fill: mix(foreground, background, 0.25))
+      rect(floor(width * 0.78 / p) * p, groundY - p, 2 * p, p, fill: mix(foreground, background, 0.25))
+
+      if !hatched {
+        let rock = time % 4 < 0.6 ? sin(time * 25) * 12 : 0
+        let ex = floor((width / 2 - 4 * p) / p) * p
+        let ey = groundY - 10 * p
+        rotate(rock, width / 2, groundY) { sprite(eggArt, ex, ey, p, palette: pal) }
+      } else {
+        let happy = since < 2.5 && (tapKind == "pet" || tapKind == "hatch")
+        let eating = since < 2.2 && tapKind == "feed"
+        let hop = happy ? round(abs(sin(since * 7)) * 2 * max(1.4 - since, 0)) * p : 0
+        let breath = (floor(time / (asleep ? 1.6 : 0.8)) % 2) * p
+        let shake = mood == "dancing" ? [0, 1, 0, -1][floor(time * 2.5) % 4] * p : 0
+        let bx = ox + shake
+        let by = oy - hop
+
+        sprite(penguinArt, bx, by + breath, p, palette: pal)
+        
+
+        let ey = by + breath
+        let dark = #111111
+        let blink = time % 4.3 < 0.15
+        let closed = asleep && !(tapKind == "peek" && since < 2)
+        let happyEyes = since < 2.5 && tapKind == "pet"
+
+        for e in [8, 15] {
+          if closed || blink || happyEyes {
+            rect(bx + e * p, ey + 7 * p, 3 * p, p, fill: dark)
+          } else {
+            rect(bx + e * p, ey + 5 * p, 3 * p, 3 * p, fill: dark)
+            rect(bx + e * p, ey + 5 * p, p, p, fill: #FFFFFF)
+          }
+        }
+
+        if eating && since > 0.7 {
+          for k in range(3) {
+            let f = since - 0.7
+            rect(bx + (6 + k * 2) * p + (k - 1) * f * 5 * p, ey + 7 * p + f * f * 20 * p, p, p, fill: get(pal, "c"))
+          }
+        }
+
+        if eating && since <= 0.7 {
+          let fy = lerp(-5 * p, ey + 5 * p, since / 0.7)
+          sprite(fishArt, bx + 5 * p, fy, p, palette: pal)
+        }
+
+        if happy {
+          for k in range(3) {
+            let t = since - k * 0.35
+            if t > 0 && t < 1.8 {
+              layer(1 - t / 1.8) {
+                sprite(
+                  heartArt,
+                  floor((bx + [0, 6, 12][k] * p + sin(t * 5 + k) * p) / p) * p,
+                  floor((by - t * 6 * p) / p) * p,
+                  p,
+                  palette: pal
+                )
+              }
+            }
+          }
+        }
+
+        if tapKind == "hatch" && since < 1.2 {
+          layer(1 - since / 1.2) {
+            let fly = by - 2 * p - since * 12 * p + since * since * 30 * p
+            sprite(shellLeft, bx + 4 * p - since * 30 * p, fly, p, palette: pal)
+            sprite(shellRight, bx + 8 * p + since * 30 * p, fly, p, palette: pal)
+          }
+        }
+
+        if asleep && !(tapKind == "peek" && since < 2) {
+          for k in range(3) {
+            let t = (time * 0.4 + k / 3) % 1
+            text("z", bx + 12 * p + t * 4 * p, by + p - t * 8 * p, size: (2 + t * 2) * p, bold: true, color: alpha(foreground, 1 - t))
+          }
+        }
+
+        if mood == "dancing" {
+          for k in range(2) {
+            let t = (time * 0.5 + k / 2) % 1
+            let nx = floor((bx + (k == 0 ? -2 : 15) * p + sin(t * 6) * p) / p) * p
+            let ny = floor((by + 6 * p - t * 8 * p) / p) * p
+            let nc = alpha(k == 0 ? cyan : magenta, 1 - t)
+            rect(nx, ny + 2 * p, 2 * p, 2 * p, fill: nc)
+            rect(nx + p, ny - p, p, 3 * p, fill: nc)
+            rect(nx + 2 * p, ny - p, p, p, fill: nc)
+          }
+        }
+
+        if mood == "hungry" && !eating {
+          let cloud = mix(foreground, background, 0.4)
+          let tx = bx + 10 * p
+          let ty = max(by - 8 * p, 0)
+          rect(tx - p, ty + 7 * p, p, p, fill: cloud)
+          rect(tx, ty + 6 * p, p, p, fill: cloud)
+          rect(tx + p, ty, 7 * p, 7 * p, radius: p, fill: cloud)
+          sprite(fishArt, tx + 2 * p, ty + p, p, palette: pal)
+        }
+      }
+    }
+
+    Text {
+      font: mono
+      style: small
+      color: muted
+      align: center
+      maxLines: 1
+      text: cols != null && cols < 3 ?
+        (mood == "egg" ? "tap to hatch"
+        : mood == "asleep" ? "zzz · day ${day}"
+        : mood == "hungry" ? "tap to feed"
+        : mood == "dancing" ? "♪ party"
+        : mood == "tired" ? "tired · ${bat.level}%"
+        : "day ${day} · ♥︎${pets}")
+        : mood == "egg" ? "an egg · tap to hatch"
+        : mood == "asleep" ? "zzz · day ${day}"
+        : mood == "hungry" ? "hungry · tap to feed"
+        : mood == "dancing" ? "♪ ${lower(m.title ?? "music")}"
+        : mood == "tired" ? "tired · battery ${bat.level}%"
+        : "day ${day} · fed ${ago} ago · ♥︎${pets}"
+    }
+  }
+}

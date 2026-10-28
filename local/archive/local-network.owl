@@ -1,0 +1,334 @@
+widget "network" {
+  size: 3x4
+  minSize: 3x3
+  padding: 12
+
+  meta {
+    description: "Connection type and DNS query latency to the resolver selected in /etc/resolv.conf, with daily DNS success statistics"
+    version: "1.2"
+    license: "MIT"
+    category: "system"
+    owl: 10
+  }
+
+  requires { pacman: ["iproute2", "bind", "gawk", "coreutils", "bash"] }
+
+  // Watch the same file that the dns switcher writes. A new server re-runs the probe.
+  source resolv = file("/etc/resolv.conf")
+  let dnsServers = lines(resolv ?? "").filter(l => startsWith(trim(l), "nameserver ") || startsWith(trim(l), "nameserver\t")).map(l => words(l)[1])
+  let dnsServer = first(dnsServers) ?? ""
+  let dnsProvider = contains(resolv ?? "", "9.9.9.9") ? "Quad9" : contains(resolv ?? "", "8.8.4.4") ? "Google" : contains(resolv ?? "", "1.0.0.1") ? "Cloudflare" : "default"
+  // One sample: timestamp, query milliseconds (-1 on failure), server queried.
+  source probe = cmd('t=$(date +%s); s=' + sh(dnsServer) + '; r=; if [ -n "$s" ]; then r=$(dig +time=2 +tries=1 +noall +comments +answer +stats @"$s" cloudflare.com A 2>/dev/null | awk "/status: NOERROR/ {ok=1} /[[:space:]]IN[[:space:]]+A[[:space:]]/ {answer=1} /Query time:/ {ms=\$4} END {if (ok && answer && ms != \"\") print ms}"); fi; echo "$t ${r:--1} ${s:-none}"') every 10s timeout 5s
+  source links = cmd("ip -j link") every 10s json
+
+  state dnsTodayKey = "" persist
+  state dnsTodaySamples = 0 persist
+  state dnsTodayFails = 0 persist
+  state dnsTodaySum = 0 persist
+
+  let ifaces = links ?? []
+  // LOWER_UP does not identify the DNS transport: wlan may be a hotspot,
+  // cellular interfaces may be IMS, and a VPN can hide the physical uplink.
+  // Only report a transport once it can be tied to this probe's socket.
+  let netType = "unknown"
+
+  let rtt = probe == null ? null : num(words(probe)[1])
+  let online = rtt != null && rtt >= 0 && words(probe)[2] == dnsServer
+  let statusLabel = probe == null ? "checking" : online ? "сеть ?" : "DNS fail"
+
+  let tint = probe == null ? muted : accent
+  let iconTint = probe == null ? muted : accent
+  let rttText = probe == null ? "…" : online ? "${round(rtt)}" : "fail"
+
+  let chartRtt = online ? rtt : 0
+  let hist = history(chartRtt, 90)
+  let histMax = reduce(hist, (acc, v) => max(acc, v), 0)
+  let histMin = reduce(hist, (acc, v) => v > 0 ? (acc == 0 ? v : min(acc, v)) : acc, 0)
+  let scaleMax = max(40, histMax * 1.2)
+
+  let dayOk = dnsTodaySamples - dnsTodayFails
+  let upPct = dnsTodaySamples > 0 ? dayOk / dnsTodaySamples * 100 : null
+  let avgRtt = dayOk > 0 ? dnsTodaySum / dayOk : null
+  let lossPct = dnsTodaySamples > 0 ? dnsTodayFails / dnsTodaySamples * 100 : null
+  let upText = upPct == null ? "—" : "${round(upPct)}%"
+  let avgText = avgRtt == null ? "—" : "${round(avgRtt)} ms"
+  let lossText = lossPct == null ? "—" : "${fixed(lossPct, 1)}%"
+  let rangeText = histMax > 0 ? "${round(histMin)}–${round(histMax)} ms" : "—"
+  let sampleText = dnsTodaySamples == 0 ? "0" : fmtNum(dnsTodaySamples, {compact: true})
+  let upColor = upPct == null ? muted : accent
+  let lossColor = lossPct == null ? muted : accent
+  // A wide, short tile (the landscape home screen) puts the sparkline beside the number instead of below it.
+  let wide = tileWidth != null && tileHeight != null && tileWidth > tileHeight * 1.3
+  let shownIfaces = ifaces.filter(i => i.ifname != "lo" && i.ifname != "dummy0" && !startsWith(i.ifname, "epdg") && indexOf(i.flags, "LOWER_UP") >= 0)
+
+  // Everything is kept per local date; the first sample after midnight starts over.
+  on probe first {
+    if probe != null {
+      let stamp = num(words(probe)[0])
+      let val = num(words(probe)[1])
+      let dat = fmtTime(stamp, "yyyy-MM-dd")
+      if dnsTodayKey != dat {
+        dnsTodayKey = dat
+        dnsTodaySamples = 0
+        dnsTodayFails = 0
+        dnsTodaySum = 0
+      }
+      dnsTodaySamples = dnsTodaySamples + 1
+      if val >= 0 {
+        dnsTodaySum = dnsTodaySum + val
+      } else {
+        dnsTodayFails = dnsTodayFails + 1
+      }
+    }
+  }
+
+  onTap: screen()
+
+  component Stat(label, value, tint = foreground) {
+    Column {
+      gap: 1
+      Text { text: label; style: label; color: muted }
+      Text { text: value; style: title; color: tint; maxLines: 1 }
+    }
+  }
+
+  component NetIcon(kind, tint, size = 24) {
+    Box {
+      width: size
+      height: size
+      Canvas {
+        visible: kind == "wifi"
+        width: size
+        height: size
+        let c = size / 2
+        let b = size - size * 0.16
+        arc(c, b, size * 0.15, 315, 90, stroke: tint, width: max(1.5, size / 12), cap: round)
+        arc(c, b, size * 0.30, 315, 90, stroke: tint, width: max(1.5, size / 12), cap: round)
+        arc(c, b, size * 0.45, 315, 90, stroke: tint, width: max(1.5, size / 12), cap: round)
+        circle(c, b, max(1.2, size / 16), fill: tint)
+      }
+      Canvas {
+        visible: kind == "mobile"
+        width: size
+        height: size
+        for i in range(4) {
+          rect(size * (0.08 + i * 0.24), size * 0.68 - i * size * 0.14, size * 0.13, size * 0.14 + i * size * 0.14, radius: size * 0.04, fill: tint)
+        }
+      }
+      Canvas {
+        visible: kind == "vpn"
+        width: size
+        height: size
+        rect(size * 0.20, size * 0.44, size * 0.60, size * 0.40, radius: size * 0.12, stroke: tint, width: max(1.5, size / 12))
+        arc(size * 0.5, size * 0.44, size * 0.18, 270, 180, stroke: tint, width: max(1.5, size / 12), cap: round)
+        circle(size * 0.5, size * 0.64, size * 0.06, fill: tint)
+      }
+      Canvas {
+        visible: kind == "offline"
+        width: size
+        height: size
+        let c = size / 2
+        let b = size - size * 0.16
+        arc(c, b, size * 0.15, 315, 90, stroke: muted, width: max(1.5, size / 12), cap: round)
+        arc(c, b, size * 0.30, 315, 90, stroke: muted, width: max(1.5, size / 12), cap: round)
+        arc(c, b, size * 0.45, 315, 90, stroke: muted, width: max(1.5, size / 12), cap: round)
+        circle(c, b, max(1.2, size / 16), fill: muted)
+        line(size * 0.16, size * 0.16, size * 0.84, size * 0.84, stroke: accent, width: max(1.5, size / 12), cap: round)
+      }
+    }
+  }
+
+  Column {
+    gap: 6
+    if wide {
+      Row {
+        gap: 10
+        weight: 1
+        Column {
+          gap: 2
+          width: 112
+          Row {
+            gap: 6
+            align: center
+            NetIcon { kind: netType; tint: iconTint; size: 16 }
+            Text { text: statusLabel; style: small; color: iconTint; weight: 1; maxLines: 1 }
+          }
+          Row {
+            gap: 4
+            align: bottom
+            Text { text: rttText; fontSize: online ? 28 : 24; fontWeight: 300; color: tint; maxLines: 1; animate color: tween(250ms) }
+            Text { text: online ? "ms" : ""; style: muted; padding: [2, 0, 0, 8] }
+          }
+        }
+        Sparkline {
+          values: hist
+          min: 0
+          max: scaleMax
+          color: tint
+          area: alpha(tint, 0.18)
+          thickness: 2
+          fill: height
+          weight: 1
+        }
+      }
+    } else {
+      Row {
+        gap: 6
+        align: center
+        NetIcon { kind: netType; tint: iconTint; size: 22 }
+        Text { text: statusLabel; style: small; color: iconTint; weight: 1; maxLines: 1 }
+      }
+      Row {
+        gap: 4
+        align: bottom
+        Text { text: rttText; fontSize: online ? 46 : 34; fontWeight: 300; color: tint; maxLines: 1; animate color: tween(250ms) }
+        Text { text: online ? "ms" : ""; style: muted; padding: [2, 0, 0, 8] }
+      }
+      Sparkline {
+        values: hist
+        min: 0
+        max: scaleMax
+        color: tint
+        area: alpha(tint, 0.18)
+        thickness: 2
+        fill: width
+        weight: 1
+      }
+    }
+    Text { text: "DNS · ${dnsProvider} · ${dnsServer}"; style: label; color: muted; maxLines: 1 }
+    Row {
+      Text { text: "DNS today"; style: label; color: muted; weight: 1 }
+      Text { text: "loss ${lossText}"; style: label; color: lossColor }
+    }
+    Row {
+      Text { text: "ok ${upText}"; style: label; color: upColor; weight: 1 }
+      Text { text: "avg ${avgText}"; style: label; color: muted }
+    }
+  }
+
+  screen {
+    title: "network"
+    Column {
+      scroll: true
+      gap: 12
+      padding: 16
+
+      Row {
+        gap: 12
+        align: center
+        NetIcon { kind: netType; tint: iconTint; size: 40 }
+        Column {
+          gap: 2
+          weight: 1
+          Text { text: statusLabel; style: title; color: iconTint; maxLines: 1 }
+          Text { text: dnsServer == "" ? "no DNS configured" : "${dnsProvider} · ${dnsServer}"; style: small; color: muted; maxLines: 1 }
+        }
+        Column {
+          gap: 0
+          align: end
+          width: 132
+          Text { text: rttText; fontSize: online ? 48 : 34; fontWeight: 300; color: tint; maxLines: 1; animate color: tween(250ms) }
+          Text { text: online ? "ms DNS" : "DNS failed"; style: label; color: muted; align: end }
+        }
+      }
+
+      Column {
+        gap: 6
+        padding: 12
+        background: alpha(surface, 0.55)
+        border: 1
+        borderColor: alpha(border, 0.8)
+        radius: 14 * corners
+        Row {
+          Text { text: "DNS query latency"; style: small; color: muted; weight: 1 }
+          Text { text: "recent samples · one query every 10 s"; style: label; color: muted }
+        }
+        Sparkline {
+          values: hist
+          min: 0
+          max: scaleMax
+          color: tint
+          area: alpha(tint, 0.20)
+          thickness: 2
+          fill: width
+          height: 120
+        }
+        Row {
+          Text { text: "0 ms"; style: label; color: muted; weight: 1 }
+          Text { text: "${round(scaleMax)} ms"; style: label; color: muted }
+        }
+      }
+
+      Column {
+        gap: 10
+        padding: 12
+        background: alpha(surface, 0.55)
+        border: 1
+        borderColor: alpha(border, 0.8)
+        radius: 14 * corners
+        Row {
+          gap: 8
+          align: center
+          Text { text: "DNS today"; style: title; weight: 1 }
+          Text { text: "resets at midnight"; style: label; color: muted }
+          Button {
+            text: "reset"
+            onTap: {
+              dnsTodayKey = online ? fmtTime(num(words(probe)[0]), "yyyy-MM-dd") : dnsTodayKey
+              dnsTodaySamples = 0
+              dnsTodayFails = 0
+              dnsTodaySum = 0
+            }
+          }
+        }
+        Grid {
+          columns: 2
+          gap: 10
+          Stat { label: "DNS success"; value: upText; tint: upColor }
+          Stat { label: "loss"; value: lossText; tint: lossColor }
+          Stat { label: "average"; value: avgText }
+          Stat { label: "recent min / max"; value: rangeText }
+          Stat { label: "samples"; value: sampleText }
+          Stat { label: "day"; value: dnsTodayKey == "" ? "—" : dnsTodayKey }
+        }
+      }
+
+      Column {
+        gap: 6
+        padding: 12
+        background: alpha(surface, 0.55)
+        border: 1
+        borderColor: alpha(border, 0.8)
+        radius: 14 * corners
+        Text { text: "interfaces"; style: small; color: muted }
+        for i in shownIfaces key i.ifname {
+          Row {
+            gap: 8
+            Text { text: i.ifname; style: small; weight: 1; maxLines: 1 }
+            Text { text: i.operstate; style: label; color: indexOf(i.flags, "LOWER_UP") >= 0 ? accent : muted }
+            Text {
+              text: startsWith(i.ifname, "wlan") ? "wifi" : startsWith(i.ifname, "rmnet") || startsWith(i.ifname, "ccmni") ? "mobile" : startsWith(i.ifname, "tun") || startsWith(i.ifname, "wg") ? "vpn" : "other"
+              style: label
+              color: muted
+              width: 52
+              align: end
+            }
+          }
+        }
+        if len(shownIfaces) == 0 {
+          Text { text: "none up"; style: label; color: muted }
+        }
+      }
+
+      Row {
+        gap: 8
+        Button { text: "refresh"; onTap: refresh() }
+        Button { text: "close"; onTap: close() }
+      }
+
+      Text { text: "Тип сети DNS-запроса не подтверждён. Активный интерфейс может быть точкой доступа, служебной мобильной сетью или VPN. Список интерфейсов выше не определяет путь запроса."; style: label; color: muted }
+      Text { text: "DNS: cloudflare.com A, first server in /etc/resolv.conf. Stats update every 10 s while the tile is on screen or next to it."; style: label; color: muted }
+    }
+  }
+}

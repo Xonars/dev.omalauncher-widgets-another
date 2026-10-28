@@ -1,0 +1,90 @@
+widget "Arch · очистка" {
+  page: 3
+  order: 3
+  meta { owl: 9; description: "Очистка кешей Arch Linux, временных файлов и остатков PRoot с оценкой места и расписанием"; version: "1.0"; license: "MIT"; category: "system" }
+  requires { pacman: ["python", "pacman-contrib", "systemd", "bash", "coreutils", "findutils", "gawk", "grep", "sed", "pacman"] }
+  size: 6x4
+  minSize: 4x4
+  state schedule = 0 persist
+  state nextRun = 0 persist
+  state trash = false persist
+  state confirm = false
+  source now = clock every 1m
+  source job = file("~/.cache/arch-cleaner/status.json") json
+  source health = cmd("python ~/.config/omalauncher/widgets/arch-cleaner/cleaner.py status") every 15s json
+  let busy = job.busy ?? false
+  let period = schedule == 1 ? 86400 : 604800
+  let modeLabel = schedule == 0 ? "Вручную" : schedule == 1 ? "Каждый день" : "Каждую неделю"
+  onTap: screen()
+  on trash { if !busy { run("python ~/.config/omalauncher/widgets/arch-cleaner/cleaner.py scan ${sh(trash ? "yes" : "no")}") } }
+  at nextRun {
+    if schedule != 0 {
+      if busy { nextRun = now + 300 } else {
+        run("python ~/.config/omalauncher/widgets/arch-cleaner/cleaner.py clean ${sh(trash ? "yes" : "no")}")
+        nextRun = now + period
+      }
+    } else { nextRun = 0 }
+  }
+  component Actions() {
+    if !busy {
+      Row { gap: 8
+        Button { text: "Оценить"; weight: 1; onTap: run("python ~/.config/omalauncher/widgets/arch-cleaner/cleaner.py scan ${sh(trash ? "yes" : "no")}") }
+        Button { text: "Очистить…"; weight: 1; color: accent; onTap: { confirm = true; screen() } }
+      }
+    }
+  }
+  Column { gap: 5
+    Row {
+      Text { text: "ARCH / ОЧИСТКА"; style: label; color: accent; weight: 1 }
+      Text { text: busy ? "В РАБОТЕ" : "${len(job.rows ?? [])} категорий"; style: small; color: muted; width: 100; align: end }
+    }
+    Text { text: fmtBytes(job.total ?? 0); fontSize: 32; color: accent }
+    Text { text: "можно освободить · оценка"; style: small; color: muted }
+    if busy { Progress { value: job.progress ?? 0; color: accent; height: 5 } }
+    Text { text: job.message ?? "Нажмите «Оценить»"; style: small; maxLines: 1 }
+    Text { text: modeLabel; style: small; color: muted }
+    Actions { }
+  }
+  screen {
+    title: "Arch · освобождение места"
+    Column { scroll: true; padding: 12; gap: 10
+      Text { text: "${fmtBytes(job.total ?? 0)} доступно для очистки"; style: title; color: accent }
+      Text { text: job.message ?? "Оценка ещё не выполнялась"; color: busy ? accent : foreground }
+      if busy { Progress { value: job.progress ?? 0 }; Text { text: "${job.progress ?? 0}% · этапы очистки"; style: small; color: muted } }
+      if job.cleaned != null { Text { text: "Освобождено: ${fmtBytes(job.freed ?? 0)} · ${fmtTime(job.cleaned, "dd.MM HH:mm")}"; style: small; color: green } }
+      if job.checked != null { Text { text: "Оценка: ${fmtTime(job.checked, "dd.MM HH:mm")}"; style: small; color: muted } }
+      Actions { }
+      if confirm && !busy {
+        Column { padding: 12; background: surface; gap: 8
+          Text { text: "Удалить выбранные кеши${trash ? " и содержимое корзины" : ""}?"; bold: true }
+          Text { text: "Удаление необратимо. Кеши будут созданы заново при использовании инструментов."; style: small; color: muted }
+          Row {
+            Button { text: "Удалить"; color: red; weight: 1; onTap: { confirm = false; run("python ~/.config/omalauncher/widgets/arch-cleaner/cleaner.py clean ${sh(trash ? "yes" : "no")}") } }
+            Button { text: "Отмена"; weight: 1; onTap: confirm = false }
+          }
+        }
+      }
+      Text { text: "ЧТО МОЖНО ОСВОБОДИТЬ"; style: label; color: accent }
+      for item in job.rows ?? [] {
+        Column { gap: 2
+          Row {
+            Text { text: item.name; weight: 1 }
+            Text { text: fmtBytes(item.bytes); width: 85; align: end; color: item.bytes > 0 ? accent : muted }
+          }
+          if item.note != "" { Text { text: item.note; style: small; color: muted; maxLines: 2 } }
+        }
+      }
+      Text { text: "РАСПИСАНИЕ"; style: label; color: accent }
+      Row { wrap: true; gap: 6
+        Button { text: "Вручную"; color: schedule == 0 ? accent : muted; onTap: { schedule = 0; nextRun = 0 } }
+        Button { text: "Ежедневно"; color: schedule == 1 ? accent : muted; onTap: { schedule = 1; nextRun = now + 86400 } }
+        Button { text: "Еженедельно"; color: schedule == 2 ? accent : muted; onTap: { schedule = 2; nextRun = now + 604800 } }
+      }
+      if schedule != 0 { Text { text: "Следующая: ${fmtTime(nextRun, "dd.MM HH:mm")}"; style: small; color: accent } }
+      Text { text: "Автоочистка использует те же правила. После сна или перезапуска launcher пропущенная задача выполняется при пробуждении. Нужен работающий Linux."; style: small; color: muted }
+      if !busy { Button { text: trash ? "Корзина: очищать" : "Корзина: сохранять"; onTap: trash = !trash } }
+      Text { text: "Pacman: сохраняются 2 версии. Go: кеш сборки, без модулей. Временные файлы: только старше 7 дней. Журналы: архивы старше 14 дней. PRoot: старше суток, PID завершён; при активном PRoot пропускается. Android и пользовательские проекты не затрагиваются."; style: small; color: muted }
+      for err in job.errors ?? [] { Text { text: err; style: small; color: red; maxLines: 4 } }
+    }
+  }
+}

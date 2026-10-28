@@ -1,0 +1,709 @@
+app "pixel cafe" {
+  // A café in pixel art, one room seen from above. Buy tables and the customers come in through
+  // the door, sit down and order; the cooks make it on the machines along the back wall, the
+  // waiters carry it over, and they pay on the way out. Buy a coffee machine, a juicer, an oven,
+  // a stove and a cake case for a longer menu, plants, lamps, a jukebox and an aquarium for more
+  // customers and bigger tips, and hire cooks and waiters as it fills up.
+  //
+  // There's no game loop. The coins are `bank` plus what the café has made since `since`, so it
+  // keeps earning while the app is closed; building, upgrading, hiring or selling settles them
+  // into `bank`. The customers are worked out from the clock: every seat has a round of 30
+  // seconds, and in each one a customer comes or doesn't, as many as the café can serve.
+
+  meta { owl: 12; description: "A pixel art café: buy tables, a coffee machine, an oven and decor, hire cooks and waiters, and watch the customers come in, eat and pay"; version: "1.0"; license: "MIT"; category: "games" }
+
+  title: ""
+  statusBar: false
+  edge: true
+  requires { pacman: [] }
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 20h27v9a12 12 0 0 1-12 12h-3A12 12 0 0 1 7 29v-9ZM34 21h3a7 7 0 0 1 0 14h-5M4 44h36M14 5v7m8-9v9m8-7v7"/></svg>"""
+
+  source now = clock every 1s
+
+  state bank = 250 persist
+  state since = 0 persist
+  // the tables and decor on the floor: top left cell, kind and the coins spent on it
+  state room = [] persist
+  // the machines on the back counter: slot, kind, level and the coins spent on them
+  state kit = [] persist
+  state cooks = 1 persist
+  state waiters = 1 persist
+  // when the app last ran, for the welcome back
+  state last = 0 persist
+  state greeted = false
+  // -1, or the kind being placed
+  state tool = -1
+  state tab = 0
+  // the floor cell of the selected table or decor, or 100 + the slot of a machine
+  state sel = -1
+  state msg = ""
+  state msgT = -99
+
+  every 15s { last = now ?? last }
+  when now != null && !greeted {
+    greeted = true
+    if last > 0 && now - last > 120 && rate > 0 {
+      msg = "WELCOME BACK +${[rate * (now - last)].map(fmt)[0]}"
+      msgT = time
+    }
+    last = now
+  }
+
+  // ---- what there is to buy ---------------------------------------------------------------------
+  // t: 0 table, 1 machine, 2 decor; w: cells across. A table seats `seats`; a machine puts a dish
+  // on the menu that sells for p (times its level); decor brings b to the café's looks.
+  let KD = [
+    {n: "TABLE", t: 0, w: 1, cost: 40, seats: 2},
+    {n: "ROUND TABLE", t: 0, w: 1, cost: 900, seats: 4},
+    {n: "LONG TABLE", t: 0, w: 2, cost: 12000, seats: 6},
+    {n: "COFFEE", t: 1, w: 1, cost: 60, p: 20},
+    {n: "JUICER", t: 1, w: 1, cost: 600, p: 50},
+    {n: "OVEN", t: 1, w: 1, cost: 5000, p: 160},
+    {n: "STOVE", t: 1, w: 1, cost: 40000, p: 550},
+    {n: "CAKE CASE", t: 1, w: 1, cost: 300000, p: 2000},
+    {n: "PLANT", t: 2, w: 1, cost: 80, b: 1},
+    {n: "LAMP", t: 2, w: 1, cost: 700, b: 2},
+    {n: "JUKEBOX", t: 2, w: 1, cost: 8000, b: 4},
+    {n: "AQUARIUM", t: 2, w: 1, cost: 60000, b: 7}
+  ]
+  let TABS = [[0, 1, 2], [3, 4, 5, 6, 7], [8, 9, 10, 11]]
+  // where the customers sit at each kind of table, in sixteenths of a cell: the middle of the seat
+  let SEATP = [
+    [[2, 11], [14, 11]],
+    [[8, 4.5], [2, 10.5], [14, 10.5], [8, 16]],
+    [[7, 4.5], [15, 4.5], [23, 4.5], [7, 16], [15, 16], [23, 16]]
+  ]
+  let V = 30
+
+  // ---- the floor, 8 cells across and 9 down, the door below the middle two of the bottom row ----
+  // The top row is the waiters' lane along the pass, and the two cells inside the door stay free.
+  let nbs = range(72).map(c => [c >= 8 ? c - 8 : -1, c < 64 ? c + 8 : -1, c % 8 > 0 ? c - 1 : -1, c % 8 < 7 ? c + 1 : -1].filter(n => n >= 0))
+  let foot = it => KD[it.k].w == 2 ? [it.c, it.c + 1] : [it.c]
+  // which table or decor is on each cell, or -1
+  let own = reduce(range(len(room)), (A, i) => reduce([room[i]].map(foot)[0], (B, c) => set(B, c, i), A), range(72).map(c => -1))
+  // how many steps each free cell is from the seeds, -1 for none
+  let bfs = seeds => reduce(range(72), (A, s) => len(A.f) == 0 ? A : [unique(flatten(A.f.map(c => nbs[c]))).filter(n => own[n] < 0 && A.d[n] < 0)].map(nf => {d: reduce(nf, (D, n) => set(D, n, s + 1), A.d), f: nf})[0], {d: reduce(seeds, (D, n) => set(D, n, 0), range(72).map(c => -1)), f: seeds}).d
+  // from the door, for customers, and from the pass, for waiters
+  let dist = [[67, 68]].map(bfs)[0]
+  let wdist = [range(8)].map(bfs)[0]
+  // the cells from a seed to [cell, dist]
+  let walk = z => reverse(reduce(range(z[1][z[0]]), (R, s) => R + [first(nbs[last(R)].filter(n => z[1][n] == z[1][last(R)] - 1))], [z[0]]))
+  // For each table: the free cell beside it nearest the door, and the one nearest the pass.
+  let info = range(len(room)).map(i => [room[i]].map(it => [unique(flatten([it].map(foot)[0].map(c => nbs[c]))).filter(n => own[n] < 0)].map(around => {
+    k: it.k, c: it.c, t: KD[it.k].t, w: KD[it.k].w,
+    door: first(around.filter(n => dist[n] >= 0).sortBy(n => dist[n])) ?? -1,
+    wdoor: first(around.filter(n => wdist[n] >= 0).sortBy(n => wdist[n])) ?? -1
+  })[0])[0])
+  let conn = info.map(f => f.t == 0 && f.door >= 0 && f.wdoor >= 0)
+  let lost = range(len(info)).filter(i => info[i].t == 0 && !conn[i])
+  // Every seat at a table the customers and waiters can get to, with the way there: the
+  // customer's from outside the door to the seat, the waiter's from the bell at the end of the
+  // pass, along it and to beside the table.
+  // Points in cells, from the floor's top left.
+  let SEATS = flatten(range(len(info)).filter(i => conn[i]).map(i => [{f: info[i], R: [[info[i].door, dist]].map(walk)[0], Q: [[info[i].wdoor, wdist]].map(walk)[0]}].map(z => SEATP[z.f.k].map(sp => [[z.f.c % 8 + sp[0] / 16, floor(z.f.c / 8) + sp[1] / 16]].map(st => {
+    i: i, x: st[0], y: st[1], front: sp[1] > 12,
+    tx: z.f.c % 8 + z.f.w / 2, ty: floor(z.f.c / 8) + 0.5,
+    pts: [[z.R[0] % 8 + 0.5, 9.8]] + z.R.map(c => [c % 8 + 0.5, floor(c / 8) + 0.55]) + [st],
+    wpts: range(7, z.Q[0] % 8 - 1, -1).map(c => [c + 0.5, 0.2]) + z.Q.map(c => [c % 8 + 0.5, floor(c / 8) + 0.55]) + [[last(z.Q) % 8 + 0.5 + 0.3 * sign(st[0] - last(z.Q) % 8 - 0.5), floor(last(z.Q) / 8) + 0.55 + 0.3 * sign(st[1] - floor(last(z.Q) / 8) - 0.5)]]
+  })[0]))[0]))
+  let NS = len(SEATS)
+  // A customer's round: walk in by tw, order, get the dish at D, eat, and leave at Lv. The waiter
+  // takes ww to walk from the pass.
+  let SE = range(NS).map(j => [[len(SEATS[j].pts) - 1, len(SEATS[j].wpts) - 1]].map(L => [[L[0], max(2, L[0] / 5), L[1], max(2.5, L[1] / 3)]].map(a => merge(SEATS[j], {
+    S: a[0], v: a[1], tw: a[0] / a[1], S2: a[2], vw: a[3], ww: a[2] / a[3], o: hash(j, 21),
+    D: max(a[0] / a[1] + 2.5, a[2] / a[3] + 0.3), Lv: V - a[0] / a[1] - 0.6
+  }))[0])[0])
+  // the seats of each table
+  let SIDX = range(len(room)).map(i => range(NS).filter(j => SEATS[j].i == i))
+
+  // ---- what the café makes ----------------------------------------------------------------------
+  let lvm = l => l * (l >= 10 ? 2 : 1) * (l >= 25 ? 2 : 1) * (l >= 50 ? 2 : 1)
+  let menu = sort(unique(kit.map(m => m.k)))
+  let dish = menu.map(k => KD[k].p * [reduce(kit.filter(m => m.k == k).map(m => m.l), (a, b) => max(a, b), 1)].map(lvm)[0])
+  let avgPrice = len(menu) > 0 ? sum(dish) / len(menu) : 0
+  let beauty = sum(info.filter(f => f.t == 2).map(f => KD[f.k].b))
+  let stars = clamp(floor(1 + len(menu) * 0.5 + min(beauty, 24) / 6), 1, 5)
+  // how many of the seats are taken, at most, and how much more a customer leaves for a nice room
+  let occ = 0.45 + 0.11 * stars
+  let tips = 1 + 0.025 * min(beauty, 24)
+  // A cook makes a dish every 3 s, on a machine of their own; a waiter takes one out every 4 s.
+  let effCooks = min(cooks, len(kit))
+  let dem = NS * occ / V
+  let cookCap = effCooks / 3
+  let waitCap = waiters / 4
+  let served = len(menu) > 0 ? min(dem, cookCap, waitCap) : 0
+  // the share of seats with a customer each round
+  let u = NS > 0 ? served * V / NS : 0
+  let rate = served * avgPrice * tips
+  let guests = round(NS * u)
+  // what holds the café back
+  let need = len(menu) == 0 ? "menu" : NS == 0 ? "tables" : served < dem - 0.0001 ? (cookCap <= waitCap ? (cooks > len(kit) ? "machine" : "cook") : "waiter") : "tables"
+  let tnow = now ?? since
+  let coins = bank + rate * max(0, tnow - since)
+  // what the next of a kind costs: each one more than the last
+  let price = range(12).map(k => floor(KD[k].cost * pow(KD[k].t == 2 ? 1.25 : 1.35, KD[k].t == 1 ? count(kit, m => m.k == k) : count(room, it => it.k == k))))
+  let upCost = kit.map(m => floor(KD[m.k].cost * 0.5 * pow(1.16, m.l - 1)))
+  let cookCost = floor(300 * pow(2.6, cooks - 1))
+  let waiterCost = floor(200 * pow(2.6, waiters - 1))
+  let si = indexOf(room.map(it => it.c), sel)
+  let ki = indexOf(kit.map(m => 100 + m.s), sel)
+  let slotK = reduce(range(len(kit)), (A, i) => set(A, kit[i].s, i), range(8).map(s => -1))
+
+  let fmt = n => n < 1000 ? str(floor(n))
+    : n < 1000000 ? "${fixed(n / 1000, n < 100000 ? 1 : 0)}K"
+    : n < 1000000000 ? "${fixed(n / 1000000, n < 100000000 ? 1 : 0)}M"
+    : n < 1000000000000 ? "${fixed(n / 1000000000, n < 100000000000 ? 1 : 0)}B"
+    : "${fixed(n / 1000000000000, 1)}T"
+  let fmtRate = n => n < 10 && n != floor(n) ? fixed(n, 1) : [n].map(fmt)[0]
+
+  // ---- the screen, in dp ------------------------------------------------------------------------
+  // The room on top and the panel below it, or in landscape the panel to the right. The room is
+  // 9 cells across with its walls, and 12.8 down: the wall, the back counter, the kitchen, the
+  // pass, 9 rows of floor and the wall with the door.
+  let SW = screenWidth ?? 400
+  let SH = screenHeight ?? 800
+  let LS = SW > SH
+  let TOP = max(screenTop ?? 0, 12)
+  let INS = max(screenInset ?? 0, 16)
+  let HUD = 40
+  let C = floor(LS ? min((SH - TOP - HUD - INS - 4) / 12.8, (SW - 330) / 9) : min((SW - 8) / 9, (SH - TOP - HUD - INS - 214) / 12.8))
+  let q = C / 16
+  let RX = LS ? 12 : floor((SW - 9 * C) / 2)
+  let RY = TOP + HUD
+  let FX = RX + C / 2
+  let AY = RY + 0.8 * C
+  let KY = AY + C
+  let PSY = KY + C
+  let FY = PSY + C / 2
+  let MW = 8 * C
+  let PX = LS ? RX + 9 * C + 16 : 10
+  let PY = LS ? TOP + HUD : FY + 9.5 * C + 10
+  let PW = LS ? SW - PX - 16 : SW - 20
+  let PH = SH - INS - PY
+  let TH = 30
+  let CC = 3
+  let CW = (PW - (CC - 1) * 6) / CC
+  let CY = PY + TH + 8
+  let CH = min(84, (PH - TH - 14) / 2)
+  // the selection panel's buttons
+  let BH = min(48, (PH - 20) / 3)
+  let BY = PY + PH - BH - 4
+  let UW = floor((PW - 8) * 0.6)
+  // the staff tab's rows
+  let SRH = min(64, (PH - TH - 44) / 2)
+
+  // ---- the art ----------------------------------------------------------------------------------
+  let PAL = {o: "#2a1e30", K: "#2a2236", W: "#fff6e8", w: "#d8ccc0", R: "#e04848", r: "#a02838", Y: "#ffd36a", y: "#d8962a", B: "#4a90e0", b: "#2a5aa0", C: "#a8e8ff", c: "#3a9ad8", G: "#5fb048", g: "#3a8a3a", L: "#8ad860", P: "#ff8ab0", p: "#d05a88", T: "#b07a45", t: "#6a4428", U: "#e0aa70", S: "#c0b8d0", s: "#7a7490", O: "#ff9a48", N: "#4a4458", n: "#5e5870", k: "#7a4424", Q: "#d0703c", q: "#a04a28", M: "#9a5ad8", z: alpha("#000000", 0.15)}
+  let BRIGHT = ["#e04848", "#4a90e0", "#ffd36a", "#5fb048", "#ff8ab0", "#9a5ad8", "#ff9a48", "#a8e8ff"]
+  let HAIR = ["#2a1e30", "#6a4428", "#d8962a", "#a02838", "#f0d890", "#5e5870", "#3a2a1e", "#c0602a"]
+  let SKIN = ["#f4c8a0", "#d8a070", "#a86a48", "#ffe0c0", "#c08058"]
+  // tables, machines and decor as rectangles in sixteenths of a cell, so a frame of a full room
+  // stays under the canvas's 2000 drawing calls; a machine is 13 tall and stands on the counter
+  let ART = [
+    [[1, 13, 14, 2, "z"], [0, 5, 4, 8, "o"], [1, 6, 1, 6, "t"], [2, 9, 2, 3, "T"], [12, 5, 4, 8, "o"], [14, 6, 1, 6, "t"], [12, 9, 2, 3, "T"],
+     [4, 4, 8, 8, "o"], [5, 5, 6, 4, "T"], [5, 5, 6, 1, "U"], [5, 9, 6, 2, "t"], [5, 12, 1, 2, "o"], [10, 12, 1, 2, "o"], [7, 6, 2, 2, "W"], [7.5, 5, 1, 1, "P"]],
+    [[2, 14, 12, 2, "z"], [6, 0, 4, 4, "o"], [7, 1, 2, 2, "t"], [0, 6, 4, 5, "o"], [1, 7, 2, 3, "t"], [12, 6, 4, 5, "o"], [13, 7, 2, 3, "t"],
+     [4, 3, 8, 10, "o"], [3, 4, 10, 8, "o"], [5, 4, 6, 8, "W"], [4, 5, 8, 6, "W"], [4, 10, 8, 1, "w"], [5, 11, 6, 1, "w"], [7, 6, 2, 2, "C"], [7, 5, 2, 1, "R"],
+     [6, 12, 4, 4, "o"], [7, 13, 2, 2, "t"]],
+    [[1, 14, 30, 2, "z"], [5, 0, 4, 4, "o"], [6, 1, 2, 2, "t"], [13, 0, 4, 4, "o"], [14, 1, 2, 2, "t"], [21, 0, 4, 4, "o"], [22, 1, 2, 2, "t"],
+     [1, 4, 30, 8, "o"], [2, 5, 28, 5, "T"], [2, 5, 28, 1, "U"], [2, 7, 28, 1.5, "W"], [2, 10, 28, 1, "t"], [2, 12, 1, 2, "o"], [29, 12, 1, 2, "o"],
+     [5, 12, 4, 4, "o"], [6, 13, 2, 2, "t"], [13, 12, 4, 4, "o"], [14, 13, 2, 2, "t"], [21, 12, 4, 4, "o"], [22, 13, 2, 2, "t"]],
+    [[0, 1, 16, 12, "o"], [1, 0, 14, 1, "o"], [1, 2, 14, 3, "S"], [14, 2, 1, 3, "s"], [2, 3, 1, 1, "R"], [4, 3, 1, 1, "Y"], [6, 3, 1, 1, "G"],
+     [1, 6, 2, 5, "S"], [13, 6, 2, 5, "S"], [3, 6, 10, 5, "N"], [7, 6, 2, 1, "K"], [7.5, 7, 1, 1.5, "k"], [6, 8.5, 3, 2.5, "W"], [9, 9, 1, 1, "W"], [1, 11, 14, 1, "s"]],
+    [[5, 0, 6, 3, "o"], [6, 1, 4, 1, "K"], [4, 3, 8, 7, "o"], [11, 4, 2, 4, "o"], [5, 3, 6, 6, "C"], [6, 4, 4, 5, "O"], [6, 4, 1, 1, "Y"], [11, 5, 1, 2, "C"],
+     [2, 9, 12, 4, "o"], [3, 10, 10, 2, "S"], [5, 10.5, 1, 1, "R"], [0, 9, 3, 3, "o"], [0.5, 9.5, 2, 2, "O"]],
+    [[0, 0, 16, 13, "o"], [1, 1, 14, 3, "S"], [2, 2, 1, 1, "K"], [4, 2, 1, 1, "K"], [6, 2, 1, 1, "K"], [11, 2, 1, 1, "Y"], [12, 2, 1, 1, "R"],
+     [1, 5, 14, 7, "S"], [14, 5, 1, 7, "s"], [3, 6, 9, 3, "O"], [3, 10, 9, 1, "w"], [1, 11, 14, 1, "s"]],
+    [[2, 1, 4, 1, "o"], [1, 2, 6, 4, "o"], [2, 2, 4, 1, "Y"], [2, 3, 4, 2, "S"], [10, 2, 4, 1, "o"], [9, 3, 6, 3, "o"], [10, 3, 4, 1, "k"], [10, 4, 4, 1, "R"], [14, 4, 2, 1, "o"],
+     [0, 6, 16, 7, "o"], [1, 7, 14, 5, "N"], [2, 7, 1, 1, "Y"], [5, 7, 1, 1, "Y"], [10, 7, 1, 1, "Y"], [13, 7, 1, 1, "Y"], [3, 9, 10, 2, "K"]],
+    [[2, 0, 12, 1, "o"], [0, 1, 16, 12, "o"], [1, 2, 14, 4, "C"], [2, 1, 12, 1, "C"], [2, 2, 1, 1, "W"], [2, 3, 4, 3, "P"], [2, 3, 4, 1, "W"], [9, 3, 4, 3, "k"], [9, 3, 4, 1, "W"],
+     [1, 7, 14, 2, "C"], [2, 7, 5, 2, "R"], [8, 7, 5, 2, "Y"], [1, 10, 14, 1, "T"], [1, 11, 14, 1, "t"]],
+    [[3, 14, 10, 2, "z"], [5, 10, 6, 5, "o"], [6, 11, 4, 3, "Q"], [6, 11, 4, 1, "q"], [6, 1, 4, 3, "o"], [4, 3, 8, 8, "o"], [2, 5, 12, 4, "o"],
+     [7, 2, 2, 3, "G"], [5, 4, 6, 6, "G"], [3, 6, 10, 2, "G"], [6, 5, 2, 2, "L"], [9, 7, 2, 2, "g"], [4, 7, 2, 1, "g"], [10, 4, 1, 1, "L"]],
+    [[4, 14, 8, 2, "z"], [5, 13, 6, 2, "o"], [6, 13, 4, 1, "N"], [7, 6, 2, 8, "o"], [7.5, 6, 1, 7, "S"], [3, 1, 10, 6, "o"], [4, 2, 8, 4, "Y"], [4, 2, 8, 1, "W"], [4, 5, 8, 1, "y"]],
+    [[2, 14, 12, 2, "z"], [4, 0, 8, 2, "o"], [2, 1, 12, 14, "o"], [5, 1, 6, 1, "R"], [3, 2, 10, 12, "R"], [3, 2, 1, 12, "r"], [12, 2, 1, 12, "r"],
+     [5, 3, 6, 5, "o"], [6, 4, 4, 3, "Y"], [6, 4, 4, 1, "W"], [5, 9, 6, 4, "K"], [6, 10, 1, 2, "n"], [8, 10, 1, 2, "n"], [10, 10, 1, 2, "n"]],
+    [[1, 14, 14, 2, "z"], [2, 11, 12, 4, "o"], [3, 12, 10, 2, "t"], [1, 2, 14, 10, "o"], [2, 3, 12, 8, "c"], [2, 3, 12, 2, "C"], [2, 10, 12, 1, "Y"],
+     [4, 7, 1, 3, "G"], [5, 8, 1, 2, "g"], [11, 6, 1, 4, "G"], [12, 8, 1, 2, "L"]]
+  ].map(L => L.map(r => [r[0], r[1], r[2], r[3], PAL[r[4]]]))
+  // each dish, in sixteenths of a cell around where it stands
+  let DISH = [
+    [[-1, -1, 2.5, 2, "#fff6e8"], [-1, -1, 2.5, 0.8, "#7a4424"], [1.5, -0.5, 0.8, 1, "#fff6e8"]],
+    [[-0.8, -1.5, 2, 2.5, "#a8e8ff"], [-0.8, -0.7, 2, 1.7, "#ff9a48"], [0.6, -2.3, 0.5, 1.5, "#e04848"]],
+    [[-1.5, -1, 3.5, 2.5, "#ffd36a"], [-1.5, -1, 3.5, 0.6, "#d8962a"], [-0.8, -0.3, 0.8, 0.8, "#e04848"], [0.7, 0.3, 0.8, 0.8, "#e04848"]],
+    [[-1.5, -0.2, 3.5, 1.7, "#d8ccc0"], [-1.2, -0.8, 2.9, 0.9, "#ffd36a"], [-0.2, -1.8, 0.4, 1.2, "#6a4428"]],
+    [[-1.2, -1, 2.8, 2.2, "#ff8ab0"], [-1.2, -1, 2.8, 0.7, "#fff6e8"], [-0.2, -1.6, 0.8, 0.7, "#e04848"]]
+  ]
+  let press = "https://raw.githubusercontent.com/google/fonts/main/ofl/pressstart2p/PressStart2P-Regular.ttf"
+  let coinArt = ["..ooo..", ".oYYYo.", "oYWYYyo", "oYWYYyo", "oYYYYyo", ".oyyyo.", "..ooo.."]
+  let starArt = ["..o..", ".oYo.", "oYYYo", ".oYo.", "..o.."]
+  let bubbleArt = [".ooooo.", "oWWRWWo", "oWWRWWo", "oWWRWWo", "oWWWWWo", "oWWRWWo", ".ooooo.", "...o..."]
+  // The floor's planks, worked out once: every other row of planks a shade darker, and where
+  // two planks meet.
+  let planks = flatten(range(18).map(r => [r % 2 == 1 ? [FX, FY + r * C / 2, MW, C / 2, "#c48a58"] : null, [FX + (floor(hash(r, 31) * 8) + 0.5) * C, FY + r * C / 2, q, C / 2, "#a8703f"], [FX + (floor(hash(r, 32) * 8) + 0.5) * C + 3 * C / 2, FY + r * C / 2, q, C / 2, "#a8703f"], [FX, FY + r * C / 2 + C / 2 - q / 2, MW, q / 2, "#a8703f"]].filter(p => p != null && p[0] < FX + MW - q)))
+  let freeF = range(8, 72).filter(c => own[c] < 0 && c != 67 && c != 68)
+  let freeK = range(8).filter(s => slotK[s] < 0)
+  // back row first, so what stands in front covers what's behind
+  let order = range(len(room)).sortBy(i => floor(room[i].c / 8) * 8 + room[i].c % 8)
+  // at most 48 seats are drawn, spread over the room
+  let SHOWN = range(NS).map(j => NS <= 48 || floor(j * 48 / NS) != floor((j - 1) * 48 / NS))
+  let hh = num(fmtTime(tnow, "H"), 12)
+  let mm = num(fmtTime(tnow, "m"), 0)
+  let day = hh >= 7 && hh < 20
+
+  Canvas {
+    fill: true
+    background: background
+
+    onTap: {
+      let ax = floor((x - FX) / C)
+      let ay = floor((y - FY) / C)
+      let cell = ay * 8 + ax
+      if x >= FX && x < FX + MW && y >= FY && y < FY + 9 * C {
+        if tool >= 0 && KD[tool].t != 1 {
+          let w = KD[tool].w
+          let fit = (w == 1 ? [cell] : [cell, cell - 1]).filter(a => a >= 8 && a < 72 && a % 8 <= 8 - w && floor(a / 8) == ay && all(w == 1 ? [a] : [a, a + 1], c => own[c] < 0 && c != 67 && c != 68))
+          if len(fit) == 0 {
+            msg = ay == 0 ? "KEEP THE LANE FREE" : "NO ROOM HERE"
+            msgT = time
+          } else if coins < price[tool] {
+            msg = "NOT ENOUGH COINS"
+            msgT = time
+          } else {
+            bank = coins - price[tool]
+            since = tnow
+            room = room + [{c: fit[0], k: tool, sp: price[tool]}]
+            haptic()
+          }
+        } else if own[cell] >= 0 {
+          sel = sel == room[own[cell]].c ? -1 : room[own[cell]].c
+          tool = -1
+        } else {
+          sel = -1
+          tool = -1
+        }
+      } else if x >= FX && x < FX + MW && y >= AY - C / 2 && y < PSY {
+        let s = ax
+        if tool >= 0 && KD[tool].t == 1 {
+          if slotK[s] >= 0 {
+            msg = "THAT SPOT IS TAKEN"
+            msgT = time
+          } else if coins < price[tool] {
+            msg = "NOT ENOUGH COINS"
+            msgT = time
+          } else {
+            bank = coins - price[tool]
+            since = tnow
+            kit = kit + [{s: s, k: tool, l: 1, sp: price[tool]}]
+            haptic()
+          }
+        } else if slotK[s] >= 0 {
+          sel = sel == 100 + s ? -1 : 100 + s
+          tool = -1
+        } else {
+          sel = -1
+          tool = -1
+        }
+      } else if (LS ? x >= PX : y >= PY) && (si >= 0 || ki >= 0) {
+        if x >= PX + PW - 34 && y < PY + 34 {
+          sel = -1
+        } else if y >= BY && x < PX + UW && ki >= 0 {
+          if coins >= upCost[ki] {
+            bank = coins - upCost[ki]
+            since = tnow
+            kit = set(kit, ki, merge(kit[ki], {l: kit[ki].l + 1, sp: kit[ki].sp + upCost[ki]}))
+            haptic()
+          } else {
+            msg = "NOT ENOUGH COINS"
+            msgT = time
+          }
+        } else if y >= BY && x >= PX + UW + 8 {
+          bank = coins + floor((si >= 0 ? room[si].sp : kit[ki].sp) / 2)
+          since = tnow
+          if si >= 0 { room = remove(room, si) } else { kit = remove(kit, ki) }
+          sel = -1
+        }
+      } else if (LS ? x >= PX : y >= PY) && y < PY + TH {
+        tab = clamp(floor((x - PX) / (PW / 4)), 0, 3)
+        tool = -1
+        sel = -1
+      } else if (LS ? x >= PX : y >= PY) && tab == 3 && y >= CY && y < CY + 2 * (SRH + 6) {
+        let r = floor((y - CY) / (SRH + 6))
+        let n = r == 0 ? cooks : waiters
+        let cost = r == 0 ? cookCost : waiterCost
+        if x >= PX + PW - 110 && n < 8 {
+          if coins >= cost {
+            bank = coins - cost
+            since = tnow
+            if r == 0 { cooks = cooks + 1 } else { waiters = waiters + 1 }
+            haptic()
+          } else {
+            msg = "NOT ENOUGH COINS"
+            msgT = time
+          }
+        }
+      } else if (LS ? x >= PX : y >= PY) && tab < 3 && y >= CY && x >= PX {
+        let hi = floor((y - CY) / (CH + 6)) * CC + floor((x - PX) / (CW + 6))
+        if hi >= 0 && hi < len(TABS[tab]) {
+          tool = tool == TABS[tab][hi] ? -1 : TABS[tab][hi]
+          sel = -1
+        }
+      }
+    }
+
+    // ---- the walls and the floor ----
+    rect(RX, RY, 9 * C, 12.8 * C, fill: "#5a3a2a")
+    // the back wall: wallpaper, two windows, a clock and the menu on a chalkboard
+    rect(FX, RY, MW, AY - RY + 6 * q, fill: "#f0c890")
+    for s in range(16) { rect(FX + s * C / 2 + C / 4, RY, q, AY - RY + 6 * q, fill: "#e6b87c") }
+    rect(FX, AY + 2 * q, MW, q, fill: "#c8905a")
+    for wx in [0.35, 6.35] {
+      rect(FX + wx * C, RY + 1.5 * q, 1.3 * C, 9 * q, fill: "#6a4428")
+      rect(FX + wx * C + q, RY + 2.5 * q, 1.3 * C - 2 * q, 7 * q, fill: day ? "#8ad0f8" : "#2a3a6a")
+      rect(FX + wx * C + q, RY + 2.5 * q, 1.3 * C - 2 * q, 2 * q, fill: day ? "#b8e4ff" : "#3a4a80")
+      rect(FX + (wx + 0.65) * C - q / 2, RY + 2.5 * q, q, 7 * q, fill: "#6a4428")
+      if !day { rect(FX + (wx + 0.3) * C, RY + 4 * q, q / 2, q / 2, fill: "#fff6e8") }
+    }
+    circle(FX + 2.25 * C, RY + 6 * q, 4.6 * q, fill: "#2a1e30")
+    circle(FX + 2.25 * C, RY + 6 * q, 3.8 * q, fill: "#fff6e8")
+    line(FX + 2.25 * C, RY + 6 * q, FX + 2.25 * C + sin(rad((hh % 12 + mm / 60) * 30)) * 2.2 * q, RY + 6 * q - cos(rad((hh % 12 + mm / 60) * 30)) * 2.2 * q, stroke: "#2a1e30", width: q * 0.9)
+    line(FX + 2.25 * C, RY + 6 * q, FX + 2.25 * C + sin(rad(mm * 6)) * 3.2 * q, RY + 6 * q - cos(rad(mm * 6)) * 3.2 * q, stroke: "#2a1e30", width: q * 0.6)
+    rect(FX + 3 * C, RY + q, 2.9 * C, 10 * q, fill: "#6a4428")
+    rect(FX + 3 * C + q, RY + 2 * q, 2.9 * C - 2 * q, 8 * q, fill: "#2e4a3c")
+    text("MENU", FX + 4.45 * C, RY + 4 * q, size: 2.4 * q, color: "#fff6e8", font: press, align: center)
+    for k, j in menu {
+      for r in DISH[k - 3] { rect(FX + 3.3 * C + (j + 0.5) * 0.46 * C + r[0] * q * 0.8, RY + 7.8 * q + r[1] * q * 0.8, r[2] * q * 0.8, r[3] * q * 0.8, fill: r[4]) }
+    }
+    // the back counter, steel
+    rect(FX, AY + 3 * q, MW, 9 * q, fill: "#c0b8d0")
+    rect(FX, AY + 3 * q, MW, q, fill: "#e0dcea")
+    rect(FX, AY + 12 * q, MW, 4 * q, fill: "#7a7490")
+    rect(FX, AY + 12 * q, MW, q, fill: "#5e5870")
+    // the kitchen floor, tiled
+    rect(FX, KY, MW, C, fill: "#e8e0d0")
+    for t in range(16) { rect(FX + t * C / 2, KY + (t % 2) * C / 2, C / 2, C / 2, fill: "#cfc6b8") }
+
+    // ---- the machines ----
+    for m, i in kit {
+      let mx = FX + m.s * C
+      rect(mx + q, AY + 11 * q, 14 * q, 2 * q, fill: alpha("#000000", 0.18))
+      for r in ART[m.k] { rect(mx + r[0] * q, AY + (r[1] - 1) * q, r[2] * q, r[3] * q, fill: r[4]) }
+      if m.k == 5 { rect(mx + 4 * q, AY + 6 * q, 7 * q, q, fill: floor(time * 3 + i) % 2 == 0 ? "#ffd36a" : "#ff9a48") }
+      if sel == 100 + m.s {
+        rect(mx, AY - q, C, 14 * q, stroke: accent, width: 2)
+      }
+    }
+
+    // ---- the cooks, at the machines with their backs to us ----
+    // Every 7 s each cook moves on to the next machine; cooks with no machine wait by the wall.
+    let nk = len(kit)
+    let rr = floor(time / 7)
+    let mv = clamp((time / 7 - rr) * 7, 0, 1)
+    for j in range(cooks) {
+      let at = j < nk ? kit[(j + rr) % nk].s : (len(freeK) > 0 ? freeK[(j - nk) % len(freeK)] : j % 8)
+      let was = j < nk ? kit[(j + rr + nk - 1) % nk].s : at
+      let cx = FX + (lerp(was, at, mv) + 0.5) * C
+      let cy = KY + (j < nk ? 13 : 12) * q
+      let work = j < nk && mv >= 1
+      let bob = work ? floor(time * 5 + j) % 2 : 0
+      rect(cx - 2 * q, cy - q, 5 * q, 1.5 * q, fill: alpha("#000000", 0.15))
+      rect(cx - q, cy - 2 * q, q, 2 * q, fill: "#2a2236")
+      rect(cx + q, cy - 2 * q, q, 2 * q, fill: "#2a2236")
+      rect(cx - 2 * q, cy - 6 * q, 5 * q, 4.5 * q, fill: "#fff6e8")
+      rect(cx - 2 * q, cy - 3 * q, 5 * q, q, fill: "#d8ccc0")
+      rect(cx - 2.8 * q, cy - (5.5 + bob) * q, q, 2.5 * q, fill: "#fff6e8")
+      rect(cx + 2.8 * q, cy - (5.5 + 1 - bob) * q, q, 2.5 * q, fill: "#fff6e8")
+      rect(cx - 0.5 * q, cy - 7 * q, 2 * q, q, fill: SKIN[(j + 2) % 5])
+      rect(cx - 1.5 * q, cy - 9.5 * q, 4 * q, 2.5 * q, fill: HAIR[j % 8])
+      rect(cx - 2 * q, cy - 13.5 * q, 5 * q, 3.5 * q, fill: "#fff6e8")
+      rect(cx - 1.5 * q, cy - 10.5 * q, 4 * q, q, fill: "#d8ccc0")
+      if work {
+        for p in range(3) {
+          let sp = (time * 0.9 + p / 3 + j * 0.31) % 1
+          rect(FX + (at + 0.3 + p * 0.2) * C + sin(sp * 6 + p) * q, AY - (1 + sp * 7) * q, (2 - sp) * q, (2 - sp) * q, fill: alpha("#ffffff", 0.7 * (1 - sp)))
+        }
+      }
+    }
+
+    // ---- the pass between the kitchen and the floor ----
+    rect(FX, PSY, MW, 5 * q, fill: "#b07a45")
+    rect(FX, PSY, MW, q, fill: "#e0aa70")
+    rect(FX, PSY + 5 * q, MW, 3 * q, fill: "#6a4428")
+    rect(FX + 7.4 * C, PSY + 0.5 * q, 3 * q, 2.5 * q, fill: "#d8962a")
+    rect(FX + 7.4 * C + q, PSY - 0.5 * q, q, q, fill: "#ffd36a")
+
+    // ---- the floor ----
+    rect(FX, FY, MW, 9 * C, fill: "#d09868")
+    for p in planks { rect(p[0], p[1], p[2], p[3], fill: p[4]) }
+    rect(FX + 3 * C + 2 * q, FY + 8 * C + 3 * q, 2 * C - 4 * q, C - 4 * q, fill: "#a02838")
+    rect(FX + 3 * C + 3 * q, FY + 8 * C + 4 * q, 2 * C - 6 * q, C - 6 * q, fill: "#c03848")
+    rect(FX, FY, MW, q, fill: alpha("#000000", 0.15))
+
+    // where the picked kind can go
+    if tool >= 0 && KD[tool].t != 1 {
+      for c in freeF { rect(FX + (c % 8 + 0.5) * C - q, FY + (floor(c / 8) + 0.5) * C - q, 2 * q, 2 * q, fill: alpha("#ffffff", 0.6)) }
+    }
+    if tool >= 0 && KD[tool].t == 1 {
+      for s in freeK { rect(FX + (s + 0.5) * C - 1.5 * q, AY + 6 * q, 3 * q, 3 * q, fill: alpha("#ffffff", 0.8)) }
+    }
+
+    // where every seat's customer is in their round: n numbers the round, tc is the time into it
+    let P = range(NS).map(j => [time / V + SE[j].o].map(ph => {n: floor(ph), tc: (ph - floor(ph)) * V})[0])
+    let ON = range(NS).map(j => SHOWN[j] && hash(j, P[j].n, 1) < u)
+
+    clip(FX, PSY, MW, 9.5 * C + C / 2) {
+      // ---- tables and decor, from the back row to the front, with the customers sitting there ----
+      for i in order {
+        let it = room[i]
+        let K = it.k
+        let ix = FX + it.c % 8 * C
+        let iy = FY + floor(it.c / 8) * C
+        if K == 9 { circle(ix + C / 2, iy + 5 * q, 10 * q, fill: alpha("#ffd36a", 0.16)) }
+        for r in ART[K] { rect(ix + r[0] * q, iy + r[1] * q, r[2] * q, r[3] * q, fill: r[4]) }
+        if K == 10 {
+          for l in range(4) { rect(ix + (5 + l * 1.5) * q, iy + 2 * q, q, q, fill: BRIGHT[(l + floor(time * 4)) % 8]) }
+          let nt = (time * 0.7 + hash(it.c, 3)) % 1
+          rect(ix + (12 + sin(nt * 9) * 1.5) * q, iy - nt * 6 * q, 1.2 * q, 1.2 * q, fill: alpha("#2a1e30", 1 - nt))
+          rect(ix + (13 + sin(nt * 9) * 1.5) * q, iy - (nt * 6 + 2) * q, 0.4 * q, 2 * q, fill: alpha("#2a1e30", 1 - nt))
+        }
+        if K == 11 {
+          for f in range(2) {
+            let fx = 7 + 4.5 * sin(time * (0.6 + f * 0.25) + f * 2 + it.c)
+            let dir = cos(time * (0.6 + f * 0.25) + f * 2 + it.c) > 0 ? 1 : -1
+            rect(ix + (fx - 1) * q, iy + (5.5 + f * 2) * q, 2.5 * q, 1.2 * q, fill: f == 0 ? "#ff9a48" : "#ffd36a")
+            rect(ix + (fx - 1 - dir) * q, iy + (5.7 + f * 2) * q, q, 0.8 * q, fill: f == 0 ? "#ff9a48" : "#ffd36a")
+          }
+          let bb = (time * 0.5 + it.c * 0.1) % 1
+          rect(ix + 10 * q, iy + (9 - bb * 6) * q, 0.7 * q, 0.7 * q, fill: alpha("#ffffff", 0.8))
+        }
+        for j in SIDX[i] {
+          if ON[j] && P[j].tc >= SE[j].tw && P[j].tc < SE[j].Lv {
+            let s = SE[j]
+            let tc = P[j].tc
+            let sx = FX + s.x * C
+            let sy = FY + s.y * C
+            let px = FX + lerp(s.x, s.tx, 0.5) * C
+            let py = FY + lerp(s.y, s.ty, s.front ? 0.6 : 0.45) * C
+            let dk = menu[floor(hash(j, P[j].n, 2) * len(menu))] - 3
+            if tc >= s.D {
+              rect(px - 2 * q, py - 1.2 * q, 4 * q, 2.6 * q, fill: "#fff6e8")
+              if tc < s.D + (s.Lv - s.D) * 0.75 { for r in DISH[dk] { rect(px + r[0] * q * 0.8, py + r[1] * q * 0.8, r[2] * q * 0.8, r[3] * q * 0.8, fill: r[4]) } }
+            }
+            rect(sx - 1.75 * q, sy - 4 * q, 3.5 * q, 3 * q, fill: BRIGHT[floor(hash(j, P[j].n, 4) * 8)])
+            rect(sx - 1.25 * q, sy - 6.5 * q, 2.5 * q, 2.5 * q, fill: s.front ? HAIR[floor(hash(j, P[j].n, 3) * 8)] : SKIN[floor(hash(j, P[j].n, 5) * 5)])
+            rect(sx - 1.25 * q, sy - 7 * q, 2.5 * q, q, fill: HAIR[floor(hash(j, P[j].n, 3) * 8)])
+            if tc < s.D {
+              rect(sx - 2.5 * q, sy - 13.5 * q, 5 * q, 5 * q, fill: "#2a1e30")
+              rect(sx - 2 * q, sy - 13 * q, 4 * q, 4 * q, fill: "#fff6e8")
+              rect(sx - 0.5 * q, sy - 8.5 * q, q, q, fill: "#2a1e30")
+              for r in DISH[dk] { rect(sx + r[0] * q * 0.7, sy - 11 * q + r[1] * q * 0.7, r[2] * q * 0.7, r[3] * q * 0.7, fill: r[4]) }
+            }
+            if tc >= s.Lv - 1.2 {
+              let cyc = (tc - s.Lv + 1.2) / 1.2
+              sprite(coinArt, sx - 3.5 * q * 0.7, sy - (10 + cyc * 6) * q, q * 0.7, palette: PAL)
+            }
+          }
+        }
+        if (it.c == sel) {
+          rect(ix, iy, KD[K].w * C, C, stroke: accent, width: 2)
+        }
+        if indexOf(lost, i) >= 0 && time % 1.2 < 0.9 {
+          sprite(bubbleArt, ix + (KD[K].w * 8 - 3.5) * q, iy - 6 * q, q, palette: PAL)
+        }
+      }
+
+      // ---- customers walking in and out ----
+      for j in range(NS) {
+        if ON[j] && (P[j].tc < SE[j].tw || (P[j].tc >= SE[j].Lv && P[j].tc < SE[j].Lv + SE[j].tw)) {
+          let s = SE[j]
+          let tc = P[j].tc
+          let f = tc < s.tw ? tc * s.v : s.S - (tc - s.Lv) * s.v
+          let i0 = clamp(floor(f), 0, s.S - 1)
+          let fr = f - i0
+          let gx = FX + lerp(s.pts[i0][0], s.pts[i0 + 1][0], fr) * C
+          let gy = FY + lerp(s.pts[i0][1], s.pts[i0 + 1][1], fr) * C
+          let step = floor(time * 6 + j) % 2
+          rect(gx - 1.75 * q, gy - q, 4 * q, 1.5 * q, fill: alpha("#000000", 0.18))
+          rect(gx - q + step * 0.5 * q, gy - 2 * q, q, 2 * q, fill: "#2a1e30")
+          rect(gx + q - step * 0.5 * q, gy - 2 * q, q, 2 * q, fill: "#2a1e30")
+          rect(gx - 1.75 * q, gy - 5 * q, 3.5 * q, 3 * q, fill: BRIGHT[floor(hash(j, P[j].n, 4) * 8)])
+          rect(gx - 1.25 * q, gy - 7.5 * q, 2.5 * q, 2.5 * q, fill: tc < s.tw && s.pts[i0 + 1][1] < s.pts[i0][1] - 0.01 ? HAIR[floor(hash(j, P[j].n, 3) * 8)] : SKIN[floor(hash(j, P[j].n, 5) * 5)])
+          rect(gx - 1.25 * q, gy - 8 * q, 2.5 * q, q, fill: HAIR[floor(hash(j, P[j].n, 3) * 8)])
+        }
+      }
+
+      // ---- the waiters: out with a dish and back to the pass; the rest wait at the pass ----
+      let DL = range(NS).filter(j => ON[j] && P[j].tc >= SE[j].D - SE[j].ww && P[j].tc < SE[j].D + SE[j].ww + 0.4).take(waiters)
+      for j, wi in DL {
+        let s = SE[j]
+        let a = P[j].tc - (s.D - s.ww)
+        let out = a < s.ww
+        let f = out ? a * s.vw : a < s.ww + 0.4 ? s.S2 : s.S2 - (a - s.ww - 0.4) * s.vw
+        let i0 = clamp(floor(f), 0, s.S2 - 1)
+        let fr = clamp(f - i0, 0, 1)
+        let gx = FX + lerp(s.wpts[i0][0], s.wpts[i0 + 1][0], fr) * C
+        let gy = FY + lerp(s.wpts[i0][1], s.wpts[i0 + 1][1], fr) * C
+        let step = f > 0 && f < s.S2 ? floor(time * 7 + wi) % 2 : 0
+        rect(gx - 1.75 * q, gy - q, 4 * q, 1.5 * q, fill: alpha("#000000", 0.18))
+        rect(gx - q + step * 0.5 * q, gy - 2 * q, q, 2 * q, fill: "#2a2236")
+        rect(gx + q - step * 0.5 * q, gy - 2 * q, q, 2 * q, fill: "#2a2236")
+        rect(gx - 1.75 * q, gy - 5 * q, 3.5 * q, 3 * q, fill: "#fff6e8")
+        rect(gx - 1.75 * q, gy - 5 * q, q, 3 * q, fill: "#2a2236")
+        rect(gx + 0.75 * q, gy - 5 * q, q, 3 * q, fill: "#2a2236")
+        rect(gx - 0.5 * q, gy - 5 * q, q, 0.7 * q, fill: "#e04848")
+        rect(gx - 1.25 * q, gy - 7.5 * q, 2.5 * q, 2.5 * q, fill: SKIN[(wi + 1) % 5])
+        rect(gx - 1.25 * q, gy - 8 * q, 2.5 * q, q, fill: HAIR[(wi + 5) % 8])
+        if out {
+          let dk = menu[floor(hash(j, P[j].n, 2) * len(menu))] - 3
+          rect(gx + 1 * q, gy - 5.5 * q, 4 * q, 0.8 * q, fill: "#c0b8d0")
+          for r in DISH[dk] { rect(gx + 3 * q + r[0] * q * 0.7, gy - 6 * q + r[1] * q * 0.7, r[2] * q * 0.7, r[3] * q * 0.7, fill: r[4]) }
+        }
+      }
+      for w in range(waiters - len(DL)) {
+        let gx = FX + (7.5 - w * 0.9) * C
+        let gy = FY + 0.6 * C
+        rect(gx - 1.75 * q, gy - q, 4 * q, 1.5 * q, fill: alpha("#000000", 0.18))
+        rect(gx - q, gy - 2 * q, q, 2 * q, fill: "#2a2236")
+        rect(gx + q, gy - 2 * q, q, 2 * q, fill: "#2a2236")
+        rect(gx - 1.75 * q, gy - 5 * q, 3.5 * q, 3 * q, fill: "#fff6e8")
+        rect(gx - 1.75 * q, gy - 5 * q, q, 3 * q, fill: "#2a2236")
+        rect(gx + 0.75 * q, gy - 5 * q, q, 3 * q, fill: "#2a2236")
+        rect(gx - 0.5 * q, gy - 5 * q, q, 0.7 * q, fill: "#e04848")
+        rect(gx - 1.25 * q, gy - 7.5 * q, 2.5 * q, 2.5 * q, fill: SKIN[(w + len(DL) + 1) % 5])
+        rect(gx - 1.25 * q, gy - 8 * q, 2.5 * q, q, fill: HAIR[(w + len(DL) + 5) % 8])
+      }
+    }
+
+    // ---- the wall with the door, over the customers coming in ----
+    rect(RX, FY + 9 * C, 3.5 * C, C / 2, fill: "#5a3a2a")
+    rect(FX + 5 * C, FY + 9 * C, 3.5 * C, C / 2, fill: "#5a3a2a")
+    rect(RX, FY + 9 * C, 3.5 * C, q, fill: "#7a5038")
+    rect(FX + 5 * C, FY + 9 * C, 3.5 * C, q, fill: "#7a5038")
+    rect(FX + 3 * C - 2 * q, FY + 9 * C - 4 * q, 2 * q, C / 2 + 4 * q, fill: "#3a2418")
+    rect(FX + 5 * C, FY + 9 * C - 4 * q, 2 * q, C / 2 + 4 * q, fill: "#3a2418")
+    rect(RX, RY, C / 2, 12.8 * C, fill: "#5a3a2a")
+    rect(FX + MW, RY, C / 2, 12.8 * C, fill: "#5a3a2a")
+    rect(RX + C / 2 - q, RY, q, 12.8 * C, fill: "#3a2418")
+    rect(FX + MW, RY, q, 12.8 * C, fill: "#3a2418")
+
+    // ---- what the café is making ----
+    sprite(coinArt, 14, TOP + 6, 2.8, palette: PAL)
+    text([coins].map(fmt)[0], 40, TOP + 14, size: 13, color: foreground, font: press)
+    text("${[rate].map(fmtRate)[0]}/S", 40, TOP + 31, size: 7, color: muted, font: press)
+    for s in range(5) {
+      sprite(starArt, SW - 14 - (5 - s) * 13, TOP + 8, 2.2, palette: s < stars ? PAL : {o: alpha(muted, 0.6)})
+    }
+    text("${guests} OF ${NS} SEATS", SW - 16, TOP + 31, size: 7, color: muted, font: press, align: end)
+
+    // ---- the panel ----
+    if si >= 0 || ki >= 0 {
+      let K = si >= 0 ? room[si].k : kit[ki].k
+      let sp = si >= 0 ? room[si].sp : kit[ki].sp
+      rect(PX, PY + 2, 44, 44, fill: alpha(foreground, 0.06), stroke: border, width: 2)
+      for r in ART[K] { rect(PX + 22 - 8 * 2.4 + r[0] * 2.4 / KD[K].w, PY + 5 + (KD[K].t == 1 ? 1.5 : KD[K].w - 1) * 4 * 2.4 / KD[K].w + r[1] * 2.4 / KD[K].w, r[2] * 2.4 / KD[K].w, r[3] * 2.4 / KD[K].w, fill: r[4]) }
+      text(KD[K].n, PX + 54, PY + 14, size: 10, color: foreground, font: press)
+      text(KD[K].t == 0 ? "${KD[K].seats} SEATS" : KD[K].t == 1 ? "LEVEL ${kit[ki].l}" : "DECOR", PX + 54, PY + 34, size: 7, color: muted, font: press)
+      text("✕", PX + PW - 14, PY + 14, size: 14, color: muted, align: center)
+      if KD[K].t == 0 && indexOf(lost, si) >= 0 {
+        text("NO WAY TO THIS TABLE", PX + 4, PY + 64, size: 8, color: red, font: press)
+        text("LEAVE A WAY FROM THE DOOR", PX + 4, PY + 82, size: 7, color: muted, font: press)
+        text("AND FROM THE PASS", PX + 4, PY + 98, size: 7, color: muted, font: press)
+      } else if KD[K].t == 0 {
+        text("CUSTOMERS EAT HERE", PX + 4, PY + 64, size: 8, color: foreground, font: press)
+        text("A TABLE IN A ROW OF ITS OWN", PX + 4, PY + 82, size: 7, color: muted, font: press)
+        text("NEEDS A WAY TO IT", PX + 4, PY + 98, size: 7, color: muted, font: press)
+      } else if KD[K].t == 1 {
+        let l = kit[ki].l
+        text("+${[KD[K].p * [l].map(lvm)[0]].map(fmt)[0]} A DISH", PX + 4, PY + 64, size: 10, color: accent, font: press)
+        text(l < 10 ? "LEVEL 10 DOUBLES IT" : l < 25 ? "LEVEL 25 DOUBLES IT" : l < 50 ? "LEVEL 50 DOUBLES IT" : "AS GOOD AS IT GETS", PX + 4, PY + 84, size: 7, color: muted, font: press)
+        rect(PX, BY, UW, BH, fill: coins >= upCost[ki] ? green : alpha(foreground, 0.06), stroke: coins >= upCost[ki] ? green : border, width: 2)
+        text("UPGRADE", PX + UW / 2, BY + BH / 2 - 7, size: 8, color: coins >= upCost[ki] ? background : muted, font: press, align: center)
+        text([upCost[ki]].map(fmt)[0], PX + UW / 2, BY + BH / 2 + 8, size: 8, color: coins >= upCost[ki] ? background : muted, font: press, align: center)
+      } else {
+        text("+${KD[K].b} LOOKS", PX + 4, PY + 64, size: 10, color: accent, font: press)
+        text("A NICER ROOM BRINGS MORE", PX + 4, PY + 84, size: 7, color: muted, font: press)
+        text("CUSTOMERS AND BIGGER TIPS", PX + 4, PY + 100, size: 7, color: muted, font: press)
+      }
+      rect(PX + UW + 8, BY, PW - UW - 8, BH, fill: alpha(foreground, 0.06), stroke: border, width: 2)
+      text("SELL", PX + UW + 8 + (PW - UW - 8) / 2, BY + BH / 2 - 7, size: 8, color: foreground, font: press, align: center)
+      text("+${[floor(sp / 2)].map(fmt)[0]}", PX + UW + 8 + (PW - UW - 8) / 2, BY + BH / 2 + 8, size: 8, color: muted, font: press, align: center)
+    } else {
+      for t in range(4) {
+        let tx = PX + t * PW / 4
+        let warn = t == 3 && (need == "cook" || need == "waiter") && time % 1.2 < 0.8
+        rect(tx + 2, PY, PW / 4 - 4, TH, fill: tab == t ? accent : alpha(foreground, 0.06), stroke: tab == t ? accent : border, width: 2)
+        text(["TABLES", "KITCHEN", "DECOR", warn ? "STAFF!" : "STAFF"][t], tx + PW / 8, PY + TH / 2, size: 7, color: tab == t ? background : warn ? accent : foreground, font: press, align: center)
+      }
+      if tab == 3 {
+        for r in range(2) {
+          let ry = CY + r * (SRH + 6)
+          let n = r == 0 ? cooks : waiters
+          let cost = r == 0 ? cookCost : waiterCost
+          let can = n < 8 && coins >= cost
+          let ic = 2.6
+          let gx = PX + 26
+          let gy = ry + SRH / 2 + 7 * ic
+          rect(PX, ry, PW, SRH, fill: alpha(foreground, 0.06), stroke: border, width: 2)
+          rect(gx - ic, gy - 2 * ic, ic, 2 * ic, fill: "#2a2236")
+          rect(gx + ic, gy - 2 * ic, ic, 2 * ic, fill: "#2a2236")
+          rect(gx - 1.75 * ic, gy - 5 * ic, 3.5 * ic, 3 * ic, fill: "#fff6e8")
+          if r == 1 {
+            rect(gx - 1.75 * ic, gy - 5 * ic, ic, 3 * ic, fill: "#2a2236")
+            rect(gx + 0.75 * ic, gy - 5 * ic, ic, 3 * ic, fill: "#2a2236")
+            rect(gx - 0.5 * ic, gy - 5 * ic, ic, 0.7 * ic, fill: "#e04848")
+          }
+          rect(gx - 1.25 * ic, gy - 7.5 * ic, 2.5 * ic, 2.5 * ic, fill: "#f4c8a0")
+          rect(gx - 1.25 * ic, gy - 8 * ic, 2.5 * ic, ic, fill: "#6a4428")
+          if r == 0 {
+            rect(gx - 1.75 * ic, gy - 11 * ic, 3.5 * ic, 3 * ic, fill: "#fff6e8")
+            rect(gx - 1.25 * ic, gy - 8.5 * ic, 2.5 * ic, 0.8 * ic, fill: "#d8ccc0")
+          }
+          text("${r == 0 ? "COOKS" : "WAITERS"} ${n}", PX + 52, ry + SRH / 2 - 8, size: 9, color: foreground, font: press)
+          text(r == 0 ? "${round(cookCap * 60)} DISHES A MINUTE" : "${round(waitCap * 60)} TRIPS A MINUTE", PX + 52, ry + SRH / 2 + 9, size: 6, color: muted, font: press)
+          rect(PX + PW - 104, ry + 8, 96, SRH - 16, fill: can ? green : alpha(foreground, 0.04), stroke: can ? green : border, width: 2)
+          text(n >= 8 ? "FULL" : "HIRE", PX + PW - 56, ry + SRH / 2 - (n >= 8 ? 0 : 7), size: 8, color: can ? background : muted, font: press, align: center)
+          if n < 8 { text([cost].map(fmt)[0], PX + PW - 56, ry + SRH / 2 + 8, size: 8, color: can ? background : muted, font: press, align: center) }
+        }
+        let say = need == "menu" ? ["NOTHING ON THE MENU YET:", "BUY A COFFEE MACHINE"]
+          : need == "cook" ? ["CUSTOMERS WAIT FOR FOOD:", "HIRE A COOK"]
+          : need == "machine" ? ["A COOK HAS NO MACHINE:", "BUY ONE IN THE KITCHEN"]
+          : need == "waiter" ? ["CUSTOMERS WAIT FOR A WAITER:", "HIRE ONE"]
+          : ["THE STAFF KEEP UP:", "ROOM FOR MORE CUSTOMERS"]
+        text(say[0], PX + 4, CY + 2 * (SRH + 6) + 12, size: 7, color: need == "cook" || need == "waiter" || need == "machine" ? accent : muted, font: press)
+        text(say[1], PX + 4, CY + 2 * (SRH + 6) + 28, size: 7, color: muted, font: press)
+      } else {
+        for k, j in TABS[tab] {
+          let cx = PX + j % CC * (CW + 6)
+          let cy = CY + floor(j / CC) * (CH + 6)
+          let can = coins >= price[k]
+          let ip = min(3, (CH - 30) / 14)
+          rect(cx, cy, CW, CH, fill: alpha(foreground, 0.06), stroke: tool == k ? accent : border, width: 2)
+          let sc = ip / KD[k].w
+          for r in ART[k] { rect(cx + CW / 2 - 8 * ip + r[0] * sc, cy + 4 + (KD[k].t == 1 ? 0.3 : KD[k].w - 1) * 4 * ip + r[1] * sc, r[2] * sc, r[3] * sc, fill: r[4]) }
+          text(KD[k].n, cx + CW / 2, cy + CH - 22, size: CW < 120 ? 5 : 6, color: foreground, font: press, align: center)
+          text([price[k]].map(fmt)[0], cx + CW / 2, cy + CH - 9, size: 7, color: can ? accent : muted, font: press, align: center)
+        }
+        if tab == 0 {
+          text("TABLES NEED A WAY FROM THE DOOR", PX + 4, CY + CH + 20, size: 6, color: muted, font: press)
+          text("AND FROM THE PASS", PX + 4, CY + CH + 34, size: 6, color: muted, font: press)
+        }
+        if tab == 2 && CY + 2 * (CH + 6) + 40 < PY + PH {
+          text("A NICER ROOM: MORE STARS,", PX + 4, CY + 2 * (CH + 6) + 14, size: 6, color: muted, font: press)
+          text("MORE CUSTOMERS, BIGGER TIPS", PX + 4, CY + 2 * (CH + 6) + 28, size: 6, color: muted, font: press)
+        }
+      }
+    }
+
+    // ---- a hint for a new café, and messages ----
+    let hint = len(kit) == 0 ? ["BUY A COFFEE MACHINE", "IN THE KITCHEN TAB"] : len(room) == 0 ? ["PICK A TABLE BELOW,", "THEN TAP THE FLOOR"] : NS == 0 && len(lost) > 0 ? ["LEAVE A WAY TO", "THE TABLES"] : []
+    if len(hint) > 0 && time % 1.4 < 1 {
+      text(hint[0], FX + MW / 2, FY + 5 * C, size: 8, color: "#2a1e30", font: press, align: center)
+      text(hint[1], FX + MW / 2, FY + 5 * C + 16, size: 8, color: "#2a1e30", font: press, align: center)
+    }
+    if time - msgT < 2.2 && time >= msgT {
+      let ma = min(1, (2.2 - (time - msgT)) * 3)
+      rect(FX + 8, FY + 4.5 * C - 18, MW - 16, 36, fill: alpha("#2a1e30", 0.85 * ma), radius: 6 * corners)
+      text(msg, FX + MW / 2, FY + 4.5 * C, size: 9, color: alpha("#ffd36a", ma), font: press, align: center)
+    }
+  }
+}

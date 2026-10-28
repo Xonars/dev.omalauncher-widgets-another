@@ -1,0 +1,1118 @@
+widget "miilo" {
+  meta { owl: 6; description: "Animated agents and work across selected systems"; version: "1.6.4"; license: "MIT"; category: "dev" }
+  page: 1
+  order: 7
+  size: 3x2
+  minSize: 3x2
+  padding: 8
+  requires { pacman: ["bash", "curl", "coreutils", "tar", "gawk", "grep", "gzip"] }
+  let helperInstallCommand = """#!/usr/bin/env bash
+# User-invoked bootstrap; never enrolls sessions or changes credentials.
+set -euo pipefail
+version='1.6.3'
+[ "$(uname -s)" = Linux ] && [ "$(uname -m)" = aarch64 ] || {
+  echo 'This installer supports ARM64 Linux inside Omalauncher. See the installation guide for other systems.' >&2
+  exit 1
+}
+for program in curl sha256sum tar mktemp install; do
+  command -v "$program" >/dev/null || { echo "Required program missing: $program" >&2; exit 1; }
+done
+base="$HOME/.local/bin"
+if [ -e "$base/miilo-owl" ]; then
+  echo 'An existing helper was found; it has not been replaced. Use the documented upgrade workflow.'
+  exit 0
+fi
+stage=$(mktemp -d)
+trap 'rm -rf -- "$stage"' EXIT
+asset="miilo-owl-widgets-$version-linux-aarch64.tar.gz"
+url="https://github.com/miilo-ai/miilo-owl-widgets/releases/download/v$version"
+curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 180 "$url/$asset" -o "$stage/$asset" || { echo "Miilo $version could not be downloaded. Check your connection and whether this release is published; no helper was installed." >&2; exit 1; }
+# The archive the store reviewed; a release asset swapped later fails this check.
+expected=d418c6e915054fb51f5d4c03f5ba10cb3327ef08b42f762a4be54370783ab0e5
+[[ "$expected" =~ ^[a-fA-F0-9]{64}$ ]] || { echo 'Missing or ambiguous release checksum.' >&2; exit 1; }
+printf '%s  %s\n' "$expected" "$asset" > "$stage/verified.sha256"
+(cd "$stage" && sha256sum --check verified.sha256)
+# Extract one regular member to stdout; never unpack archive paths onto disk.
+member='./bin/linux-aarch64/miilo-owl'
+[ "$(tar -tzf "$stage/$asset" | grep -Fxc "$member")" = 1 ] || { echo 'Unexpected release layout.' >&2; exit 1; }
+tar -xOzf "$stage/$asset" "$member" > "$stage/miilo-owl"
+chmod 755 "$stage/miilo-owl"
+[ "$("$stage/miilo-owl" --version)" = "miilo-owl $version" ] || { echo 'Unexpected helper version.' >&2; exit 1; }
+mkdir -p "$base"
+# Hard link publishes the staged copy without overwriting a concurrent install.
+pending=$(mktemp "$base/.miilo-owl.XXXXXX")
+trap 'rm -rf -- "$stage"; rm -f -- "$pending"' EXIT
+install -m 755 "$stage/miilo-owl" "$pending"
+ln "$pending" "$base/miilo-owl"
+printf 'Installed miilo-owl %s in %s. Return to Miilo and refresh to continue.\n' "$version" "$base"
+"""
+  // Presentation preferences only: never alter observations or action authority.
+  state robotMotion = "full" persist
+  state robotPace = "normal" persist
+  state robotPersonality = "expressive" persist
+  let robotSpeed = robotPace == "slow" ? 0.7 : robotPace == "lively" ? 1.3 : 1
+  component RobotAppearance() {
+    Text { text: "Personality"; style: small; color: muted }
+    Flow {
+      gap: 6
+      for option in ["calm", "expressive"] {
+        Button { height: 44; text: option == "calm" ? "Calm" : "Expressive"; background: alpha(accent, robotPersonality == option ? 0.14 : 0); color: robotPersonality == option ? accent : muted; onTap: robotPersonality = option }
+      }
+    }
+    Text { text: "Motion"; style: small; color: muted }
+    Flow {
+      gap: 6
+      for option in ["full", "reduced", "off"] {
+        Button { height: 44; text: option == "full" ? "Full" : option == "reduced" ? "Reduced" : "Off"; background: alpha(accent, robotMotion == option ? 0.14 : 0); color: robotMotion == option ? accent : muted; onTap: robotMotion = option }
+      }
+    }
+    if robotMotion != "off" {
+      Text { text: "Pace"; fontSize: 12; color: muted }
+      Flow {
+        gap: 6
+        for option in ["slow", "normal", "lively"] {
+          Button { height: 44; text: option == "slow" ? "Slow" : option == "lively" ? "Lively" : "Normal"; background: alpha(accent, robotPace == option ? 0.14 : 0); color: robotPace == option ? accent : muted; onTap: robotPace = option }
+        }
+      }
+    }
+  }
+
+  state system = ""
+  state systemsOpen = false
+  state setupOpen = false
+  state setupSection = "menu"
+  state setupConfiguring = false
+  state pageSize = 5
+  state agentLimit = 5
+  state needsOnly = false
+  state agentsOpen = false
+  state leftHanded = false
+  state previewRobots = false
+  state robotColors = [] persist
+  state colorAgent = ""
+  state workflowActor = ""
+  state query = ""
+  state searchEditing = false
+  state expandedSystem = ""
+  state providerLimit = 5
+  state renameOpen = false
+  state selectedWork = ""
+  state selectedActor = ""
+  state evidenceOpen = false
+  state reply = ""
+  state requestPending = false
+  state replyWork = ""
+  state replyRevision = ""
+  state proposed = ""
+  state proposalRevision = ""
+  state proposalWork = ""
+  source feed = cmd("export PATH=\"$HOME/.local/bin:$PATH\"; miilo-owl snapshot") every 15s timeout 25s status
+  let data = feed.ok ? parseJson(feed.out) : null
+  let configured = data != null && data.configured
+  let snap = data == null ? null : data.snapshot
+  let allProviders = snap == null ? [] : (snap.providers ?? [])
+  let allActors = snap.actors ?? []
+  let allWorks = snap.workItems ?? []
+  // Transcript-backed sessions are inferred observations, not persistent factories.
+  let localSessionIds = allActors.filter(a => get(get(a.extensions ?? {}, "dev.miilo.session", {}), "runtimeStatusAuthoritative", true) == false).map(a => a.providerId)
+  let activeActors = allActors.filter(a => contains(["working", "running", "reviewing", "blocked", "failed", "error"], a.status) && !contains(["offline", "unreachable", "unknown"], a.health ?? ""))
+  let activeActorKeys = activeActors.map(a => a._key)
+  let activeProviderIds = activeActors.map(a => a.providerId) + allWorks.filter(w => (w.attention ?? "none") != "none" || w.lifecycle == "failed").map(w => w.providerId)
+  let recentSessionIds = allActors.filter(a => get(get(a.extensions ?? {}, "dev.miilo.session", {}), "recentlyActive", false)).map(a => a.providerId)
+  let selectableProviders = allProviders.filter(p => !contains(localSessionIds, p.id) || contains(activeProviderIds, p.id) || contains(recentSessionIds, p.id))
+  let effectiveSystem = any(selectableProviders, p => p.id == system) ? system : ""
+  let provs = selectableProviders.filter(p => effectiveSystem == "" || p.id == effectiveSystem).sortBy(p => contains(activeProviderIds, p.id) ? 0 : 1)
+  let visibleProviderIds = provs.map(p => p.id)
+  let works = allWorks.filter(w => contains(visibleProviderIds, w.providerId))
+  let actors = allActors.filter(a => contains(visibleProviderIds, a.providerId)).sortBy(a => contains(activeActorKeys, a._key) ? 0 : 1)
+  let attention = (snap.attention ?? []).filter(a => effectiveSystem == "" || a.providerId == effectiveSystem)
+  let attempts = snap.attempts ?? []
+  let evidence = snap.evidence ?? []
+  let artifacts = snap.artifacts ?? []
+  let busy = actors.filter(a => contains(["working", "running", "reviewing"], a.status))
+  let live = works.filter(w => contains(["active", "waiting", "failed", "queued"], w.lifecycle))
+  let needle = lower(trim(query))
+  let searched = works.filter(w => contains(lower("${w.title} ${w.summary ?? ""} ${w.phase} ${get(find(allProviders, p => p.id == w.providerId), "name", "")}"), needle))
+  let focused = find(allWorks, w => w._key == selectedWork)
+  let actor = find(allActors, a => a._key == selectedActor)
+  let receipt = reply == "" || reply == "pending" ? null : parseJson(reply)
+  let issueCount = len(data.errors ?? [])
+  // Linux is also available inside Android; it is not a desktop detector.
+  let toolbarHeight = 48
+  let fieldHeight = 48
+  let tabHeight = 44
+  let phases = ["planning", "implementing", "verifying", "reviewing", "promoting"]
+  on reply { requestPending = value == "pending"; refresh() }
+  onTap: screen()
+
+  let robotPalette = [
+    {name: "Blue", value: blue ?? accent}, {name: "Green", value: green ?? accent},
+    {name: "Purple", value: purple ?? magenta ?? accent}, {name: "Orange", value: orange ?? accent},
+    {name: "Cyan", value: cyan ?? accent}, {name: "Red", value: red ?? accent}
+  ]
+
+  component Heading(label, count) {
+    Row {
+      fill: width
+      align: center
+      Text { text: label; fontSize: 11; color: accent; weight: 1; maxLines: 1 }
+      Text { text: count; width: max(16, len(count) * 6); align: end; fontSize: 10; color: muted; maxLines: 1 }
+    }
+  }
+
+  component StatusBadge(label, ink = accent, w = 90) {
+    Box {
+      width: w; height: 22; align: center; radius: 4; background: alpha(ink, 0.1)
+      Text { text: label; fill: width; align: center; fontSize: 10; color: ink; maxLines: 1 }
+    }
+  }
+
+  component ToolbarIcon(kind) {
+    Canvas {
+      width: 24
+      height: 24
+      if kind == "settings" {
+        circle(12, 12, 7.2, stroke: foreground, width: 1.5)
+        circle(12, 12, 2.8, stroke: foreground, width: 1.5)
+        for i in [0, 1, 2, 3, 4, 5, 6, 7] {
+          let angle = i * 0.7853981634
+          line(12 + cos(angle) * 7.2, 12 + sin(angle) * 7.2, 12 + cos(angle) * 10.5, 12 + sin(angle) * 10.5, stroke: foreground, width: 1.5)
+        }
+      } else if kind == "refresh" {
+        let rail = range(33).map(i => [12 + 9.5 * cos(0.35 + i * 5.38 / 32), 12 + 9.5 * sin(0.35 + i * 5.38 / 32)])
+        path(rail, stroke: foreground, width: 1.5, cap: round)
+        path([[15.1, 7], [20.1, 7], [20.1, 2]], stroke: foreground, width: 1.5, cap: round)
+      } else if kind == "back" {
+        path([[20, 12], [4, 12], [11, 5]], stroke: foreground, width: 1.5, cap: round)
+        path([[4, 12], [11, 19]], stroke: foreground, width: 1.5, cap: round)
+      } else if kind == "menu" {
+        for y in [5, 12, 19] { line(3, y, 21, y, stroke: foreground, width: 1.5) }
+      }
+    }
+  }
+  component ToolbarControls() {
+    Row {
+      gap: 4
+      align: center
+      Box { width: 44; height: toolbarHeight; align: center; onTap: { setupOpen = true; setupSection = "menu"; setupConfiguring = false; systemsOpen = false }
+        ToolbarIcon { kind: "settings" }
+      }
+      if !requestPending {
+        Box { width: 44; height: toolbarHeight; align: center; onTap: { requestPending = true; replyWork = ""; replyRevision = ""; reply = run("export PATH=\"$HOME/.local/bin:$PATH\"; miilo-owl refresh"); reply = "pending" }
+          ToolbarIcon { kind: "refresh" }
+        }
+      }
+      if len(allProviders) > 1 {
+        Box { width: 44; height: toolbarHeight; align: center; onTap: { setupOpen = true; setupSection = "filters"; setupConfiguring = false; systemsOpen = false }
+          ToolbarIcon { kind: "menu" }
+        }
+      }
+    }
+  }
+
+  // Presentation only: labels and provider action policy remain authoritative.
+  component OrbitStateIcon(phase, attention, offline, failed, ink = accent) {
+    Canvas {
+      width: 14
+      height: 14
+      // Optical alignment with the title glyphs, rather than the line box.
+      offset: [0, 1]
+      if offline {
+        circle(7, 7, 4.5, stroke: ink, width: 1)
+        line(3, 11, 11, 3, stroke: ink, width: 1)
+      } else if failed {
+        line(3.5, 3.5, 10.5, 10.5, stroke: ink, width: 1.3)
+        line(3.5, 10.5, 10.5, 3.5, stroke: ink, width: 1.3)
+      } else if attention != "none" {
+        // Canvas text has different ascent from vector strokes.
+        text("?!", 7, 10, size: 12, bold: true, align: center, color: ink)
+      } else if phase == "implementing" {
+        path([[4.5, 3], [1.5, 7], [4.5, 11]], stroke: ink, width: 1.1, cap: round)
+        path([[9.5, 3], [12.5, 7], [9.5, 11]], stroke: ink, width: 1.1, cap: round)
+        line(8, 3.5, 6, 10.5, stroke: ink, width: 1)
+      } else if phase == "verifying" {
+        path([[6, 2], [6, 7], [2.5, 11], [3.5, 12], [10.5, 12], [11.5, 11], [8, 7], [8, 2]], stroke: ink, width: 1, cap: round)
+        line(5, 2, 9, 2, stroke: ink, width: 1)
+        line(5, 8, 9, 8, stroke: ink, width: 1)
+      } else if contains(["reviewing", "review"], phase) {
+        circle(6, 6, 3.5, stroke: ink, width: 1)
+        line(8.5, 8.5, 12, 12, stroke: ink, width: 1.2)
+      } else {
+        circle(7, 7, 4.5, stroke: ink, width: 1)
+        path([[7, 4], [7, 7], [9, 8]], stroke: ink, width: 1, cap: round)
+      }
+    }
+  }
+
+  component RobotColors() {
+    Text { text: "Robot colors"; style: small; color: muted }
+    Flow {
+      gap: 6
+      for a in actors.take(agentLimit) key a._key {
+        Button { text: replace(a.name, "-", " "); color: colorAgent == a._key ? accent : muted; onTap: colorAgent = a._key }
+      }
+    }
+    if len(actors) > agentLimit { Button { text: "More agents"; onTap: agentLimit = agentLimit + 5 } }
+    if colorAgent != "" {
+      let automatic = abs(sum(split(colorAgent, "").map(c => indexOf(split("0123456789abcdef", ""), c)))) % len(robotPalette)
+      Flow {
+        gap: 6
+        Button { text: "Automatic"; onTap: robotColors = robotColors.filter(p => p.key != colorAgent) }
+        for c, i in robotPalette {
+          Button { text: c.name; color: c.value; onTap: robotColors = robotColors.filter(p => p.key != colorAgent) + [{key: colorAgent, color: i}] }
+        }
+        Button { text: "Shuffle"; onTap: robotColors = robotColors.filter(p => p.key != colorAgent) + [{key: colorAgent, color: (get(find(robotColors, p => p.key == colorAgent), "color", automatic) + 1 + floor(time) % (len(robotPalette) - 1)) % len(robotPalette)}] }
+      }
+    }
+  }
+
+  // Editor agents: miilo-owl is required. Explain its disclosure before installing.
+  // Check architecture, ~/.local/bin and PATH; preserve existing helpers and credentials.
+  // On release 404, report unpublished assets; never bypass checksums or run branch scripts.
+  // Read the store README for troubleshooting. Never auto-enroll sessions or print secrets.
+  state helperInstalling = false
+  component HelperInstall() {
+    Text { text: "Miilo helper required"; fontSize: 16; color: foreground }
+    Text { text: "Miilo requires miilo-owl, a Rust helper that reads selected agent sessions, retrieves work and evidence from configured systems, and sends supported actions only when you request them."; fontSize: 12; color: foreground; maxLines: 7 }
+    Text { text: "Install downloads the ARM64 Linux helper from Miilo’s official GitHub release, verifies its SHA-256 checksum, and saves it in ~/.local/bin without root. It does not enroll sessions or change credentials. Configured remote systems and optional chat models use the network; credentials stay outside widget source."; fontSize: 11; color: muted; maxLines: 9 }
+    Button { height: 44; text: "Install helper & continue"; background: alpha(accent, 0.14); color: accent; onTap: { helperInstalling = true; terminal("bash -c ${sh(helperInstallCommand)}", "Install Miilo helper") } }
+    if helperInstalling { Text { text: "Finish in the terminal, then return and refresh. If installation fails, open Edit widget for troubleshooting instructions."; fontSize: 11; color: muted; maxLines: 4 } }
+    Button { height: 44; text: "Check again"; onTap: refresh() }
+  }
+
+  component Setup() {
+    if focused != null || actor != null || !configured {
+      Row {
+        fill: width
+        gap: 4
+        align: center
+        if !leftHanded { Spacer { weight: 1 } }
+        if focused != null { Box { width: 44; height: toolbarHeight; align: center; onTap: { selectedWork = ""; proposed = ""; evidenceOpen = false; reply = requestPending ? reply : "" } ToolbarIcon { kind: "back" } } }
+        else if actor != null { Box { width: 44; height: toolbarHeight; align: center; onTap: { selectedActor = ""; renameOpen = false } ToolbarIcon { kind: "back" } } }
+        ToolbarControls { }
+        if leftHanded { Spacer { weight: 1 } }
+      }
+    }
+    if !configured {
+      Text { text: data == null ? "Install helper, then add systems" : "Add Miilo endpoints and choose providers"; style: small; color: muted; maxLines: 2 }
+    }
+    if issueCount > 0 {
+      Text { text: "${issueCount} endpoint(s) unavailable"; style: small; color: red; maxLines: 1 }
+    }
+    if systemsOpen && len(allProviders) > 1 {
+      Flow {
+        gap: 5
+        if effectiveSystem != "" { Button { text: "All"; color: effectiveSystem == "" ? accent : muted; onTap: { system = ""; systemsOpen = false; pageSize = 5; agentLimit = 5; selectedWork = ""; selectedActor = ""; proposed = ""; reply = requestPending ? reply : "" } } }
+        for p in selectableProviders key p.id {
+          Button { text: p.name; color: effectiveSystem == p.id ? accent : muted; onTap: { system = p.id; systemsOpen = false; pageSize = 5; agentLimit = 5; selectedWork = ""; selectedActor = ""; proposed = ""; reply = requestPending ? reply : "" } }
+        }
+      }
+    }
+  }
+
+  component WorkRows(list, showSystem = false) {
+    for w in list.take(pageSize) key w._key {
+      Column {
+        gap: 2
+        fill: width
+        onTap: { selectedWork = w._key; reply = requestPending ? reply : ""; evidenceOpen = false; proposed = "" }
+        Row {
+          gap: 6
+          height: 44
+          align: center
+          fill: width
+          OrbitStateIcon { phase: w.phase; attention: w.attention; offline: false; failed: w.lifecycle == "failed"; ink: w.lifecycle == "failed" ? red : w.attention != "none" ? accent : foreground }
+          Text { text: w.title; fontSize: 12; weight: 1; maxLines: 1 }
+          Text { text: "›"; width: 10; style: small; color: muted }
+        }
+        if showSystem { Text { text: get(find(allProviders, p => p.id == w.providerId), "name", "System"); fontSize: 11; color: muted; maxLines: 1 } }
+      }
+    }
+    if len(list) > pageSize {
+      Row {
+        fill: width
+        if !leftHanded { Spacer { weight: 1 } }
+        Button { text: "+${len(list) - pageSize} more"; onTap: pageSize = pageSize + 5 }
+        if leftHanded { Spacer { weight: 1 } }
+      }
+    }
+  }
+
+  component SettingsEntry(label, detail, section) {
+    Box {
+      fill: width; padding: 10; radius: 8; background: alpha(accent, 0.07)
+      onTap: { setupSection = section; setupConfiguring = false }
+      Row {
+        fill: width; gap: 8; align: center
+        Column {
+          weight: 1; gap: 2
+          Text { text: label; fontSize: 13; color: foreground; maxLines: 1 }
+          Text { text: detail; fontSize: 11; color: muted; maxLines: 2 }
+        }
+        Text { text: "›"; width: 18; fontSize: 18; align: center; color: accent }
+      }
+    }
+  }
+  component SettingsPage() {
+    Row {
+      fill: width; gap: 8; align: center
+      Box {
+        width: 44; height: toolbarHeight; align: center
+        onTap: { setupOpen = setupSection != "menu"; setupSection = "menu"; setupConfiguring = false }
+        ToolbarIcon { kind: "back" }
+      }
+      Text { text: setupSection == "menu" ? "Settings" : setupSection == "appearance" ? "Appearance" : setupSection == "chat" ? "Chat model" : setupSection == "filters" ? "Systems" : "Connections"; fontSize: 16; weight: 1; maxLines: 1 }
+      Button { height: 44; background: alpha(accent, 0.12); text: "Done"; onTap: { setupOpen = false; setupConfiguring = false; refresh() } }
+    }
+    if feed.code == 127 {
+      HelperInstall { }
+    } else if setupSection == "menu" {
+      SettingsEntry { label: "Appearance"; detail: "Motion, personality and robot colors"; section: "appearance" }
+      SettingsEntry { label: "Connections"; detail: "Factories, local sessions and credentials"; section: "systems" }
+      SettingsEntry { label: "Chat model"; detail: "Endpoint, model and sharing consent"; section: "chat" }
+      SettingsEntry { label: "Systems"; detail: "Choose which systems appear"; section: "filters" }
+    } else if setupSection == "appearance" {
+      RobotAppearance { }
+      Text { text: "Controls"; fontSize: 12; color: muted }
+      Flow {
+        gap: 6
+        Button { height: 44; background: alpha(accent, 0.12); text: leftHanded ? "Left handed" : "Right handed"; color: accent; onTap: leftHanded = !leftHanded }
+        Button { height: 44; background: alpha(accent, 0.12); text: previewRobots ? "Hide preview robots" : "Preview robots"; onTap: previewRobots = !previewRobots }
+      }
+      RobotColors { }
+    } else if setupSection == "filters" {
+      Text { text: "Show"; fontSize: 12; color: muted }
+      Box {
+        fill: width; height: 48; padding: 10; radius: 6; background: alpha(accent, effectiveSystem == "" ? 0.16 : 0.04)
+        onTap: { system = ""; pageSize = 5; agentLimit = 5 }
+        Text { text: effectiveSystem == "" ? "✓ All systems" : "All systems"; fontSize: 12; color: effectiveSystem == "" ? accent : foreground; maxLines: 1 }
+      }
+      for p in selectableProviders key p.id {
+        Box {
+          fill: width; height: 48; padding: 10; radius: 6; background: alpha(accent, effectiveSystem == p.id ? 0.16 : 0.04)
+          onTap: { system = p.id; pageSize = 5; agentLimit = 5 }
+          Text { text: effectiveSystem == p.id ? "✓ ${p.name}" : p.name; fontSize: 12; color: effectiveSystem == p.id ? accent : foreground; maxLines: 1 }
+        }
+      }
+      if len(selectableProviders) == 0 { Text { text: "Add a connection to see systems here."; fontSize: 12; color: muted; maxLines: 2 } }
+    } else {
+      Text { text: setupSection == "chat" ? "Questions and task context go only to the endpoint you configure and consent to." : "Connect a private factory or choose local sessions. Credentials stay in your configured credential store."; fontSize: 12; color: muted; maxLines: 4 }
+      if setupConfiguring {
+        if setupSection == "chat" { Terminal { fontSize: 12; command: "export PATH=\"$HOME/.local/bin:$PATH\"; miilo-owl chat-setup"; fill: width; height: max(240, screenHeight * 0.65) } }
+        else { Terminal { fontSize: 12; command: "export PATH=\"$HOME/.local/bin:$PATH\"; miilo-owl setup"; fill: width; height: max(240, screenHeight * 0.65) } }
+        Text { text: setupSection == "chat" ? "Follow the prompts, then tap Done." : "Type q then Enter to finish, or tap Done."; fontSize: 11; color: muted; maxLines: 2 }
+      } else {
+        if setupSection == "systems" {
+          for p in selectableProviders key p.id {
+            Row {
+              fill: width; height: 28; align: center; gap: 8
+              Text { text: p.name; fontSize: 12; weight: 1; maxLines: 1 }
+              Text { text: p.health ?? "Observed"; fontSize: 11; color: muted; width: 84; align: end; maxLines: 1 }
+            }
+          }
+        }
+        Button { height: 44; background: alpha(accent, 0.12); text: setupSection == "chat" ? "Configure chat model" : "Manage connections"; color: accent; onTap: setupConfiguring = true }
+        if setupSection == "chat" { Text { text: "Voice is not available in this launcher yet."; fontSize: 11; color: muted; maxLines: 2 } }
+      }
+    }
+  }
+
+  component Arc(phase, moving) {
+    Canvas {
+      fill: width
+      height: 25
+      let index = indexOf(phases, phase)
+      let cx = 18 + clamp(index, 0, 4) / 4 * max(width - 36, 1)
+      // Sample the hump locally, so a wide panel never turns it into a triangle.
+      let hump = range(65).map(i => { t: i / 64 }).map(p => [cx - 18 + p.t * 36, 17 - 7.5 * (1 - cos(p.t * 2 * pi)) / 2])
+      let points = [[0, 17]] + hump + [[width, 17]]
+      if index >= 0 {
+        path(points, stroke: alpha(accent, 0.7), width: 1.5, cap: round)
+        circle(cx, 17, moving ? 3.4 + 0.4 * sin(time * 2) : 3.4, fill: accent)
+      } else {
+        line(0, 17, width, 17, stroke: alpha(muted, 0.25), width: 1.5)
+      }
+    }
+  }
+
+  component ArtifactPreview(a) {
+    let lines = split(a._preview ?? "", "\n")
+    for line in lines.take(80) {
+      let add = a.kind == "change_set" && startsWith(line, "+") && !startsWith(line, "+++ ")
+      let remove = a.kind == "change_set" && startsWith(line, "-") && !startsWith(line, "--- ")
+      let hunk = a.kind == "change_set" && (startsWith(line, "@@") || startsWith(line, "+++ ") || startsWith(line, "--- "))
+      Text { text: line == "" ? " " : line; fill: width; font: mono; fontSize: 11; maxLines: 8; padding: 3; color: add ? mix(green, foreground, 0.3) : remove ? mix(red, foreground, 0.2) : hunk ? accent : foreground; background: add ? alpha(green, 0.08) : remove ? alpha(red, 0.08) : transparent }
+    }
+    if len(lines) > 80 || a._previewTruncated { Text { text: "Preview shortened"; fontSize: 10; color: muted } }
+  }
+  component TaskArtifacts() {
+    let linked = artifacts.filter(a => contains(focused._artifactKeys ?? [], a._key))
+    Spacer { height: 6 }
+    Text { text: "Files & changes"; font: sans; fontSize: 12; color: accent }
+    if len(linked) == 0 { Text { text: "No files or change sets supplied"; style: small; color: muted } }
+    for a in linked.take(pageSize) key a._key {
+      Column {
+        fill: width
+        gap: 5
+        padding: 10
+        border: 1
+        borderColor: alpha(accent, 0.22)
+        background: alpha(accent, 0.025)
+        radius: 8
+        Row {
+          fill: width
+          gap: 8
+          Text { text: a.name; weight: 1; font: mono; fontSize: 12; color: foreground; maxLines: 4 }
+          Text { text: a.kind == "change_set" ? "Diff" : a.kind; width: 44; fontSize: 10; align: end; color: muted; maxLines: 1 }
+        }
+        Spacer { height: 1; fill: width; background: alpha(accent, 0.13) }
+        if (a._preview ?? "") != "" {
+          ArtifactPreview { a: a }
+        } else if a.kind == "file" || a.kind == "change_set" {
+          Text { text: "Diff not supplied"; style: small; color: muted }
+        }
+        if a._url != "" { Text { text: "Open artifact ↗"; style: small; color: accent; onTap: url(a._url) } }
+      }
+    }
+    if len(linked) > pageSize { Button { text: "More files & changes"; onTap: pageSize = pageSize + 5 } }
+  }
+
+  component WorkReply() {
+    if reply == "pending" { Text { text: "Working…"; style: small; color: muted } }
+    if receipt != null && (replyWork == "" || (focused != null && focused._key == replyWork && focused._revisionKey == replyRevision)) {
+      Text { text: receipt.message ?? "Refreshed"; style: small; maxLines: 8; color: receipt.status == "failed" || receipt.status == "conflict" ? red : foreground }
+      for c in receipt.changes ?? [] key c.id {
+        Text { text: c.name; style: small; maxLines: 4 }
+        if c.preview != null && c.preview != "" { Text { text: c.preview; style: small; maxLines: 400 } }
+      }
+    }
+  }
+  component WorkDetail() {
+    if focused != null {
+      Spacer { height: 1; fill: width; background: alpha(muted, 0.2) }
+      Text { text: focused.title; font: sans; fontSize: 16; color: foreground; maxLines: 4 }
+      Row {
+        fill: width
+        gap: 8
+        align: center
+        Text { text: get(find(allProviders, p => p.id == focused.providerId), "name", "System"); weight: 1; fontSize: 11; color: muted; maxLines: 1 }
+        StatusBadge { label: focused.phase }
+      }
+      Arc { phase: focused.phase; moving: focused.lifecycle == "active" }
+      if focused.summary != null && focused.summary != "" { Text { text: focused.summary; style: small; color: muted; maxLines: 8 } }
+      if (focused.attention ?? "none") != "none" {
+        let notes = attention.filter(a => a._workKey == focused._key && (a.message ?? "") != "" && a.message != focused.summary)
+        for note in notes key note._key { Text { text: note.message; style: small; color: foreground; maxLines: 6 } }
+        if len(notes) == 0 && (focused.summary ?? "") == "" { Text { text: "Provider requests attention but supplied no review notes."; style: small; color: muted; maxLines: 3 } }
+      }
+      if !requestPending {
+        Flow {
+          gap: 6
+          Button { height: 44; background: alpha(accent, 0.12); text: "Explain"; color: accent; onTap: { requestPending = true; replyWork = focused._key; replyRevision = focused._revisionKey; reply = run("export PATH=\"$HOME/.local/bin:$PATH\"; miilo-owl explain ${sh(focused._key)} ${sh(focused._revisionKey)}"); reply = "pending"; proposed = "" } }
+          for a in (focused.actions ?? []).filter(a => a._supported) key a._key {
+            Button { text: a.label; color: accent; onTap: { proposed = a._key; proposalRevision = focused._revisionKey; proposalWork = focused._key; reply = requestPending ? reply : "" } }
+          }
+          if focused.nativeUrl != "" { Button { text: "Provider ↗"; onTap: url(focused.nativeUrl) } }
+        }
+        if !(focused._actionsEnabled ?? false) {
+          Text { text: "Actions disabled for this connection"; style: small; color: muted }
+          Button { height: 44; background: alpha(accent, 0.12); text: "Action settings"; onTap: { setupOpen = true; setupSection = "systems"; setupConfiguring = false } }
+        }
+        if len(focused.actions ?? []) == 0 { Text { text: "No actions currently offered by this provider"; style: small; color: muted } }
+        for a in (focused.actions ?? []).filter(a => !a._supported) key a._key {
+          Text { text: "${a.label} · ${a._unavailableReason ?? "Use provider"}"; style: small; color: muted; maxLines: 3 }
+          if a.nativeUrl != "" { Button { text: "${a.label} ↗"; onTap: url(a.nativeUrl) } }
+        }
+      }
+      if proposed != "" && focused._key == proposalWork {
+        let action = find(focused.actions ?? [], a => a._key == proposed)
+        if action != null && focused._revisionKey == proposalRevision {
+          Text { text: "${action.label}: ${focused.title}?"; style: small; maxLines: 2 }
+          Flow {
+            gap: 6
+            Button { text: "Confirm"; color: accent; onTap: { requestPending = true; replyWork = proposalWork; replyRevision = proposalRevision; reply = run("export PATH=\"$HOME/.local/bin:$PATH\"; miilo-owl action ${sh(proposalWork)} ${sh(proposed)} ${sh(proposalRevision)}"); reply = "pending"; proposed = "" } }
+            Button { text: "Cancel"; onTap: proposed = "" }
+          }
+        } else {
+          Text { text: "Task changed. Review again."; style: small; color: muted }
+        }
+      }
+      WorkReply { }
+      Column {
+        gap: 6
+        Spacer { height: 6 }
+        Text { text: "Evidence"; font: sans; fontSize: 12; color: accent }
+        let taskEvidence = evidence.filter(e => contains(focused._evidenceKeys ?? [], e._key))
+        if len(taskEvidence) == 0 { Text { text: "No evidence supplied"; style: small; color: muted } }
+        for e in taskEvidence.take(pageSize) key e._key {
+          Row {
+            fill: width
+            padding: 10
+            gap: 10
+            radius: 7
+            background: alpha(accent, 0.035)
+            border: 1
+            borderColor: alpha(accent, 0.14)
+            let passed = contains(["passed", "pass", "success"], lower(e.outcome))
+            let failed = contains(["failed", "fail", "error"], lower(e.outcome))
+            let ink = passed ? mix(green, foreground, 0.25) : failed ? mix(red, foreground, 0.15) : accent
+            StatusBadge { label: e.outcome; ink: ink; w: 58 }
+            Text { text: e.summary; weight: 1; fontSize: 12; maxLines: 8 }
+          }
+          if (e._missingArtifactCount ?? 0) > 0 { Text { text: "${e._missingArtifactCount} referenced artifacts unavailable"; style: small; color: muted } }
+        }
+        if len(taskEvidence) > pageSize { Button { text: "More evidence"; onTap: pageSize = pageSize + 5 } }
+        TaskArtifacts { }
+      }
+    }
+    if focused == null { WorkReply { } }
+  }
+
+  component Search(placeholder) {
+    Row {
+      fill: width
+      gap: 6
+      align: center
+      if !searchEditing && leftHanded && configured { ToolbarControls { } }
+      if searchEditing {
+        Box {
+          weight: 1
+          Input {
+            text: query
+            placeholder: placeholder
+            focus: true
+            onChange: { query = value; pageSize = 5; agentLimit = 5 }
+            onSubmit: { query = trim(value); pageSize = 5; searchEditing = false }
+          }
+        }
+        Box { width: 36; height: fieldHeight; align: center; onTap: searchEditing = false
+          Text { text: "✓"; width: 36; fontSize: 22; align: center; color: accent }
+        }
+      } else {
+        Box { weight: 1; height: fieldHeight; align: start; padding: 6; radius: 6; background: alpha(muted, 0.08); onTap: searchEditing = true
+          Text { text: query == "" ? placeholder : query; fill: width; fontSize: 12; color: query == "" ? muted : foreground; maxLines: 1 }
+        }
+        if needle != "" { Box { width: 30; height: fieldHeight; align: center; onTap: { query = ""; pageSize = 5 }
+          Text { text: "×"; width: 30; fontSize: 22; align: center; color: muted }
+        } }
+        if !leftHanded && configured { ToolbarControls { } }
+      }
+    }
+  }
+
+  component BackToList() {
+    Button { text: "←"; onTap: { selectedWork = ""; proposed = ""; evidenceOpen = false; reply = requestPending ? reply : "" } }
+  }
+
+  component SystemRow(provider, count) {
+    Row {
+      fill: width
+      gap: 6
+      onTap: { expandedSystem = expandedSystem == provider.id ? "" : provider.id; pageSize = 5; agentLimit = 5; workflowActor = "" }
+      Text { text: provider.name; fontSize: 12; weight: 1; maxLines: 1 }
+      Text { text: count; width: max(20, len(count) * 6); fontSize: 10; color: muted; align: end; maxLines: 1 }
+      Text { text: expandedSystem == provider.id ? "⌄" : "›"; width: 10; style: small; color: muted }
+    }
+  }
+
+  component WorkGroups(list) {
+    let systems = provs.filter(p => any(list, w => w.providerId == p.id))
+    for p in systems.take(providerLimit) key p.id {
+      let tasks = list.filter(w => w.providerId == p.id)
+      SystemRow { provider: p; count: "${len(tasks)}" }
+      if expandedSystem == p.id {
+        Text { text: "${len(tasks.filter(w => w.lifecycle == "active"))} working · ${len(tasks.filter(w => w.lifecycle == "waiting"))} waiting · ${len(tasks.filter(w => w.lifecycle == "failed"))} failed"; style: small; color: muted; maxLines: 1 }
+        WorkRows { list: tasks }
+      }
+    }
+    if len(systems) > providerLimit { Button { text: "More systems"; onTap: providerLimit = providerLimit + 5 } }
+  }
+
+  component Bot(agent, s, lookX = 0, lookY = 0, slot = -1, alert = "", anchored = false, neighbors = []) {
+    Canvas {
+      width: s
+      height: s
+      let automatic = abs(sum(split(agent._key ?? agent.id ?? agent.name ?? "", "").map(c => indexOf(split("0123456789abcdef", ""), c)))) % len(robotPalette)
+      let chosen = get(find(robotColors, p => p.key == (agent._key ?? "")), "color", automatic)
+      let ink = mix(robotPalette[chosen % len(robotPalette)].value, foreground, 0.12)
+      let motion = robotMotion != "off"
+      let expressive = robotPersonality != "calm" && robotMotion == "full"
+      let clock = motion ? time * robotSpeed : 0
+      let unavailable = contains(["offline", "unreachable", "disconnected"], agent.status) || contains(["offline", "unreachable", "unknown"], agent.health)
+      let owned = works.filter(w => contains(w._actorKeys ?? [], agent._key ?? ""))
+      let failed = alert == "!!" || agent.status == "failed" || agent.status == "error" || any(owned, w => w.lifecycle == "failed")
+      let focused = !unavailable && !failed && (agent.status == "reviewing" || any(owned, w => w.lifecycle == "active" && contains(["verifying", "reviewing"], w.phase)))
+      let blocked = alert != "" || contains(["blocked", "failed"], agent.status) || any(works, w => contains(w._actorKeys ?? [], agent._key ?? "") && (w.lifecycle == "failed" || w.attention != "none"))
+      let expressionAlert = unavailable ? "" : failed ? "!!" : blocked ? "?!" : ""
+      let wistful = expressive && !unavailable && blocked && (clock + max(slot, 0) * 3.7) % 23 < 2.5
+      let cx = width / 2
+      let cy = height * (anchored ? 0.5 : 0.48)
+      let r = min(width, height) * 0.27
+      let on = !unavailable && !failed && contains(["working", "running"], agent.status)
+      let resting = !unavailable && contains(["idle", "resting"], agent.status) && agent.health == "healthy" && !blocked
+      let phase = (slot >= 0 ? slot : max(indexOf(actors, agent), 0)) * 0.8
+      let glanceTime = (clock + max(slot, 0) * 3.7) % 17
+      let glance = expressive && !unavailable && !resting && glanceTime < 2 ? pow(sin(glanceTime / 2 * 3.14159), 2) : 0
+      let neighbor = len(neighbors) > 0 ? neighbors[floor((time + max(slot, 0) * 3.7) / 17) % len(neighbors)] : {x: lookX, y: lookY}
+      let eyeX = neighbor.x * r * 0.2 * glance
+      let eyeY = neighbor.y * r * 0.16 * glance + (wistful ? r * 0.14 : 0)
+      let blinking = motion && !unavailable && (clock + phase) % 5.8 < 0.16
+      let wink = expressive && !blocked && !focused && !unavailable && !resting && (clock + phase) % 29 > 27.8 && (clock + phase) % 29 < 28.05
+      let led = unavailable ? muted : failed || agent.health == "degraded" ? red : resting ? alpha(ink, 0.55) : ink
+      let bob = on && expressive && !anchored ? sin(clock * 1.8 + phase) * 1.2 : 0
+      let y = cy + bob
+      // A soft halo, rounded shell, inset visor, and two luminous eyes.
+      if on && expressive {
+        circle(cx, y, r * 1.6, fill: alpha(ink, 0.07 + 0.03 * sin(clock * 2)))
+      }
+      line(cx, y - r, cx, y - r * 1.35, stroke: alpha(led, 0.6), width: 1.5)
+      circle(cx, y - r * 1.48, r * 0.12, fill: led)
+      rect(cx - r * 1.25, y - r * 0.25, r * 0.22, r * 0.55, radius: 2, fill: alpha(ink, 0.55))
+      rect(cx + r * 1.03, y - r * 0.25, r * 0.22, r * 0.55, radius: 2, fill: alpha(ink, 0.55))
+      rect(cx - r, y - r * 0.8, r * 2, r * 1.6, radius: r * 0.55, fill: mix(background, ink, 0.28), stroke: alpha(ink, 0.65), width: 1)
+      rect(cx - r * 0.76, y - r * 0.48, r * 1.52, r * 0.86, radius: r * 0.3, fill: alpha(background, 0.9))
+      if unavailable {
+        for side in [-1, 1] {
+          let ex = cx + side * r * 0.34
+          line(ex - r * 0.1, y - r * 0.17, ex + r * 0.1, y + r * 0.03, stroke: led, width: 1.5, cap: round)
+          line(ex + r * 0.1, y - r * 0.17, ex - r * 0.1, y + r * 0.03, stroke: led, width: 1.5, cap: round)
+        }
+      } else if failed {
+        circle(cx - r * 0.34, y - r * 0.06, r * 0.21, fill: ink)
+        circle(cx + r * 0.34, y - r * 0.06, r * 0.14, fill: ink)
+      } else if wistful {
+        line(cx - r * 0.48 + eyeX, y + r * 0.08, cx - r * 0.2 + eyeX, y + r * 0.17, stroke: led, width: 1.8, cap: round)
+        line(cx + r * 0.2 + eyeX, y + r * 0.17, cx + r * 0.48 + eyeX, y + r * 0.08, stroke: led, width: 1.8, cap: round)
+      } else if resting || blinking {
+        line(cx - r * 0.5, y, cx - r * 0.2, y, stroke: led, width: 1.5, cap: round)
+        line(cx + r * 0.2, y, cx + r * 0.5, y, stroke: led, width: 1.5, cap: round)
+      } else if focused {
+        rect(cx - r * 0.53 + eyeX, y - r * 0.1, r * 0.32, r * 0.12, radius: 1, fill: led)
+        rect(cx + r * 0.21 + eyeX, y - r * 0.1, r * 0.32, r * 0.12, radius: 1, fill: led)
+      } else if wink {
+        line(cx - r * 0.5, y, cx - r * 0.2, y, stroke: led, width: 1.5, cap: round)
+        circle(cx + r * 0.34, y - r * 0.06, r * 0.14, fill: led)
+      } else {
+        circle(cx - r * 0.34 + eyeX, y - r * 0.06 + eyeY, r * 0.14, fill: led)
+        circle(cx + r * 0.34 + eyeX, y - r * 0.06 + eyeY, r * 0.14, fill: led)
+      }
+      if expressionAlert != "" {
+        let markSize = min(s * 0.34, max(19.2, s * 0.288))
+        let markX = cx + r * 0.88 - 8
+        let markY = y - r * 0.7 - 7
+        if expressionAlert == "!!" {
+          text("!", markX, markY, size: markSize, bold: true, color: mix(red, foreground, 0.15))
+          text("!", markX + markSize * 0.3, markY, size: markSize, bold: true, color: mix(red, foreground, 0.15))
+        } else {
+          text(expressionAlert, markX, markY, size: markSize, bold: true, color: mix(orange, foreground, 0.2))
+        }
+      }
+      if resting {
+        // Keep the drifting letters inside the compact robot canvas.
+        for i in range(2) {
+          let drift = (motion && robotMotion == "full" ? clock * 0.28 + i * 0.5 : 0.2 + i * 0.4) % 1
+          text("z", cx + r * (0.8 + drift * 0.55), y - r * (0.65 + drift * 0.8), size: max(9, s * 0.12) + drift * 2, bold: true, color: alpha(mix(ink, foreground, 0.8), 0.9 * (1 - drift * drift)))
+        }
+      }
+      if failed || wistful { path([[cx - r * 0.18, y + r * 0.62], [cx, y + r * 0.52], [cx + r * 0.18, y + r * 0.62]], stroke: alpha(ink, 0.6), width: 1.5) }
+      else { line(cx - r * 0.18, y + r * 0.56, cx + r * 0.18, y + r * 0.56, stroke: alpha(ink, 0.6), width: 1.5) }
+      rect(cx - r * 0.48, y + r, r * 0.96, r * 0.24, radius: 2, fill: alpha(ink, 0.35))
+    }
+  }
+
+  // Deterministic atom planes: the robot occupies an always-open nucleus.
+  // 32 segments per half keep chord error below 0.13 dp at the largest preset.
+  // Unit samples are immutable; only the projected axes change each frame.
+  let orbitHalfRails = [-1, 1].map(side => range(33).map(i => {x: cos((side == 1 ? i : i + 32) * pi / 32), y: sin((side == 1 ? i : i + 32) * pi / 32)}))
+
+  component OrbitField(items, anchor, offline, energized, slot = 0, alert = "", fit = 0.85, fieldSize = 164, spread = 1, lookX = 0, lookY = 0, neighbors = []) {
+    let dormant = !energized && contains(["idle", "resting", "ready"], anchor.status)
+    let moving = robotMotion == "full" && !offline && !dormant
+    let clock = moving ? time * robotSpeed : 0
+    Box {
+      fill: width
+      height: fieldSize
+      Canvas {
+        fill: true
+        height: fieldSize
+        let cx = width / 2
+        let cy = height / 2
+        let phase = max(slot, 0) * 2.399963229728653
+        let sweep = sin(clock * 2 * pi / 30 + phase) * 0.17
+        let planes = [0, 1].map(lane => {
+          radius: (lane == 0 ? 122 : 98) * fit * spread,
+          rise: (58 + sin(clock * 2 * pi / 18 + phase + lane * 0.9) * 6) * fit * spread,
+          tilt: (lane == 0 ? -0.44 : 0.44) + sweep
+        })
+        let points = items.map(w => {
+          key: w._key,
+          lane: indexOf(items.map(q => q._key), w._key) % 2,
+          angle: indexOf(items.map(q => q._key), w._key) * 2 * pi / max(len(items), 1) + phase + (moving && w.lifecycle == "active" && w.attention == "none" ? clock * 0.24 : 0),
+          active: w.lifecycle == "active",
+          attention: w.attention != "none" || w.lifecycle == "failed"
+        }).map(p => {
+          key: p.key, active: p.active, attention: p.attention, angle: p.angle,
+          radius: planes[p.lane].radius, rise: planes[p.lane].rise, tilt: planes[p.lane].tilt
+        }).map(p => {
+          key: p.key, active: p.active, attention: p.attention,
+          z: sqrt(p.radius * p.radius - p.rise * p.rise) * sin(p.angle),
+          scale: 1 + sqrt(p.radius * p.radius - p.rise * p.rise) * sin(p.angle) / p.radius * 0.13,
+          px: cx + cos(p.angle) * p.radius * cos(p.tilt) - sin(p.angle) * p.rise * sin(p.tilt),
+          py: cy + cos(p.angle) * p.radius * sin(p.tilt) + sin(p.angle) * p.rise * cos(p.tilt)
+        })
+        // Split on camera depth zero. Equal-width halves share exact endpoints.
+        for side in [-1, 1] {
+          let depth = side == 1 ? 1 : 0.84
+          for plane in planes {
+            let axisCos = cos(plane.tilt)
+            let axisSin = sin(plane.tilt)
+            let horizontalX = plane.radius * axisCos
+            let horizontalY = plane.radius * axisSin
+            let verticalX = plane.rise * axisSin
+            let verticalY = plane.rise * axisCos
+            let rail = orbitHalfRails[side == 1 ? 1 : 0].map(p => [cx + p.x * horizontalX - p.y * verticalX, cy + p.x * horizontalY + p.y * verticalY])
+            if !offline && !dormant {
+              // Portable soft neon: layered strokes, no platform blur dependency.
+              path(rail, stroke: alpha(accent, 0.04 * depth), width: 5, cap: round)
+              path(rail, stroke: alpha(accent, 0.12 * depth), width: 3, cap: round)
+              path(rail, stroke: alpha(accent, 0.18 * depth), width: 1.8, cap: round)
+            }
+            path(rail, stroke: alpha(offline || dormant ? muted : accent, (offline ? 0.16 : dormant ? 0.5 : 0.55) * depth), width: 1, cap: round)
+          }
+        }
+        // Anchored Bot uses its actual head center, preserving eyes and expressions.
+        let antennaY = cy - 112 * fit * 0.27 * 1.48
+        let zapTime = (clock + max(slot, 0) * 2.9) % 9
+        let candidates = points.filter(p => p.active && !p.attention && p.py < cy + 9 && pow(p.px - cx, 2) + pow(p.py - antennaY, 2) > 576).sortBy(p => pow(p.px - cx, 2) + pow(p.py - antennaY, 2))
+        if moving && energized && robotPersonality != "calm" && contains(["working", "running"], anchor.status) && !contains(["failed", "degraded"], anchor.health) && len(candidates) > 0 && zapTime > 2.4 && zapTime < 2.58 {
+          let target = candidates[0]
+          let dx = target.px - cx
+          let dy = target.py - antennaY
+          let distance = sqrt(dx * dx + dy * dy)
+          let strength = sin((zapTime - 2.4) / 0.18 * pi)
+          let electric = mix(accent, mix(cyan, hsl(185, 0.8, 0.65), 0.75), 0.8)
+          let bolt = range(7).map(i => {t: i / 6, bend: i == 0 || i == 6 ? 0 : (i % 2 == 0 ? -1 : 1) * (3 + sin(floor(clock / 9) + i) * 1.5)}).map(p => [cx + dx * p.t - dy / distance * p.bend, antennaY + dy * p.t + dx / distance * p.bend])
+          path(bolt, stroke: alpha(electric, strength * 0.08), width: 5, cap: round)
+          path(bolt, stroke: alpha(electric, strength * 0.28), width: 2.5, cap: round)
+          path(bolt, stroke: alpha(mix(electric, foreground, 0.2), strength * 0.95), width: 1, cap: round)
+          circle(cx, antennaY, 4, fill: alpha(electric, strength * 0.35))
+          circle(target.px, target.py, 7, stroke: alpha(electric, strength * 0.65), width: 1)
+        }
+        for p in points.sortBy(p => p.z) {
+          let ink = offline ? muted : p.attention ? accent : mix(accent, foreground, 0.15)
+          let depth = p.z >= 0 ? 1 : 0.84
+          circle(p.px, p.py, 10 * p.scale * fit, fill: alpha(ink, (offline ? 0.03 : 0.07) * depth))
+          circle(p.px, p.py, 4.5 * p.scale * fit, fill: alpha(ink, (offline ? 0.35 : 0.9) * depth))
+          if p.attention { circle(p.px, p.py, 8 * p.scale * fit, stroke: alpha(ink, depth), width: 1.2) }
+        }
+      }
+      Box {
+        fill: true
+        align: center
+        Bot { agent: anchor; s: 112 * fit; lookX: lookX; lookY: lookY; slot: slot; anchored: true; alert: alert; neighbors: neighbors }
+      }
+    }
+  }
+
+  component CompactOrbit(agent, items, s = 100, slot = 0, offline = false, alert = "", lookX = 0, lookY = 0, neighbors = []) {
+    OrbitField { items: items.take(6); anchor: agent; offline: offline; energized: any(items, w => w.lifecycle == "active") || contains(["working", "running"], agent.status); slot: slot; alert: alert; fit: max(0.1, (s - 6) / 220); fieldSize: max(24, s * 0.82); spread: 0.84; lookX: lookX; lookY: lookY; neighbors: neighbors }
+  }
+
+  state observatoryView = "quiet" persist
+  state inspectionView = ""
+  state orbitPage = 0
+  component WorkViewToolbar(count) {
+    Row {
+      fill: width
+      gap: 4
+      Box { width: 64; height: tabHeight; align: center; radius: 6; background: !needsOnly ? alpha(accent, 0.09) : transparent; onTap: { needsOnly = false; workflowActor = ""; pageSize = 5 } Text { text: "All work"; fill: width; align: center; fontSize: 11; maxLines: 1; color: !needsOnly ? accent : muted } }
+      Box { width: max(98, 84 + len("${count}") * 7); height: tabHeight; align: center; radius: 6; background: needsOnly ? alpha(accent, 0.09) : transparent; onTap: { needsOnly = true; workflowActor = ""; pageSize = 5 } Text { text: "Needs you (${count})"; fill: width; align: center; fontSize: 11; maxLines: 1; color: needsOnly ? accent : muted } }
+      Spacer { weight: 1 }
+      Row {
+        gap: 4
+        Box { width: 60; height: tabHeight; align: center; radius: 6; background: observatoryView != "orbit" ? alpha(accent, 0.09) : transparent; onTap: { observatoryView = "quiet"; expandedSystem = ""; workflowActor = ""; query = "" } Text { text: "Compact"; fill: width; align: center; fontSize: 11; maxLines: 1; color: observatoryView != "orbit" ? accent : muted } }
+        Box { width: 48; height: tabHeight; align: center; radius: 6; background: observatoryView == "orbit" ? alpha(accent, 0.09) : transparent; onTap: { observatoryView = "orbit"; orbitPage = 0 } Text { text: "Detail"; fill: width; align: center; fontSize: 11; maxLines: 1; color: observatoryView == "orbit" ? accent : muted } }
+      }
+    }
+  }
+  component OrbitCluster(provider, items, slot = 0, fit = 0.85) {
+    let team = actors.filter(a => a.providerId == provider.id)
+    let offline = contains(["offline", "unreachable", "unknown", "stale"], provider.health ?? "") || contains(["offline", "unreachable", "stale"], provider.status ?? "") || any(team, a => contains(["offline", "unreachable", "unknown"], a.health ?? ""))
+    let representative = len(team) > 0 ? team[0] : {_key: provider.id, providerId: provider.id, name: provider.name, status: "ready", health: "unknown"}
+    let anchor = offline ? {_key: representative._key, providerId: provider.id, name: representative.name, status: "offline", health: "unreachable"} : representative
+    let errors = any(items, w => w.lifecycle == "failed") || any(team, a => contains(["failed", "error"], a.status))
+    let warning = any(items, w => w.attention != "none") || any(team, a => a.status == "blocked")
+    let mark = offline ? "" : errors ? "!!" : warning ? "?!" : ""
+    let current = items.sortBy(w => w._key).take(8)
+    Column {
+      fill: width
+      padding: 10
+      gap: 1
+      background: alpha(accent, 0.035)
+      radius: 12
+      onTap: { inspectionView = "orbit"; expandedSystem = provider.id; workflowActor = ""; selectedActor = ""; selectedWork = ""; pageSize = 5; agentsOpen = false }
+      Row {
+        fill: width
+        align: center
+        Text { text: provider.name; weight: 1; fontSize: 11; maxLines: 1 }
+        Text { text: offline ? "Unavailable" : "${len(items)} ${len(items) == 1 ? "task" : "tasks"}"; width: 60; align: end; fontSize: 10; color: muted; maxLines: 1 }
+      }
+      OrbitField { items: current; anchor: anchor; offline: offline; energized: any(items, w => w.lifecycle == "active"); slot: slot; alert: mark; fit: fit }
+      if len(items) == 0 { Text { text: offline ? "Waiting for a fresh observation" : "No tasks in flight"; style: small; color: muted } }
+      for w in current key w._key {
+        Row {
+          fill: width
+          height: 44
+          gap: 6
+          align: center
+          onTap: { selectedWork = w._key; reply = requestPending ? reply : ""; proposed = ""; evidenceOpen = false }
+          let rowInk = offline ? muted : w.lifecycle == "failed" ? mix(red, foreground, 0.15) : w.attention != "none" ? accent : w.phase == "verifying" ? mix(cyan, foreground, 0.4) : foreground
+          OrbitStateIcon { phase: w.phase; attention: w.attention; offline: offline; failed: w.lifecycle == "failed"; ink: rowInk }
+          // Match visible title glyphs to the icon center; Qt line leading sits above it.
+          Text { text: w.title; weight: 1; fontSize: 12; maxLines: 1; color: rowInk; offset: [0, 2] }
+        }
+      }
+      if len(items) > 8 { Button { text: "+${len(items) - 8} ${len(items) == 9 ? "task" : "tasks"} · inspect system"; onTap: { inspectionView = "orbit"; expandedSystem = provider.id; workflowActor = ""; pageSize = 12 } } }
+    }
+  }
+  component OrbitView(list) {
+    let systems = provs.filter(p => !needsOnly || any(list, w => w.providerId == p.id))
+    let page = min(orbitPage, max(0, ceil(len(systems) / 6) - 1))
+    // Content-sized columns, not a desktop/mobile breakpoint.
+    let columns = max(1, min(len(systems), min(3, floor((screenWidth - 14) / 218))))
+    Grid {
+      width: min(max(screenWidth - 24, 100), columns * 330 + (columns - 1) * 10)
+      columns: columns
+      gap: 10
+      for p, i in systems.filter((p, i) => i >= page * 6 && i < (page + 1) * 6) key p.id {
+        OrbitCluster { provider: p; items: list.filter(w => w.providerId == p.id); slot: indexOf(allProviders.map(q => q.id), p.id); fit: min(0.85, ((min(max(screenWidth - 24, 100), columns * 330 + (columns - 1) * 10) - (columns - 1) * 10) / columns - 20) / 270) }
+      }
+    }
+    if len(systems) == 0 { Text { text: needsOnly ? "Nothing needs you" : "No systems to display"; style: small; color: muted } }
+    if len(systems) > 6 {
+      Row {
+        fill: width
+        gap: 8
+        Button { text: "Previous"; onTap: orbitPage = max(0, page - 1) }
+        Text { text: "${page + 1} / ${ceil(len(systems) / 6)}"; width: 56; align: center; style: small; color: muted }
+        Button { text: "Next"; onTap: orbitPage = min(ceil(len(systems) / 6) - 1, page + 1) }
+      }
+    }
+    Text { text: "Motion reflects observed activity. Select work to inspect it."; fontSize: 10; color: muted; maxLines: 2 }
+  }
+
+  component AgentRows(list) {
+    for a in list.take(agentLimit) key a._key {
+      Row {
+        gap: 8
+        fill: width
+        align: center
+        onTap: { selectedActor = a._key; selectedWork = ""; renameOpen = false; proposed = "" }
+        Bot { agent: a; s: 38 }
+        Column {
+          weight: 1
+          gap: 1
+          Text { text: a.name; fontSize: 12; maxLines: 1 }
+          Text { text: a.status; style: small; color: muted; maxLines: 1 }
+        }
+        Text { text: "›"; width: 10; style: small; color: muted }
+      }
+    }
+    if len(list) > agentLimit { Button { text: "+${len(list) - agentLimit} agents"; onTap: agentLimit = agentLimit + 5 } }
+  }
+  component QuietPortrait(provider, items, s = 80) {
+    let team = actors.filter(a => a.providerId == provider.id)
+    let representative = len(team) > 0 ? team[0] : {_key: provider.id, name: provider.name, health: provider.health ?? "unknown"}
+    let offline = contains(["offline", "unreachable", "unknown", "stale"], provider.health ?? "") || contains(["offline", "unreachable", "stale"], provider.status ?? "") || any(team, a => contains(["offline", "unreachable", "unknown"], a.health ?? ""))
+    let errors = any(items, w => w.lifecycle == "failed") || any(team, a => contains(["failed", "error"], a.status))
+    let warning = any(items, w => w.attention != "none") || any(team, a => a.status == "blocked")
+    let working = any(items, w => w.lifecycle == "active") || any(team, a => contains(["working", "running"], a.status))
+    let portrait = {_key: representative._key, providerId: provider.id, name: provider.name, health: offline ? "unreachable" : representative.health, status: offline ? "offline" : errors ? "failed" : warning ? "blocked" : working ? "working" : "resting"}
+    CompactOrbit { agent: portrait; items: items; s: s; offline: offline; slot: indexOf(allProviders.map(p => p.id), provider.id); alert: offline ? "" : errors ? "!!" : warning ? "?!" : "" }
+  }
+  component QuietFleet(list) {
+    let systems = provs.filter(p => !needsOnly || any(list, w => w.providerId == p.id))
+    let columns = max(1, min(4, min(len(systems), floor(max(screenWidth - 18, 1) / 88))))
+    Grid {
+      fill: width
+      columns: columns
+      gap: 6
+      for p in systems.take(providerLimit) key p.id {
+        Column {
+          align: center
+          gap: 2
+          onTap: { inspectionView = "quiet"; expandedSystem = p.id; workflowActor = ""; selectedActor = ""; pageSize = 5; agentsOpen = false }
+          QuietPortrait { provider: p; items: live.filter(w => w.providerId == p.id); s: min(128, max(48, (screenWidth - 24 - (columns - 1) * 6) / columns)) }
+          Text { text: replace(p.name, "-", " "); width: max(48, (screenWidth - 24 - (columns - 1) * 8) / columns); height: 28; align: center; fontSize: 10; maxLines: 2 }
+        }
+      }
+    }
+    if len(systems) == 0 { Text { text: needsOnly ? "Nothing needs you" : "No systems to display"; style: small; color: muted } }
+    if len(systems) > providerLimit { Button { text: "More systems"; onTap: providerLimit = providerLimit + 6 } }
+  }
+  component QuietSystemTasks(provider, list) {
+    let team = actors.filter(a => a.providerId == provider.id)
+    let tasks = list.filter(w => w.providerId == provider.id && (workflowActor == "" || contains(w._actorKeys ?? [], workflowActor)))
+    Button { text: "Back"; onTap: { observatoryView = inspectionView == "" ? observatoryView : inspectionView; inspectionView = ""; expandedSystem = ""; workflowActor = ""; agentsOpen = false } }
+    Text { text: provider.name; fontSize: 12; maxLines: 2 }
+    Flow {
+      fill: width
+      gap: 8
+      for a in team.take(4) key a._key {
+        Column {
+          width: 76
+          align: center
+          gap: 2
+          onTap: { workflowActor = workflowActor == a._key ? "" : a._key; pageSize = 5 }
+          Bot { agent: a; s: 42 }
+          Text { text: replace(a.name, "-", " "); width: 76; align: center; fontSize: 10; color: workflowActor == a._key ? accent : muted; maxLines: 2 }
+          if workflowActor == a._key { Spacer { width: 30; height: 2; background: accent } }
+        }
+      }
+    }
+    WorkRows { list: tasks }
+    if len(tasks) == 0 { Text { text: workflowActor != "" ? "No assigned work reported" : "No work in flight"; style: small; color: muted } }
+    if len(team) > 4 { Button { text: agentsOpen ? "Hide agents" : "More agents"; onTap: agentsOpen = !agentsOpen } }
+    if agentsOpen { AgentRows { list: team } }
+  }
+
+  let tileActors = (previewRobots ? actors.take(1) : actors) + (previewRobots ? [
+    {_key: "preview-resting", providerId: "", name: "Preview sleep", status: "resting", health: "healthy", _preview: true},
+    {_key: "preview-working", providerId: "", name: "Preview working", status: "working", health: "healthy", _preview: true},
+    {_key: "preview-review", providerId: "", name: "Preview review", status: "blocked", health: "healthy", _preview: true}
+  ] : [])
+  component StateMark(warning, working, offline, s = 18) {
+    Canvas {
+      width: s
+      height: s
+      let k = s / 18
+      let mark = warning ? (orange ?? foreground) : working ? (green ?? foreground) : foreground
+      if offline {
+        circle(9*k, 9*k, 5*k, stroke: alpha(muted, 0.7), width: 1.3)
+        line(4*k, 14*k, 14*k, 4*k, stroke: muted, width: 1.3)
+
+      }
+    }
+  }
+  let availableWidth = max(tileWidth - 16, 32)
+  let availableHeight = max(tileHeight - 16, 32)
+  let showNames = availableHeight >= 88
+  let columns = max(1, min(4, min(len(tileActors), floor((availableWidth + 6) / 88))))
+  let rows = max(1, min(ceil(len(tileActors) / columns), floor((availableHeight - 16) / (showNames ? 64 : 40))))
+  let capacity = columns * rows
+  let cellWidth = (availableWidth - (columns - 1) * 6) / columns
+  let cellHeight = (availableHeight - 16 - (rows - 1) * 6) / rows
+  let robotSize = clamp(min(cellWidth - 10, cellHeight - (showNames ? 32 : 0)), 30, 100)
+  let usedRows = ceil(min(len(tileActors), capacity) / columns)
+  let groupHeight = usedRows * (robotSize * 0.82 + (showNames ? 30 : 0)) + max(usedRows - 1, 0) * 6 + (len(tileActors) > capacity ? 20 : 0) + (issueCount > 0 ? 20 : 0) + (len(actors) == 0 ? 20 : 0)
+  Box {
+    fill: true
+  Column {
+    fill: true
+    justify: availableHeight >= groupHeight ? "center" : "start"
+    gap: 5
+    if !configured {
+      Column {
+        fill: width
+        align: center
+        gap: 5
+        onTap: { setupOpen = true; screen() }
+        Bot { agent: {_key: "welcome", name: "Miilo", status: "ready", health: "healthy"}; s: clamp(min(availableWidth - 20, availableHeight - 30), 16, 96) }
+        Text { text: "Tap to add a system"; width: availableWidth; height: 24; align: center; fontSize: 10; color: muted; maxLines: 2 }
+      }
+    } else {
+      Grid {
+        columns: columns
+        gap: 6
+        fill: width
+        for a, slot in tileActors.take(capacity) key a._key {
+          let visibleCount = min(len(tileActors), capacity)
+          let neighbors = [
+            {x: -1, y: 0, valid: slot % columns > 0},
+            {x: 1, y: 0, valid: slot % columns < columns - 1 && slot + 1 < visibleCount},
+            {x: 0, y: -1, valid: slot >= columns},
+            {x: 0, y: 1, valid: slot + columns < visibleCount}
+          ].filter(n => n.valid)
+
+          let owned = live.filter(w => contains(w._actorKeys ?? [], a._key))
+          let errors = any(owned, w => w.lifecycle == "failed") || contains(["failed", "error"], a.status)
+          let warning = any(owned, w => w.lifecycle == "failed" || w.attention != "none") || any(attention, n => n.providerId == a.providerId && any(owned, w => w._key == n._workKey))
+          let working = any(owned, w => w.lifecycle == "active") || contains(["working", "running"], a.status)
+          let offline = contains(["offline", "unreachable", "disconnected"], a.status) || contains(["offline", "unreachable", "unknown"], a.health)
+          Column {
+            align: center
+            gap: 2
+            onTap: { inspectionView = observatoryView; expandedSystem = a.providerId; workflowActor = (a._preview ?? false) ? "" : a._key; selectedActor = ""; selectedWork = ""; needsOnly = false; query = ""; pageSize = 5; screen() }
+            Box {
+              width: robotSize + 10
+              height: max(24, (robotSize + 10) * 0.82)
+              align: center
+              CompactOrbit { agent: a; items: owned; s: robotSize + 10; neighbors: neighbors; slot: slot; offline: offline; alert: offline ? "" : errors ? "!!" : warning ? "?!" : "" }
+              Box {
+                width: max(1, robotSize - 6)
+                height: max(1, robotSize * 0.92 - 6)
+                align: bottomEnd
+                if offline { StateMark { warning: warning; working: working; offline: offline; s: clamp(robotSize * 0.24, 12, 21) } }
+              }
+            }
+            if showNames { Text { text: replace(a.name, "-", " "); width: cellWidth; height: 28; align: center; fontSize: 10; maxLines: 2 } }
+          }
+        }
+      }
+      if len(tileActors) > capacity { Text { text: "+${len(tileActors) - capacity}"; fontSize: 10; color: muted; maxLines: 1 } }
+      if len(actors) == 0 { Text { text: len(live) == 0 ? "No work in flight" : "No agents reported"; style: small; color: muted } }
+      if issueCount > 0 { Text { text: "${issueCount} unavailable"; fontSize: 10; color: muted } }
+    }
+  }
+    Box {
+      fill: true
+      align: bottomEnd
+      Text { text: "miilo.tech"; width: 64; height: 12; fontSize: 9; color: alpha(muted, 0.65); align: end; maxLines: 1 }
+    }
+  }
+  screen {
+    title: "miilo"
+    Column {
+      scroll: true
+      gap: 10
+      if setupOpen { SettingsPage { } } else {
+        Setup { }
+        if focused == null && actor == null { Search { placeholder: "Search systems, agents or work" } }
+        if focused != null {
+          WorkDetail { }
+        } else if actor != null {
+          Bot { agent: actor; s: 48 }
+          Text { text: actor.name; style: body; maxLines: 1 }
+          Flow {
+            Button { text: renameOpen ? "Cancel name" : "Name"; onTap: renameOpen = !renameOpen }
+          }
+          if renameOpen && !requestPending {
+            Input { text: actor.name; placeholder: "Display name"; onSubmit: { requestPending = true; replyWork = ""; reply = run("export PATH=\"$HOME/.local/bin:$PATH\"; miilo-owl name-agent ${sh(actor._key)} ${sh(trim(value))}"); reply = "pending"; renameOpen = false } }
+          }
+          let owned = works.filter(w => w.providerId == actor.providerId && contains(w._actorKeys ?? [], actor._key))
+          WorkRows { list: owned }
+          if len(owned) == 0 { Text { text: "No assigned work reported"; style: small; color: muted } }
+          WorkDetail { }
+        } else {
+          let actionable = works.filter(w => w.attention != "none" || any(attention, a => a._workKey == w._key))
+          let visible = (needle == "" ? live : searched).filter(w => !needsOnly || any(actionable, a => a._key == w._key)).sortBy(w => any(actionable, a => a._key == w._key) ? 0 : w.lifecycle == "active" ? 1 : 2)
+          WorkViewToolbar { count: len(actionable) }
+          if observatoryView == "orbit" && expandedSystem != "" && any(provs, p => p.id == expandedSystem) {
+            QuietSystemTasks { provider: find(provs, p => p.id == expandedSystem); list: visible }
+          } else if observatoryView == "orbit" {
+            OrbitView { list: visible }
+          } else if needle != "" {
+            let matches = actors.filter(a => contains(lower("${a.name} ${a.id}"), needle))
+            if !needsOnly && len(matches) > 0 { AgentRows { list: matches } }
+            WorkRows { list: visible; showSystem: true }
+            if len(visible) == 0 && (needsOnly || len(matches) == 0) { Text { text: "No matches"; style: small; color: muted } }
+          } else if expandedSystem == "" || !any(provs, p => p.id == expandedSystem) {
+            QuietFleet { list: visible }
+          } else {
+            QuietSystemTasks { provider: find(provs, p => p.id == expandedSystem); list: visible }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,574 @@
+face "boulevard" {
+  // A seaside page from a manga: palms over a hotel pool at dusk, a drive-in's sign that lights up at night, what's playing
+  // with its cover, a watchlist (Bitcoin, SpaceX, Tesla and more) and a cat watching the stars.
+  // The page is the theme's paper and ink: its background and foreground, with the accent for red.
+
+  meta {
+    owl: 13
+    description: "A seaside manga page: halftone palms by a pool, a drive-in's sign, what's playing with its cover, a stock and crypto watchlist and a cat under the stars"
+    version: "1.0"
+    license: "MIT"
+    category: "fun"
+  }
+
+  background: background
+  padding: 0
+
+  source now = clock every 1m
+  source mp = android.media
+  // Yahoo Finance's quotes for the watchlist below (keep the two lists in step), in one request; it answers 429 without a browser's User-Agent.
+  source mk = http("https://query1.finance.yahoo.com/v8/finance/spark?symbols=BTC-USD,SPCX,TSLA,NVDA,ETH-USD,%5EGSPC&range=1d&interval=15m", {"User-Agent": "Mozilla/5.0"}) every 5m timeout 15s json
+
+  state pick = "SPCX" persist
+
+  let watch = [["BTC-USD", "BTC"], ["SPCX", "SPCX"], ["TSLA", "TSLA"], ["NVDA", "NVDA"], ["ETH-USD", "ETH"], ["^GSPC", "S&P"]]
+  let heavy = "https://raw.githubusercontent.com/google/fonts/main/ofl/archivoblack/ArchivoBlack-Regular.ttf"
+  let script = "https://raw.githubusercontent.com/google/fonts/main/apache/yellowtail/Yellowtail-Regular.ttf"
+
+  let h = num(fmtTime(now, "H")) + num(fmtTime(now, "m")) / 60
+  let night = clamp(max(h - 19.5, 6.5 - h) / 1.0 + 0.5, 0, 1)
+  let has = mp != null && mp.title != null && mp.title != ""
+  let allowed = mp == null || mp.available != false
+  let dur = num(mp.duration, 0)
+  let pos = dur > 0 ? clamp(num(mp.position, 0), 0, dur) : num(mp.position, 0)
+
+  // The watchlist: Yahoo's symbol and the name shown. The big one is the one tapped, SpaceX at first.
+  let quotes = watch.map(w => {
+    sym: w[0],
+    name: w[1],
+    closes: (get(mk ?? {}, w[0]).close ?? []).filter(c => c != null),
+    prev: get(mk ?? {}, w[0]).chartPreviousClose
+  }).map(q => merge(q, {price: last(q.closes) ?? null, change: len(q.closes) > 0 && q.prev ? (last(q.closes) / q.prev - 1) * 100 : null}))
+  let big = quotes.find(q => q.sym == pick) ?? quotes[0]
+  let list = quotes.filter(q => q.sym != big.sym)
+  let spark = big.closes
+  let up = (big.change ?? 0) >= 0
+
+  let W = tileWidth ?? 412
+  let wide = W > (tileHeight ?? 900)
+  let m = 12
+  let g = 8
+  // The gutter between the two top panels leans like a manga's: S across over their height, gp wide. The panels
+  // overlap by S, and the right one draws nothing left of its edge.
+  let topH = wide ? (tileHeight ?? 900) - 2 * m : ((tileHeight ?? 900) - 2 * m) * 0.4
+  let S = round(topH * 0.06)
+  let gp = 10
+  let CW = (wide ? floor(W / 2) : W) - 2 * m
+  let leftW = floor(CW * 0.47)
+  let rightW = CW - leftW
+  let coinW = floor(CW * 0.6)
+  let catW = CW - coinW - g
+  let ink = foreground
+  let paper = background
+
+  // Shared by the shaders: halftone dots on a 45° screen, noise, and strokes, all in dp.
+  let lib = """
+    uniform half4 ink;
+    uniform half4 paper;
+    uniform float dpw;
+    float h1(float n) { return fract(sin(n * 12.9898) * 43758.5453); }
+    float h2(float2 p) { return fract(sin(dot(p, float2(127.1, 311.7))) * 43758.5453); }
+    float vn(float2 p) {
+      float2 i = floor(p);
+      float2 f = fract(p);
+      float2 u = f * f * (3.0 - 2.0 * f);
+      return mix(mix(h2(i), h2(i + float2(1.0, 0.0)), u.x), mix(h2(i + float2(0.0, 1.0)), h2(i + float2(1.0, 1.0)), u.x), u.y);
+    }
+    float fbm(float2 p) {
+      float v = 0.0;
+      float a = 0.5;
+      for (int i = 0; i < 5; i++) { v += a * vn(p); p = p * 2.03 + float2(17.0, 9.0); a *= 0.5; }
+      return v;
+    }
+    float dots(float2 q, float tone, float cell, float aa) {
+      if (tone < 0.03) { return 0.0; }
+      float2 r = float2(q.x + q.y, q.y - q.x) * 0.70710678 / cell;
+      float d = length(fract(r) - 0.5);
+      float rad = sqrt(clamp(tone, 0.0, 1.0)) * 0.72;
+      float w = aa / cell;
+      return 1.0 - smoothstep(rad - w, rad + w, d);
+    }
+    float seg(float2 p, float2 a, float2 b) {
+      float2 pa = p - a;
+      float2 ba = b - a;
+      float t = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+      return length(pa - ba * t);
+    }
+    float cover(float d, float w, float aa) { return 1.0 - smoothstep(w - aa, w + aa, d); }
+    half4 inked(float k) { return mix(paper, ink, clamp(k, 0.0, 1.0)); }
+  """
+
+  let palms = """
+    uniform float v;
+    uniform float night;
+    uniform float cut0;
+    uniform float cut1;
+    // A palm in ink with light along its fronds: x is ink, y is paper over it.
+    float2 palm(float2 u, float2 base, float hgt, float lean, float L, float ua) {
+      float k = 0.0;
+      float p = 0.0;
+      float t = (base.y - u.y) / hgt;
+      if (t > 0.0 && t < 1.0) {
+        float xt = base.x + lean * hgt * (t * 0.6 + t * t * 0.4);
+        float w = 0.009 - 0.004 * t;
+        k = cover(abs(u.x - xt), w, ua);
+        if (k > 0.5 && u.x > xt + w * 0.2 && fract(t * hgt * 90.0) < 0.12) { p = 1.0; }
+      }
+      float2 crown = float2(base.x + lean * hgt, base.y - hgt);
+      for (int j = 0; j < 14; j++) {
+        float fj = float(j);
+        float ang = -3.5 + fj * 0.29 + 0.12 * sin(fj * 3.7 + base.x * 9.0);
+        float2 dir = float2(cos(ang), sin(ang));
+        float2 nrm = float2(-dir.y, dir.x);
+        float2 d = u - crown;
+        float x = dot(d, dir);
+        float len = L * (0.75 + 0.4 * h1(fj + base.x * 10.0));
+        if (x > 0.0 && x < len) {
+          float s = x / len;
+          float y = dot(d, nrm) - 0.9 * s * s * len * nrm.y;
+          float w = len * 0.2 * pow(sin(3.14159 * min(s * 1.1, 1.0)), 0.6);
+          float ay = abs(y);
+          float teeth = 0.35 + 0.65 * abs(sin((x - ay * 0.9) / (len * 0.028)));
+          if (ay < w * teeth) {
+            k = 1.0;
+            if (y * nrm.y < 0.0 && ay > w * 0.12 && ay < w * 0.3 && s > 0.15 && s < 0.7) { p = 1.0; } else { p = 0.0; }
+          }
+        }
+      }
+      if (length(u - crown) < 0.012) { k = 1.0; p = 0.0; }
+      return float2(k, p);
+    }
+    half4 main(float2 p) {
+      float s = size.x / dpw;
+      float2 q = p / s;
+      float W = dpw;
+      float H = size.y / s;
+      // Left of the slanted edge (cut0 at the top, cut1 at the bottom) is the panel beside it.
+      if (q.x < mix(cut0, cut1, q.y / H)) { return half4(0.0); }
+      float aa = 0.7 / s;
+      float2 u = q / H;
+      float A = W / H;
+      float ua = aa / H;
+      float y = u.y;
+      float L = 0.0;
+      float P = 0.0;
+      float tone = 0.0;
+      float cell = 2.6;
+      float2 K = float2(0.0);
+      if (v < 0.5) {
+        // A hotel pool at dusk, after the original's panel: a screened sky over a strip of sea, a grey hedge with
+        // a white chair and a white umbrella against it, and the pool seen at an angle, pale, with a ladder's rails.
+        // White things get an ink outline: a thick ink stroke with a thinner paper one over it.
+        float hz = 0.66;
+        tone = mix(0.85, 0.3, smoothstep(0.0, hz, y));
+        tone = mix(tone, min(tone + 0.06, 1.0), night);
+        float W = 0.0;
+        if (y > hz && y < hz + 0.025) {
+          tone = 0.55;
+          if (fract(y * 260.0) < 0.3 && vn(float2(u.x * 14.0, floor(y * 260.0))) > 0.5) { W = 1.0; }
+        }
+        float hedgeTop = hz + 0.01 - 0.035 * fbm(float2(u.x * 7.0, 2.0)) - 0.05 * (1.0 - smoothstep(0.0, 0.3, u.x / A));
+        float back = hz + 0.085;
+        if (y > hedgeTop && y < back) { tone = 0.72 + 0.5 * (fbm(q * 0.3) - 0.5); }
+        L = max(L, cover(abs(y - back), 0.002, ua));
+        // The deck along the back, then the water, whose near side runs off to the bottom left, leaving deck there.
+        float poolLeft = A * (0.05 + (y - back - 0.03) * 1.6);
+        bool water = y > back + 0.03 && u.x > poolLeft;
+        if (y > back) {
+          tone = 0.0;
+          if (u.x < poolLeft + 0.02 && fract((u.x * 0.8 + y) * 7.0 + fbm(u * 6.0) * 0.6) < 0.22 && y > back + 0.1) { tone = 0.4; }
+        }
+        if (water) {
+          tone = 0.16;
+          if (fract(y * 38.0) < 0.07 && vn(float2(u.x * 9.0, floor(y * 38.0) * 2.3)) > 0.5) { W = 1.0; }
+        }
+        L = max(L, cover(abs(y - (back + 0.03)), 0.0025, ua) * step(poolLeft, u.x));
+        if (y > back + 0.03) { L = max(L, cover(abs(u.x - poolLeft), 0.0025, ua)); }
+        // A white lounge chair along the hedge.
+        {
+          float cx = A * 0.08 + 0.075;
+          float cy = back - 0.004;
+          float d = min(seg(u, float2(cx, cy), float2(cx + 0.05, cy)), seg(u, float2(cx + 0.05, cy), float2(cx + 0.062, cy - 0.022)));
+          d = min(d, min(seg(u, float2(cx + 0.004, cy), float2(cx + 0.004, cy + 0.008)), seg(u, float2(cx + 0.046, cy), float2(cx + 0.046, cy + 0.008))));
+          L = max(L, cover(d, 0.006, ua));
+          if (d < 0.0028) { W = 1.0; }
+        }
+        // A white umbrella, its pole, and a table and chairs under it.
+        float ux = A * 0.78;
+        float2 ud = (u - float2(ux, hz - 0.03)) / float2(0.1, 0.045);
+        float ul = length(ud);
+        if (ud.y < 0.0 && ul < 1.0) { W = 1.0; L = 0.0; }
+        if (ud.y < 0.0 && ul < 1.08 && ul >= 1.0) { L = 1.0; W = 0.0; }
+        if (abs(ud.y) < 0.09 && ul < 1.08) { L = 1.0; W = 0.0; }
+        float pd = seg(u, float2(ux, hz - 0.03), float2(ux, back - 0.012));
+        L = max(L, cover(pd, 0.005, ua));
+        if (pd < 0.0022) { W = 1.0; }
+        float td = min(seg(u, float2(ux - 0.035, back - 0.02), float2(ux + 0.035, back - 0.02)), min(seg(u, float2(ux - 0.025, back - 0.02), float2(ux - 0.025, back)), seg(u, float2(ux + 0.025, back - 0.02), float2(ux + 0.025, back))));
+        for (int i = 0; i < 2; i++) {
+          float sx = ux + (i == 0 ? -0.07 : 0.06);
+          td = min(td, min(seg(u, float2(sx, back - 0.012), float2(sx + 0.025, back - 0.012)), seg(u, float2(sx + (i == 0 ? 0.0 : 0.025), back - 0.012), float2(sx + (i == 0 ? 0.0 : 0.025), back - 0.035))));
+          td = min(td, seg(u, float2(sx + 0.004, back - 0.012), float2(sx + 0.004, back)));
+        }
+        L = max(L, cover(td, 0.005, ua));
+        if (td < 0.0022) { W = 1.0; }
+        // The ladder at the pool's far edge: two rails anchored on the deck, arching over the edge and running
+        // down into the water, with rungs between them under it.
+        float ey = back + 0.03;
+        for (int i = 0; i < 2; i++) {
+          float x = A * 0.5 + float(i) * 0.055;
+          float2 r0 = float2(x - 0.03, ey - 0.006);
+          float2 r1 = float2(x - 0.03, ey - 0.04);
+          float2 r2 = float2(x - 0.022, ey - 0.056);
+          float2 r3 = float2(x - 0.008, ey - 0.056);
+          float2 r4 = float2(x, ey - 0.04);
+          float2 r5 = float2(x, ey + 0.1);
+          float d = min(min(seg(u, r0, r1), seg(u, r1, r2)), min(min(seg(u, r2, r3), seg(u, r3, r4)), seg(u, r4, r5)));
+          L = max(L, cover(d, 0.0055, ua));
+          if (d < 0.0022) { W = 1.0; }
+        }
+        for (int j = 0; j < 3; j++) {
+          float ry = ey + 0.025 + float(j) * 0.028;
+          L = max(L, cover(seg(u, float2(A * 0.5, ry), float2(A * 0.5 + 0.055, ry)), 0.003, ua));
+        }
+        P = max(P, W);
+        K = palm(u, float2(A * 0.1, hz + 0.06), 0.62, 0.14, 0.11, ua);
+        float2 K2 = palm(u, float2(A * 0.18, hz + 0.065), 0.56, 0.4, 0.105, ua);
+        if (K2.x > 0.5) { K = K2; }
+      } else {
+        // A drive-in after sundown: a dark sky, palms in front, and a white wall carrying the sign.
+        tone = mix(0.84, 0.36, pow(y, 0.9));
+        float2 K1 = palm(u, float2(A * 0.38, 1.05), 0.62, 0.03, 0.15, ua);
+        float2 K2 = palm(u, float2(-A * 0.1, 1.05), 0.66, 0.05, 0.2, ua);
+        float2 K3 = palm(u, float2(A * 0.86, 0.75), 0.6, 0.06, 0.3, ua);
+        K = K1;
+        if (K2.x > 0.5) { K = K2; }
+        if (K3.x > 0.5) { K = K3; }
+        // The wall and the sign's plate: the Canvas over it letters the plate.
+        bool wall = u.x > A * 0.6 && y > 0.58;
+        bool plate = u.x > A * 0.47 && u.x < A * 0.98 && y > 0.42 && y < 0.6;
+        if (wall || plate) {
+          tone = wall && !plate ? 0.14 : 0.0;
+          K = float2(0.0);
+          P = 0.0;
+        }
+        if (wall && !plate) {
+          L = max(L, cover(abs(u.x - A * 0.6), 0.004, ua));
+        }
+        if (plate) {
+          float bx = min(u.x - A * 0.47, A * 0.98 - u.x);
+          float by = min(y - 0.42, 0.6 - y);
+          L = max(L, cover(min(bx, by), 0.008, ua));
+        }
+        float2 K4 = palm(u, float2(A * 1.1, 1.2), 0.45, -0.1, 0.18, ua);
+        if (K4.x > 0.5) { K = K4; }
+      }
+      float k = max(dots(q, tone, cell, aa), L) * (1.0 - P);
+      if (K.x > 0.5) { k = K.y > 0.5 ? 0.0 : 1.0; }
+      return inked(k);
+    }
+  """
+
+  let cat = """
+    float side(float2 p, float2 a, float2 b) { return (p.x - b.x) * (a.y - b.y) - (a.x - b.x) * (p.y - b.y); }
+    bool tri(float2 p, float2 a, float2 b, float2 c) {
+      float d1 = side(p, a, b);
+      float d2 = side(p, b, c);
+      float d3 = side(p, c, a);
+      return !(((d1 < 0.0) || (d2 < 0.0) || (d3 < 0.0)) && ((d1 > 0.0) || (d2 > 0.0) || (d3 > 0.0)));
+    }
+    half4 main(float2 p) {
+      float s = size.x / dpw;
+      float2 q = p / s;
+      float W = dpw;
+      float H = size.y / s;
+      float aa = 0.7 / s;
+      float2 u = q / H;
+      float A = W / H;
+      float ua = aa / H;
+      float L = 0.0;
+      float P = 0.0;
+      float sill = 0.8;
+      // A night sky with a pale band of stars across it.
+      float tone = mix(0.62, 0.3, smoothstep(0.0, sill, u.y));
+      float band = exp(-pow((u.y - (0.6 - u.x * 0.6)) * 5.0, 2.0));
+      tone -= 0.25 * band * fbm(u * 7.0);
+      if (h2(floor(q / 2.0)) > 0.993 - band * 0.02) { P = 1.0; }
+      for (int i = 0; i < 5; i++) {
+        float2 st = float2(h1(float(i) * 3.1 + 1.0) * A, h1(float(i) * 7.3 + 2.0) * 0.55);
+        float2 d = abs(u - st);
+        if ((d.x < 0.035 && d.y < 0.003) || (d.y < 0.035 && d.x < 0.003) || length(u - st) < 0.008) { P = 1.0; }
+      }
+      // The town far off, its lights.
+      float town = sill - 0.05 - 0.03 * step(0.5, h1(floor(u.x * 25.0)));
+      if (u.y > town && u.y < sill) {
+        tone = 0.75;
+        P = h2(floor(q / 2.0) + 9.0) > 0.93 ? 1.0 : 0.0;
+      }
+      // The window: a post on the left and the sill.
+      if (u.x < A * 0.12) { tone = 0.2 + 0.3 * (u.x / (A * 0.12)); P = 0.0; }
+      L = max(L, cover(abs(u.x - A * 0.12), 0.006, ua));
+      if (u.y > sill) { tone = 0.25 + 0.5 * (u.y - sill) / (1.0 - sill); P = 0.0; if (fract((u.y - sill) * 30.0) < 0.1) { L = 1.0; } }
+      L = max(L, cover(abs(u.y - sill), 0.007, ua));
+      // The cat, from behind.
+      float2 c = float2(A * 0.58, sill);
+      bool k = length((u - (c + float2(0.0, -0.12))) / float2(0.085, 0.13)) < 1.0;
+      k = k || length(u - (c + float2(0.04, -0.06))) < 0.065;
+      k = k || length(u - (c + float2(0.0, -0.21))) < 0.05;
+      k = k || length((u - (c + float2(-0.005, -0.285))) / float2(0.068, 0.058)) < 1.0;
+      k = k || tri(u, c + float2(-0.06, -0.3), c + float2(-0.05, -0.39), c + float2(-0.015, -0.33));
+      k = k || tri(u, c + float2(0.05, -0.3), c + float2(0.04, -0.39), c + float2(0.005, -0.33));
+      float tail = min(seg(u, c + float2(0.06, -0.01), c + float2(0.15, 0.0)), min(seg(u, c + float2(0.15, 0.0), c + float2(0.2, -0.05)), seg(u, c + float2(0.2, -0.05), c + float2(0.195, -0.12))));
+      if (k || tail < 0.016) { L = 1.0; P = 0.0; }
+      return inked(max(dots(q, tone, 3.0, aa), L) * (1.0 - P));
+    }
+  """
+
+  // A framed panel: e insets each corner, [top-left x, y, top-right x, y, bottom-right x, y, bottom-left x, y], from the
+  // panel's box. Drawn behind text as paper, or over art, which it trims to the frame with paper.
+  // A panel's ink outline, its corners pulled in by e; art masks what's outside it, but an open one leaves its left side to
+  // the panel under it.
+  component Frame(e, art = false, open = false) {
+    Canvas {
+      fill: true
+      let b = 1.5
+      let poly = [[e[0] + b, e[1] + b], [width - e[2] - b, e[3] + b], [width - e[4] - b, height - e[5] - b], [e[6] + b, height - e[7] - b]]
+      if art {
+        path([[0, 0], [width, 0], poly[1], poly[0]], closed: true, fill: background)
+        path([[width, 0], [width, height], poly[2], poly[1]], closed: true, fill: background)
+        path([[width, height], [0, height], poly[3], poly[2]], closed: true, fill: background)
+        if !open { path([[0, height], [0, 0], poly[0], poly[3]], closed: true, fill: background) }
+      } else {
+        path(poly, closed: true, fill: background)
+      }
+      path(poly, closed: true, stroke: foreground, width: 2.6)
+    }
+  }
+
+  component Beach() {
+    Box {
+      width: leftW + S / 2
+      fill: height
+      Shader { fill: true; fallback: muted; uniforms: { ink: ink, paper: paper, dpw: leftW + S / 2, v: 0, night: night, cut0: -1, cut1: -1 }; code: lib + palms }
+      Frame { e: [0, 0, S + gp / 2, 0, gp / 2, 0, 0, 0]; art: true }
+    }
+  }
+
+  // A drive-in's sign on a white wall, lit in the accent after dark.
+  component Sign() {
+    Box {
+      width: rightW + S / 2
+      fill: height
+      Shader { fill: true; fallback: muted; uniforms: { ink: ink, paper: paper, dpw: rightW + S / 2, v: 1, night: night, cut0: gp / 2 + 1.5, cut1: S + gp / 2 + 1.5 }; code: lib + palms }
+      Canvas {
+        fill: true
+        let x0 = width * 0.47
+        let x1 = width * 0.98
+        let y0 = height * 0.42
+        let y1 = height * 0.6
+        let sw = x1 - x0
+        let sh = y1 - y0
+        // The name in script, as big as the plate takes, leaning up like a hand-painted sign.
+        let fs = min(sh * 0.78, sw * 0.4)
+        rotate(-5, x0 + sw * 0.45, y0 + sh * 0.4) {
+          text("Oma's", x0 + sw * 0.45 + 2, y0 + sh * 0.4 + 2, size: fs, font: script, color: alpha(foreground, 0.35), align: center)
+          text("Oma's", x0 + sw * 0.45, y0 + sh * 0.4, size: fs, font: script, color: night > 0.5 ? accent : foreground, align: center)
+        }
+        rect(x0 + sw * 0.42, y0 + sh * 0.66, sw * 0.52, sh * 0.26, fill: foreground)
+        text("DRIVE-IN", x0 + sw * 0.68, y0 + sh * 0.79, size: min(sh * 0.2, sw * 0.08), font: heavy, color: background, align: center)
+      }
+      Frame { e: [gp / 2, 0, 0, 0, 0, 0, S + gp / 2, 0]; art: true; open: true }
+    }
+  }
+
+  // A transport key, drawn: the launcher's icon font only has weather glyphs.
+  component Key(kind, action) {
+    Box {
+      weight: 1
+      height: 38
+      border: 1.5
+      borderColor: foreground
+      radius: 0
+      onTap: media(action)
+      Canvas {
+        fill: true
+        let cx = width / 2
+        let cy = height / 2
+        let d = 7
+        if kind == "prev" || kind == "next" {
+          let dir = kind == "next" ? 1 : -1
+          path([[cx - d * dir, cy - d], [cx + d * 0.6 * dir, cy], [cx - d * dir, cy + d]], closed: true, fill: foreground)
+          rect(dir > 0 ? cx + d * 0.6 : cx - d * 0.6 - 2.5, cy - d, 2.5, d * 2, fill: foreground)
+        } else if kind == "play" {
+          path([[cx - d * 0.7, cy - d], [cx + d, cy], [cx - d * 0.7, cy + d]], closed: true, fill: foreground)
+        } else {
+          rect(cx - d * 0.8, cy - d, d * 0.55, d * 2, fill: foreground)
+          rect(cx + d * 0.25, cy - d, d * 0.55, d * 2, fill: foreground)
+        }
+      }
+    }
+  }
+
+  // What's playing on the phone, as a skin of an old desktop player.
+  // What's playing on the phone: its cover, the title in the heavy face, and ink keys to drive it.
+  component Amp() {
+    Box {
+      fill: true
+      Frame { e: [0, 0, 0, 0, 0, 0, 0, 0] }
+      Column {
+        fill: true
+        gap: 10
+        padding: [14, 14]
+        Row {
+          gap: 12
+          weight: 1
+          Box {
+            size: 124
+            border: 1.5
+            borderColor: foreground
+            radius: 0
+            clip: true
+            onTap: media("open")
+            if has && mp.art != null {
+              Image { src: mp.art; fit: cover; fill: true }
+              // The ink outline again, over the cover.
+              Box { fill: true; border: 1.5; borderColor: foreground; radius: 0 }
+            } else {
+              // No cover: a record in ink, its label in the accent.
+              Canvas {
+                fill: true
+                let cx = width / 2
+                let cy = height / 2
+                let r = min(width, height) / 2 - 8
+                circle(cx, cy, r, fill: foreground)
+                for k in range(1, 5) { circle(cx, cy, r - k * r * 0.13, stroke: alpha(background, 0.25), width: 1) }
+                circle(cx, cy, r * 0.3, fill: accent)
+                circle(cx, cy, 3, fill: background)
+              }
+            }
+          }
+          Column {
+            weight: 1
+            fill: height
+            gap: 4
+            Text { text: upper(has ? mp.app ?? "now playing" : "now playing"); font: mono; fontSize: 10; letterSpacing: 2; color: muted; maxLines: 1; onTap: media("open") }
+            Text {
+              text: has ? mp.title : (allowed ? "nothing on" : "no access")
+              font: heavy
+              fontSize: 20
+              maxLines: 3
+            }
+            Text {
+              text: has ? (mp.artist ?? mp.album ?? "") : (allowed ? "Play something, or tap the record to open your player." : "Tap a key to let the launcher see what's playing.")
+              font: mono
+              fontSize: 12
+              color: muted
+              maxLines: 2
+            }
+            Spacer { weight: 1 }
+            if has {
+              Text { text: "${floor(pos / 60)}:${pad(floor(pos % 60), 2, "0")}${dur > 0 ? " / ${floor(dur / 60)}:${pad(floor(dur % 60), 2, "0")}" : ""}"; font: mono; fontSize: 11; color: muted; maxLines: 1 }
+            }
+          }
+        }
+        Canvas {
+          height: 4
+          fill: width
+          rect(0, 0, width, height, fill: alpha(foreground, 0.15))
+          rect(0, 0, width * (dur > 0 ? pos / dur : 0), height, fill: accent)
+        }
+        Row {
+          gap: 8
+          Key { kind: "prev"; action: "previous" }
+          Key { kind: mp.playing == true ? "pause" : "play"; action: "toggle" }
+          Key { kind: "next"; action: "next" }
+        }
+      }
+    }
+  }
+
+  component Coins() {
+    Box {
+      width: coinW
+      fill: height
+      Frame { e: [0, 0, 0, 0, 0, 0, 0, 0] }
+      Row {
+        fill: true
+        gap: 10
+        padding: [14, 14]
+        Column {
+          weight: 1
+          fill: height
+          gap: 2
+          onTap: url("https://finance.yahoo.com/quote/${enc(big.sym)}")
+          Text { text: big.name; font: heavy; fontSize: 22; color: accent; maxLines: 1 }
+          Text {
+            text: big.price == null ? "…" : fmtNum(big.price, big.price >= 1000 ? 0 : big.price >= 1 ? 2 : 4)
+            font: heavy
+            fontSize: 24
+            maxLines: 1
+          }
+          Text { text: big.change == null ? "…" : "${fmtNum(big.change, {digits: 1, sign: true})}% · 1d"; font: mono; fontSize: 12; color: up ? green : red; maxLines: 1 }
+          Sparkline { values: spark; min: min(spark); color: up ? green : red; area: true; thickness: 1.5; weight: 1; fill: width }
+          Text { text: "WATCHLIST"; font: mono; fontSize: 10; letterSpacing: 2; color: muted; maxLines: 1 }
+        }
+        Column {
+          width: 104
+          fill: height
+          justify: spaceBetween
+          for c in list key c.sym {
+            Row {
+              onTap: pick = c.sym
+              Text { text: c.name; font: mono; fontSize: 14; bold: true; color: muted; weight: 1; maxLines: 1 }
+              Text { text: c.change == null ? "…" : "${fmtNum(c.change, {digits: 1, sign: true})}%"; font: mono; fontSize: 13; color: (c.change ?? 0) >= 0 ? green : red; maxLines: 1 }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  component Cat() {
+    Box {
+      width: catW
+      fill: height
+      Shader { fill: true; fallback: muted; uniforms: { ink: ink, paper: paper, dpw: catW }; code: lib + cat }
+      Frame { e: [0, 0, 0, 0, 0, 0, 0, 0]; art: true }
+    }
+  }
+
+  component Top() {
+    Box {
+      fill: true
+      Row { fill: true; Beach {} }
+      Row { fill: true; Spacer { weight: 1 }; Sign {} }
+    }
+  }
+
+  component Rest() {
+    Column {
+      fill: true
+      gap: g
+      Box { weight: 0.48; fill: width; Amp {} }
+      Row { weight: 0.52; fill: width; gap: g; Coins {}; Cat {} }
+    }
+  }
+
+  if wide {
+    Row {
+      fill: true
+      gap: 2 * m
+      padding: [m, 10, m, screenInset + 8]
+      Box { width: CW; fill: height; Top {} }
+      Box { width: CW; fill: height; Rest {} }
+    }
+  } else {
+    Column {
+      fill: true
+      gap: g
+      padding: [m, 10, m, 0]
+      Box { weight: 0.4; fill: width; Top {} }
+      Box { weight: 0.6; fill: width; Rest {} }
+      Spacer { height: screenInset }
+    }
+  }
+}

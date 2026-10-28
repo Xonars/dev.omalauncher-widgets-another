@@ -1,0 +1,89 @@
+app "Тихая читалка" {
+  meta { owl: 13; description: "EPUB, MOBI и TXT: только книга, плавная прокрутка и три темы"; version: "1.3"; license: "MIT AND GPL-3.0-only"; category: "productivity" }
+  title: ""
+  statusBar: false
+  edge: true
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5h25a5 5 0 0 1 5 5v33H14a5 5 0 0 1-5-5V5zM9 34h30M17 13h14M17 21h10"/></svg>"""
+  requires { pacman: ["bash", "python", "python-beautifulsoup4", "python-pillow", "ttf-dejavu"] }
+  state book = "" persist
+  state theme = "paper" persist
+  state menu = true
+  state folder = "~/Books"
+  let paper = theme == "night" ? #171b20 : theme == "sepia" ? #efe3cb : #f7f4ec
+  let ink = theme == "night" ? #e0dfd8 : #282c30
+  let soft = theme == "night" ? #9bbdb4 : #45675d
+  let script = "~/.config/omalauncher/widgets/quiet-reader/main.py"
+  source listing = cmd(menu ? "python ${script} list ${sh(folder)}" : null) json
+  source content = cmd(book == "" ? null : "python ${script} read ${sh(book)}") every 24h json timeout 60s
+  back: !menu && book != ""
+  onBack: menu = true
+  Box {
+    fill: true
+    background: paper
+    clip: true
+    // Keep the native list in one stable composition slot.
+    Column {
+          fill: true
+          lazy: true
+          gap: 0
+          padding: 0
+          for block in content.blocks ?? [] key "${book}:${block.id}" {
+            Text {
+              text: block.text
+              font: "/usr/share/fonts/TTF/DejaVuSerif.ttf"
+              fontSize: 20
+              color: ink
+              onLongPress: menu = true
+            }
+          }
+    }
+    if menu || book == "" || len(content.blocks ?? []) == 0 || content.error {
+      // Opaque menu overlay keeps the reading list alive underneath.
+      Column {
+        fill: true
+        background: paper
+        padding: [24, 16 + (screenTop ?? 0), 24, 16 + (screenInset ?? 0)]
+        gap: 16
+        Text { text: "Тихая читалка"; font: serif; fontSize: 28; color: ink }
+        Row {
+          gap: 8
+          for t in [{id: "paper", name: "День"}, {id: "sepia", name: "Сепия"}, {id: "night", name: "Ночь"}] {
+            Text { text: t.name; color: theme == t.id ? paper : ink; background: theme == t.id ? soft : alpha(soft, 0.1); padding: [16, 12]; radius: 8; onTap: theme = t.id }
+          }
+        }
+        if book != "" {
+          Text { text: content.title ?? "Загрузка…"; font: serif; fontSize: 20; color: ink; maxLines: 2 }
+          if len(content.blocks ?? []) > 0 && !content.error { Button { text: "Читать"; color: soft; onTap: menu = false } }
+        }
+        if content.error { Text { text: content.error; color: #b34b45; fontSize: 13 } }
+        Text { text: "ВЫБРАТЬ КНИГУ · EPUB / MOBI / TXT"; color: soft; fontSize: 11; letterSpacing: 1 }
+        Text { text: listing.path ?? folder; color: soft; fontSize: 12; maxLines: 2 }
+        if listing.error { Text { text: listing.error; color: #b34b45; fontSize: 13 } }
+        Row {
+          Button { text: "Домой"; color: soft; onTap: folder = "~" }
+          Button { text: "Вверх"; color: soft; onTap: folder = listing.parent ?? "~" }
+        }
+        Column {
+          lazy: true
+          weight: 1
+          gap: 0
+          if listing.entries != null && len(listing.entries) == 0 {
+            Text { text: "Здесь пока нет книг. Нажмите «Вверх» или «Домой», чтобы выбрать другую папку."; color: soft; fontSize: 15; padding: [0, 16] }
+          }
+          for entry in listing.entries ?? [] key entry.path {
+            Text {
+              text: "${entry.directory ? "▸  " : ""}${entry.name}"
+              color: entry.directory ? soft : ink
+              fontSize: 16
+              padding: [0, 14]
+              onTap: {
+                if entry.directory { folder = entry.path } else { book = entry.path; menu = false }
+              }
+            }
+          }
+        }
+        Text { text: "Долгое нажатие на текст или «Назад» открывает меню."; fontSize: 12; color: soft }
+      }
+    }
+  }
+}

@@ -1,0 +1,118 @@
+# TAGLINE
+
+Run commands in managed chroot environments
+
+# TLDR
+
+**List** available chroots
+
+```schroot --list```
+
+Run **command** in specific chroot
+
+```schroot --chroot chroot_name command```
+
+Run command with **options** in chroot
+
+```schroot --chroot chroot_name -- command command_options```
+
+Run command in **all** chroots
+
+```schroot --all command```
+
+Start **interactive shell** as specific user
+
+```schroot --chroot chroot_name --user user```
+
+**Begin** new session
+
+```schroot --begin-session --chroot chroot_name```
+
+**Connect** to existing session
+
+```schroot --run-session --chroot session_id```
+
+**End** a session
+
+```schroot --end-session --chroot session_id```
+
+# SYNOPSIS
+
+**schroot** [_options_] [_command_]
+
+# PARAMETERS
+
+**-l**, **--list**
+> List available chroots.
+
+**-c** _NAME_, **--chroot** _NAME_
+> Specify chroot environment.
+
+**-u** _USER_, **--user** _USER_
+> Run as specified user.
+
+**-a**, **--all**
+> Run in all available chroots.
+
+**--begin-session**
+> Start new session.
+
+**--run-session**
+> Connect to existing session.
+
+**--end-session**
+> Terminate session.
+
+**-i**, **--info**
+> Display detailed information about specified chroots.
+
+**-d** _DIR_, **--directory** _DIR_
+> Change to directory inside the chroot before running command.
+
+**-p**, **--preserve-environment**
+> Preserve the user's environment inside the chroot.
+
+**-q**, **--quiet**
+> Show less output.
+
+**-v**, **--verbose**
+> Show more output.
+
+# DESCRIPTION
+
+**schroot** runs commands or starts interactive shells in different root directory environments. It provides more features and customization than basic chroot, including session management and user mapping.
+
+Configured via /etc/schroot/schroot.conf, it supports multiple chroot types and configurations.
+
+# CONFIGURATION
+
+**/etc/schroot/schroot.conf**
+> Main configuration file defining available chroot environments, their types, locations, and access permissions.
+
+**/etc/schroot/chroot.d/**
+> Directory for individual chroot definition files, allowing modular configuration.
+
+**/etc/schroot/setup.d/**
+> Directory containing setup scripts executed when sessions begin and end, handling mount points, networking, and environment preparation.
+
+# CAVEATS
+
+Requires proper chroot configuration. Sessions must be ended to release resources.
+
+# HISTORY
+
+Developed for **Debian** as an improved chroot solution with better security and usability features.
+
+# INSTALL
+
+```apt: sudo apt install schroot```
+
+```pacman: sudo pacman -S schroot```
+
+```nix: nix profile install nixpkgs#schroot```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[chroot](/man/chroot)(8), [debootstrap](/man/debootstrap)(8)

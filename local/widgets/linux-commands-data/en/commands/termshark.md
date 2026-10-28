@@ -1,0 +1,96 @@
+# TAGLINE
+
+Terminal-based Wireshark interface
+
+# TLDR
+
+Monitor **default** interface
+
+```sudo termshark```
+
+Monitor **specific** interface
+
+```sudo termshark -i [eth0]```
+
+Read a **pcap** file
+
+```termshark -r [path/to/capture.pcap]```
+
+Apply a **display filter**
+
+```sudo termshark -i [eth0] -Y "[http.request]"```
+
+Apply a **capture filter**
+
+```sudo termshark -i [eth0] -f "[port 80]"```
+
+# SYNOPSIS
+
+**termshark** [_OPTIONS_] [_INTERFACE_|_FILE_]
+
+# PARAMETERS
+
+**-i** _INTERFACE_
+> Capture on specified interface
+
+**-r** _FILE_
+> Read from pcap file
+
+**-Y** _FILTER_
+> Apply display filter
+
+**-f** _FILTER_
+> Apply capture filter
+
+**-d** _layer==selector,protocol_
+> Specify dissection of layer type
+
+**--pass-thru** _[auto|yes|no]_
+> Run tshark instead of UI (auto means if stdout is not a tty)
+
+**--debug**
+> Enable debug mode with profiling server on port 6060
+
+# DESCRIPTION
+
+**termshark** is a terminal-based user interface for tshark that provides a Wireshark-like experience in the terminal. It offers packet list, packet details, and packet bytes views with interactive navigation.
+
+The interface supports keyboard navigation, display filtering, and stream reassembly similar to the graphical Wireshark.
+
+# KEYBOARD SHORTCUTS
+
+**Tab** - Switch between views
+
+**/** - Filter packets
+
+**Enter** - Expand/collapse details
+
+**q** - Quit
+
+# CAVEATS
+
+Requires tshark (Wireshark CLI) to be installed. Root privileges needed for live capture. Large capture files may be slow to load.
+
+# HISTORY
+
+**termshark** was created by **Graham Clark** to bring Wireshark's interface paradigm to the terminal, enabling packet analysis over SSH or in environments without a GUI.
+
+# INSTALL
+
+```apt: sudo apt install termshark```
+
+```pacman: sudo pacman -S termshark```
+
+```apk: sudo apk add termshark```
+
+```zypper: sudo zypper install termshark```
+
+```brew: brew install termshark```
+
+```nix: nix profile install nixpkgs#termshark```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[tshark](/man/tshark)(1), [wireshark](/man/wireshark)(1), [tcpdump](/man/tcpdump)(8)

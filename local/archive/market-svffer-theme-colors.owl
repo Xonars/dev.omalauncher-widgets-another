@@ -1,0 +1,761 @@
+widget "theme colors" {
+  // By Svffer (https://github.com/Svffer), written together with Claude Opus 5.5, Anthropic's AI model. MIT license.
+  size: 6x4
+  minSize: 4x3
+  meta { description: "Sets the active Omarchy theme's colors from its palette or a color picker; English, Russian, Ukrainian and Belarusian (AI-translated)"; version: "1.4"; license: "MIT"; category: "system"; owl: 12 }
+  requires { pacman: ["bash", "coreutils", "grep", "sed", "util-linux"] }
+
+  // The active theme: `theme` in style.toml, else the one omarchy has applied.
+  // A user theme (~/.config/omarchy/themes) is edited in place; a stock one gets a copy there first, since user themes win.
+  // Before the first edit the colors are saved to colors.orig.toml next to it: that is the palette to pick from, and what reset restores.
+  // Output lines: "theme <name>", "orig 1", "c <key> <hex>" (in the theme now), "p <key> <hex>" (the palette).
+  source theme = cmd("""
+t=$(sed -n 's/^theme *= *"\(.*\)"/\1/p' ~/.config/omalauncher/style/style.toml)
+[ -n "$t" ] || t=$(cat ~/.local/state/omarchy/current/theme.name)
+t=$(printf %s "$t" | sed 's/-reload$//')
+d=~/.config/omarchy/themes/$t
+[ -f "$d/colors.toml" ] || d=~/.local/share/omarchy/themes/$t
+echo "theme $t"
+p=$d/colors.toml
+[ -f "$d/colors.orig.toml" ] && echo "orig 1" && p=$d/colors.orig.toml
+grep -E '^[a-z0-9_]+ *= *"#[0-9a-fA-F]{6}' "$d/colors.toml" | sed -E 's/^([a-z0-9_]+) *= *"(#[0-9a-fA-F]{6}).*/c \1 \2/'
+grep -E '^[a-z0-9_]+ *= *"#[0-9a-fA-F]{6}' "$p" | sed -E 's/^([a-z0-9_]+) *= *"(#[0-9a-fA-F]{6}).*/p \1 \2/'
+""") every 5m
+  // Re-read the theme as soon as the launcher applies one (a theme switch on the phone, or a rebuild after an edit),
+  // instead of waiting for the next poll.
+  source appliedName = file("~/.local/state/omarchy/current/theme.name")
+  source appliedColors = file("~/.local/state/omarchy/current/theme/colors.toml")
+  on appliedName { refresh() }
+  on appliedColors { refresh() }
+
+  state picked = null
+  state lang = "en" persist
+  state settingsOpen = false
+  // The screen's tab: "theme" is the theme palette, "custom" a color of your own.
+  state mode = "theme" persist
+  state pickerOpen = true persist
+  // The picker's palette: "grid" (tonality grid), "tonal", "func" (functional) or "harm" (harmonic).
+  state gridMode = "grid" persist
+  // The custom color is kept as RGB; HSL and HEX input arrive as requests that the triggers below convert.
+  state cr = 138 persist
+  state cg = 164 persist
+  state cb = 214 persist
+  // Applying a color, for reviewers:
+  // 1. Writes color value.v to key value.k in the theme's colors.toml, one `key = "#rrggbb"` line, after checking both
+  //    against ^[a-z0-9_]+$ and ^#[0-9a-fA-F]{6}$. A stock theme first gets a copy in ~/.config/omarchy/themes (user themes
+  //    win): its own colors.toml, symlinks to the stock theme's other files, and a .theme-colors-copy marker. The original
+  //    colors are kept in colors.orig.toml so reset can restore them.
+  // 2. Re-applies the theme. The launcher only rebuilds a theme when the `theme` name in style.toml changes; touching
+  //    colors.toml or style.toml does nothing. So, detached with setsid (the tile refreshes as soon as the color is
+  //    written), it makes a twin <theme>-reload (a copy of colors.toml, symlinks to the rest), points `theme` at it,
+  //    waits for the launcher to apply it, points `theme` back, waits again, and removes the twin with rm -f and rmdir.
+  //    The twin looks the same as the theme, so nothing flickers, and style.toml ends as it was.
+  // The script is written out here rather than kept in a let, so the store's review shows exactly what runs.
+  state applyReq = null
+  on applyReq { run("k=${sh(value.k)}; v=${sh(value.v)}\nt=$(sed -n \"s/^theme *= *\\\"\\(.*\\)\\\"/\\1/p\" ~/.config/omalauncher/style/style.toml)\n[ -n \"$t\" ] || t=$(cat ~/.local/state/omarchy/current/theme.name)\nt=$(printf %s \"$t\" | sed \"s/-reload\\$//\")\nd=~/.config/omarchy/themes/$t\ns=~/.local/share/omarchy/themes/$t\nif [ ! -f \"$d/colors.toml\" ]; then\n[ -f \"$s/colors.toml\" ] || exit 1\nmkdir -p \"$d\" && cp \"$s/colors.toml\" \"$d/colors.toml\" || exit 1\nfor x in \"$s\"/*; do case \"$x\" in */colors.toml) ;; *) ln -s \"$x\" \"$d/\" ;; esac; done\n: > \"$d/.theme-colors-copy\"\nfi\nf=$d/colors.toml\nprintf %s \"$k\" | grep -qE \"^[a-z0-9_]+\\$\" || exit 1\nprintf %s \"$v\" | grep -qE \"^#[0-9a-fA-F]{6}\\$\" || exit 1\ngrep -qE \"^$k *= *\\\"#\" \"$f\" || exit 1\n[ -f \"$d/colors.orig.toml\" ] || cp \"$f\" \"$d/colors.orig.toml\"\nsed -i -E \"s/^($k *= *\\\")#[0-9a-fA-F]{6}/\\1$v/\" \"$f\"\nsetsid -f bash -c 't=$1; d=$2\nst=~/.config/omalauncher/style/style.toml\ncur=~/.local/state/omarchy/current/theme.name\ntw=~/.config/omarchy/themes/$t-reload\n[ -d \"$tw\" ] && { rm -f \"$tw\"/*; rmdir \"$tw\"; }\nmkdir \"$tw\" || exit 1\ncp \"$d/colors.toml\" \"$tw/colors.toml\" || exit 1\nfor x in \"$d\"/*; do case \"$x\" in */colors.toml|*/colors.orig.toml) ;; *) ln -s \"$x\" \"$tw/\" ;; esac; done\nhad=1; grep -q \"^theme *=\" \"$st\" || had=0\nif [ $had = 1 ]; then sed -i \"s/^theme *=.*/theme = \\\"$t-reload\\\"/\" \"$st\"; else sed -i \"1i theme = \\\"$t-reload\\\"\" \"$st\"; fi\nfor i in $(seq 40); do [ \"$(cat \"$cur\")\" = \"$t-reload\" ] && break; sleep 0.25; done\nsleep 0.5\nif [ $had = 1 ]; then sed -i \"s/^theme *=.*/theme = \\\"$t\\\"/\" \"$st\"; else sed -i \"/^theme *=/d\" \"$st\"; fi\nfor i in $(seq 40); do [ \"$(cat \"$cur\")\" = \"$t\" ] && break; sleep 0.25; done\nsleep 1; rm -f \"$tw\"/*; rmdir \"$tw\"' _ \"$t\" \"$d\" </dev/null >/dev/null 2>&1") }
+  state hslReq = null
+  // The last hue and saturation set: grays have no hue, and black and white have no saturation.
+  state hueKeep = 0 persist
+  state satKeep = 0.8 persist
+  state hexReq = null
+  state slots = [null, null, null, null, null, null, null, null, null, null, null, null] persist
+
+  // HSL → RGB: f(n) = l − a·max(−1, min(k − 3, 9 − k, 1)), k = (n + h/30) mod 12.
+  // The sliders do the same in their handlers: while dragging they send values faster than a trigger may run.
+  on hslReq {
+    let h = value.h % 360
+    let l = clamp(value.l, 0, 100) / 100
+    if value.s > 0 {
+      hueKeep = h
+      satKeep = clamp(value.s, 0, 100) / 100
+    }
+    let a = clamp(value.s, 0, 100) / 100 * min(l, 1 - l)
+    cr = round(255 * (l - a * max(-1, min((h / 30) % 12 - 3, 9 - (h / 30) % 12, 1))))
+    cg = round(255 * (l - a * max(-1, min((8 + h / 30) % 12 - 3, 9 - (8 + h / 30) % 12, 1))))
+    cb = round(255 * (l - a * max(-1, min((4 + h / 30) % 12 - 3, 9 - (4 + h / 30) % 12, 1))))
+  }
+  // HEX (#rgb or #rrggbb) → RGB.
+  on hexReq {
+    let t = lower(replace(trim(value.s), "#", ""))
+    let x = len(t) == 3 ? sub(t, 0, 1) + sub(t, 0, 1) + sub(t, 1, 2) + sub(t, 1, 2) + sub(t, 2, 3) + sub(t, 2, 3) : t
+    if match(x, '^[0-9a-f]{6}$') != null {
+      cr = indexOf(D, sub(x, 0, 1)) * 16 + indexOf(D, sub(x, 1, 2))
+      cg = indexOf(D, sub(x, 2, 3)) * 16 + indexOf(D, sub(x, 3, 4))
+      cb = indexOf(D, sub(x, 4, 5)) * 16 + indexOf(D, sub(x, 5, 6))
+    }
+  }
+
+  // UI language: English by default; the Russian, Ukrainian and Belarusian texts are AI translations.
+  let langs = [
+    {id: "en", name: "English", note: ""},
+    {id: "ru", name: "Русский", note: "перевод выполнен ИИ"},
+    {id: "uk", name: "Українська", note: "переклад виконано ШІ"},
+    {id: "be", name: "Беларуская", note: "пераклад зроблены ШІ"}
+  ]
+  let T = {
+    en: {
+      title: "colors",
+      reset: "reset",
+      hintTile: "tap a theme color to open the palette list",
+      pickHint: " ← pick in the list",
+      cancel: "cancel",
+      scrTitle: "theme palette",
+      newColor: ": new color",
+      now: "now ",
+      isDefault: "  (default)",
+      tabTheme: "theme palette",
+      tabCustom: "custom color",
+      tapFirst: "tap a theme color on the tile first",
+      pickTheme: "pick a color from the theme palette",
+      defaultFor: "default for ",
+      applyTo: "apply to ",
+      picker: "color picker",
+      collapse: "collapse ▲",
+      expand: "expand ▼",
+      gTonal: "tonal",
+      gFunc: "functional",
+      gGrid: "tonality grid",
+      gHarm: "harmonic",
+      hue: "hue",
+      tonalRows: "rows top to bottom: saturation 100, 70, 45, 20%",
+      sat: "saturation",
+      light: "lightness",
+      codes: "codes · type and press enter",
+      or: "or",
+      saved: "saved colors",
+      slotsHint: "empty slot — save the current color, filled — pick it, hold — clear",
+      success: "success",
+      warning: "warning",
+      error: "error",
+      info: "info",
+      accent: "accent",
+      neutral: "neutral",
+      compl: "complementary",
+      analog: "analogous",
+      triad: "triad",
+      split: "split-complementary",
+      tetrad: "tetrad",
+      mono: "monochrome",
+      settings: "settings",
+      language: "language"
+    },
+    ru: {
+      title: "цвета",
+      reset: "сброс",
+      hintTile: "тапни цвет темы — откроется список палитры",
+      pickHint: " ← выбор в списке",
+      cancel: "отмена",
+      scrTitle: "палитра темы",
+      newColor: ": новый цвет",
+      now: "сейчас ",
+      isDefault: "  (по умолчанию)",
+      tabTheme: "палитра темы",
+      tabCustom: "свой цвет",
+      tapFirst: "сначала тапни цвет темы на плитке",
+      pickTheme: "выбери цвет из палитры темы",
+      defaultFor: "по умолчанию для ",
+      applyTo: "применить к ",
+      picker: "выбор цвета",
+      collapse: "свернуть ▲",
+      expand: "развернуть ▼",
+      gTonal: "тональная",
+      gFunc: "функциональная",
+      gGrid: "сетка тональности",
+      gHarm: "гармоническая",
+      hue: "тон",
+      tonalRows: "сверху вниз насыщенность 100, 70, 45, 20%",
+      sat: "насыщенность",
+      light: "светлота",
+      codes: "коды · введи и нажми ввод",
+      or: "или",
+      saved: "сохранённые цвета",
+      slotsHint: "пустой слот — сохранить текущий цвет, заполненный — выбрать, удержание — очистить",
+      success: "успех",
+      warning: "внимание",
+      error: "ошибка",
+      info: "инфо",
+      accent: "акцент",
+      neutral: "нейтральный",
+      compl: "комплементарная",
+      analog: "аналоговая",
+      triad: "триада",
+      split: "раздельно-комплементарная",
+      tetrad: "тетрада",
+      mono: "монохромная",
+      settings: "настройки",
+      language: "язык"
+    },
+    uk: {
+      title: "кольори",
+      reset: "скинути",
+      hintTile: "торкнися кольору теми — відкриється список палітри",
+      pickHint: " ← вибір у списку",
+      cancel: "скасувати",
+      scrTitle: "палітра теми",
+      newColor: ": новий колір",
+      now: "зараз ",
+      isDefault: "  (за замовчуванням)",
+      tabTheme: "палітра теми",
+      tabCustom: "свій колір",
+      tapFirst: "спершу торкнися кольору теми на плитці",
+      pickTheme: "обери колір із палітри теми",
+      defaultFor: "за замовчуванням для ",
+      applyTo: "застосувати до ",
+      picker: "вибір кольору",
+      collapse: "згорнути ▲",
+      expand: "розгорнути ▼",
+      gTonal: "тональна",
+      gFunc: "функціональна",
+      gGrid: "сітка тональності",
+      gHarm: "гармонійна",
+      hue: "тон",
+      tonalRows: "згори вниз насиченість 100, 70, 45, 20%",
+      sat: "насиченість",
+      light: "світлість",
+      codes: "коди · введи й натисни Enter",
+      or: "або",
+      saved: "збережені кольори",
+      slotsHint: "порожній слот — зберегти поточний колір, заповнений — вибрати, утримання — очистити",
+      success: "успіх",
+      warning: "увага",
+      error: "помилка",
+      info: "інфо",
+      accent: "акцент",
+      neutral: "нейтральний",
+      compl: "комплементарна",
+      analog: "аналогова",
+      triad: "тріада",
+      split: "розщеплено-комплементарна",
+      tetrad: "тетрада",
+      mono: "монохромна",
+      settings: "налаштування",
+      language: "мова"
+    },
+    be: {
+      title: "колеры",
+      reset: "скінуць",
+      hintTile: "націсні колер тэмы — адкрыецца спіс палітры",
+      pickHint: " ← выбар у спісе",
+      cancel: "скасаваць",
+      scrTitle: "палітра тэмы",
+      newColor: ": новы колер",
+      now: "зараз ",
+      isDefault: "  (па змаўчанні)",
+      tabTheme: "палітра тэмы",
+      tabCustom: "свой колер",
+      tapFirst: "спачатку націсні колер тэмы на плітцы",
+      pickTheme: "абяры колер з палітры тэмы",
+      defaultFor: "па змаўчанні для ",
+      applyTo: "ужыць да ",
+      picker: "выбар колеру",
+      collapse: "згарнуць ▲",
+      expand: "разгарнуць ▼",
+      gTonal: "танальная",
+      gFunc: "функцыянальная",
+      gGrid: "сетка танальнасці",
+      gHarm: "гарманічная",
+      hue: "тон",
+      tonalRows: "зверху ўніз насычанасць 100, 70, 45, 20%",
+      sat: "насычанасць",
+      light: "светласць",
+      codes: "коды · увядзі і націсні Enter",
+      or: "або",
+      saved: "захаваныя колеры",
+      slotsHint: "пусты слот — захаваць бягучы колер, запоўнены — выбраць, утрыманне — ачысціць",
+      success: "поспех",
+      warning: "увага",
+      error: "памылка",
+      info: "інфа",
+      accent: "акцэнт",
+      neutral: "нейтральны",
+      compl: "камплементарная",
+      analog: "аналагавая",
+      triad: "трыяда",
+      split: "падзелена-камплементарная",
+      tetrad: "тэтрада",
+      mono: "монахромная",
+      settings: "налады",
+      language: "мова"
+    }
+  }
+  let L = get(T, lang) ?? T.en
+
+  let rows = lines(theme ?? "").map(l => words(l))
+  let name = (rows.find(r => r[0] == "theme") ?? [])[1]
+  let hasOrig = rows.any(r => r[0] == "orig")
+  let colors = rows.filter(r => r[0] == "c").map(r => {key: r[1], hex: lower(r[2])})
+  // The palette: the theme's original colors, each shade once, plus any that came into the theme otherwise.
+  let palette = values(groupBy(flatten([rows.filter(r => r[0] == "p").map(r => {key: r[1], hex: lower(r[2])}), colors]), c => c.hex)).map(g => g[0])
+  let pickedHex = (colors.find(c => c.key == picked) ?? {}).hex
+  // The theme's original colors by key: each variable's default.
+  let defaults = rows.filter(r => r[0] == "p").map(r => {key: r[1], hex: lower(r[2])})
+  let defaultHex = (defaults.find(o => o.key == picked) ?? {}).hex
+
+  // The custom color in three formats.
+  let D = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"]
+  let customHex = "#" + D[floor(cr / 16)] + D[cr % 16] + D[floor(cg / 16)] + D[cg % 16] + D[floor(cb / 16)] + D[cb % 16]
+  let mx = max(cr, cg, cb) / 255
+  let mn = min(cr, cg, cb) / 255
+  let cl = (mx + mn) / 2
+  let cd = mx - mn
+  let cs = cd == 0 ? 0 : cd / (1 - abs(2 * cl - 1))
+  let ch = cd == 0 ? 0 : (mx == cr / 255 ? 60 * (((cg - cb) / 255 / cd) % 6) : mx == cg / 255 ? 60 * ((cb - cr) / 255 / cd + 2) : 60 * ((cr - cg) / 255 / cd + 4)) % 360
+  let hueShown = cs == 0 ? hueKeep : ch
+  let satShown = cl <= 0 || cl >= 1 ? satKeep : cs
+  // Tonal: tones of the current color, 12 lightness steps at 4 saturation levels.
+  let tonalCells = range(48).map(i => {h: round(hueShown), s: [100, 70, 45, 20][floor(i / 12)], l: [95, 88, 80, 70, 60, 50, 42, 35, 27, 20, 13, 7][i % 12]})
+  // Functional: UI state colors, plus an accent and a neutral from the current hue.
+  let funcRows = [
+    {id: "success", h: 140, s: 55},
+    {id: "warning", h: 40, s: 90},
+    {id: "error", h: 355, s: 70},
+    {id: "info", h: 210, s: 70},
+    {id: "accent", h: round(hueShown), s: max(30, round(satShown * 100))},
+    {id: "neutral", h: round(hueShown), s: 8}
+  ].map(r => merge(r, {cells: [92, 80, 68, 56, 45, 35, 25, 15].map(l => {h: r.h, s: r.s, l: l})}))
+  // Harmonic: schemes from the current color; d shifts the hue, or the lightness for monochrome.
+  let baseS = round(satShown * 100)
+  let baseL = round(cl * 100)
+  let harmRows = [
+    {id: "compl", cells: [0, 180].map(d => {h: round(hueShown + d) % 360, s: baseS, l: baseL, base: d == 0})},
+    {id: "analog", cells: [-30, 0, 30].map(d => {h: round(hueShown + d) % 360, s: baseS, l: baseL, base: d == 0})},
+    {id: "triad", cells: [0, 120, 240].map(d => {h: round(hueShown + d) % 360, s: baseS, l: baseL, base: d == 0})},
+    {id: "split", cells: [0, 150, 210].map(d => {h: round(hueShown + d) % 360, s: baseS, l: baseL, base: d == 0})},
+    {id: "tetrad", cells: [0, 90, 180, 270].map(d => {h: round(hueShown + d) % 360, s: baseS, l: baseL, base: d == 0})},
+    {id: "mono", cells: [-30, -15, 0, 15, 30].map(d => {h: round(hueShown), s: baseS, l: clamp(baseL + d, 5, 95), base: d == 0})}
+  ]
+  let rgbText = "rgb(${cr}, ${cg}, ${cb})"
+  let hslText = "hsl(${round(ch)}, ${round(cs * 100)}%, ${round(cl * 100)}%)"
+  // Tonality grid: 12 hues 30° apart at 7 lightness levels, and a row of grays.
+  let hueCells = range(84).map(i => {h: (i % 12) * 30, l: [85, 74, 63, 52, 41, 30, 20][floor(i / 12)]})
+  let grayCells = range(12).map(i => round(i * 100 / 11))
+
+
+  component Swatch(hex, label, on = false, mark = false) {
+    Column {
+      gap: 2
+      Box {
+        height: 30
+        align: center
+        fill: width
+        radius: 4 * corners
+        background: hex
+        border: on ? 3 : 1
+        borderColor: on ? foreground : alpha(foreground, 0.25)
+        if mark {
+          Text { text: "●"; color: foreground; align: center; style: small }
+        }
+      }
+      Text { text: replace(replace(replace(label, "background", "bg"), "foreground", "fg"), "bright_", "br_"); fontSize: 9; color: on ? foreground : muted; align: center; maxLines: 1 }
+    }
+  }
+
+  Column {
+    gap: 8
+    Row {
+      align: center
+      Text { text: "${L.title} · ${name}"; style: label; weight: 1; maxLines: 1 }
+      if hasOrig && picked == null {
+        // Reset: a copy this widget made (the marker, nothing of the user's added) is removed with rm -f and rmdir, so the
+        // stock theme and its later updates show again; otherwise colors.orig.toml moves back over colors.toml. Then it
+        // re-applies the theme as described at applyReq.
+        Text {
+          text: L.reset; style: small; color: muted
+          onTap: run("t=$(sed -n \"s/^theme *= *\\\"\\(.*\\)\\\"/\\1/p\" ~/.config/omalauncher/style/style.toml)\n[ -n \"$t\" ] || t=$(cat ~/.local/state/omarchy/current/theme.name)\nt=$(printf %s \"$t\" | sed \"s/-reload\\$//\")\nd=~/.config/omarchy/themes/$t\n[ -f \"$d/colors.orig.toml\" ] || exit 1\nown=0\nfor x in \"$d\"/* \"$d\"/.[!.]*; do\n[ -e \"$x\" ] || [ -L \"$x\" ] || continue\ncase \"$x\" in */colors.toml|*/colors.orig.toml|*/.theme-colors-copy) ;; *) [ -L \"$x\" ] || own=1 ;; esac\ndone\nif [ -f \"$d/.theme-colors-copy\" ] && [ $own = 0 ]; then\nfor x in \"$d\"/*; do [ -L \"$x\" ] && rm -f \"$x\"; done\nrm -f \"$d/colors.toml\" \"$d/colors.orig.toml\" \"$d/.theme-colors-copy\"\nrmdir \"$d\" || exit 1\nd=~/.local/share/omarchy/themes/$t\nelse\nmv -f \"$d/colors.orig.toml\" \"$d/colors.toml\"\nfi\nsetsid -f bash -c 't=$1; d=$2\nst=~/.config/omalauncher/style/style.toml\ncur=~/.local/state/omarchy/current/theme.name\ntw=~/.config/omarchy/themes/$t-reload\n[ -d \"$tw\" ] && { rm -f \"$tw\"/*; rmdir \"$tw\"; }\nmkdir \"$tw\" || exit 1\ncp \"$d/colors.toml\" \"$tw/colors.toml\" || exit 1\nfor x in \"$d\"/*; do case \"$x\" in */colors.toml|*/colors.orig.toml) ;; *) ln -s \"$x\" \"$tw/\" ;; esac; done\nhad=1; grep -q \"^theme *=\" \"$st\" || had=0\nif [ $had = 1 ]; then sed -i \"s/^theme *=.*/theme = \\\"$t-reload\\\"/\" \"$st\"; else sed -i \"1i theme = \\\"$t-reload\\\"\" \"$st\"; fi\nfor i in $(seq 40); do [ \"$(cat \"$cur\")\" = \"$t-reload\" ] && break; sleep 0.25; done\nsleep 0.5\nif [ $had = 1 ]; then sed -i \"s/^theme *=.*/theme = \\\"$t\\\"/\" \"$st\"; else sed -i \"/^theme *=/d\" \"$st\"; fi\nfor i in $(seq 40); do [ \"$(cat \"$cur\")\" = \"$t\" ] && break; sleep 0.25; done\nsleep 1; rm -f \"$tw\"/*; rmdir \"$tw\"' _ \"$t\" \"$d\" </dev/null >/dev/null 2>&1")
+        }
+      }
+      // Refresh: re-reads the theme's colors now.
+      Box {
+        width: 28
+        align: center
+        onTap: { haptic(); refresh() }
+        Text { text: "⟳"; fontSize: 20; color: muted }
+      }
+      // Settings: the UI language.
+      Box {
+        width: 28
+        align: center
+        onTap: settingsOpen = !settingsOpen
+        Text { text: "⚙"; color: settingsOpen ? accent : muted }
+        Popup {
+          visible: settingsOpen
+          align: end
+          onDismiss: settingsOpen = false
+          Column {
+            gap: 4
+            padding: 10
+            width: 230
+            Text { text: "${L.settings} · ${L.language}"; style: label }
+            for g in langs key g.id {
+              Row {
+                gap: 8; align: center
+                padding: [6, 6]
+                radius: 4 * corners
+                background: lang == g.id ? alpha(accent, 0.2) : alpha(foreground, 0.03)
+                onTap: { lang = g.id; settingsOpen = false }
+                Column {
+                  gap: 0; weight: 1
+                  Text { text: g.name; bold: lang == g.id }
+                  if g.note != "" {
+                    Text { text: g.note; fontSize: 10; color: muted }
+                  }
+                }
+                Text { text: lang == g.id ? "✓" : " "; color: accent; width: 14 }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    Row {
+      gap: 6; align: center
+      if picked == null {
+        Text { text: L.hintTile; style: small; color: muted; maxLines: 2; weight: 1 }
+      } else {
+        Box { width: 14; height: 14; radius: 3 * corners; background: pickedHex; border: 1; borderColor: alpha(foreground, 0.5) }
+        Text { spans: [{text: picked, bold: true}, L.pickHint]; style: small; weight: 1; maxLines: 1 }
+        Text { text: L.cancel; style: small; color: muted; onTap: picked = null }
+      }
+    }
+
+    Grid {
+      columns: max(4, floor((cols ?? 6) * 4 / 3))
+      gap: 6
+      lazy: true
+      weight: 1
+      for c in colors key c.key {
+        let changed = (defaults.find(o => o.key == c.key) ?? {}).hex != c.hex && hasOrig
+        Box {
+          onTap: { picked = c.key; screen() }
+          Swatch { hex: c.hex; label: changed ? "${c.key}*" : c.key; on: picked == c.key }
+        }
+      }
+    }
+  }
+
+  // The picker: tapping a color writes it to the chosen theme variable.
+  screen {
+    title: picked == null ? L.scrTitle : picked + L.newColor
+    Column {
+      gap: 8
+      padding: 12
+      Row {
+        visible: picked != null
+        gap: 10; align: center
+        Box { width: 28; height: 28; radius: 4 * corners; background: pickedHex; border: 1; borderColor: alpha(foreground, 0.5) }
+        Text { spans: [L.now, {text: picked ?? "…", bold: true}, " = ${pickedHex ?? "…"}", {text: pickedHex == defaultHex ? L.isDefault : "", color: muted}]; weight: 1; maxLines: 1 }
+      }
+      Row {
+        gap: 6
+        for t in [{id: "theme", label: L.tabTheme}, {id: "custom", label: L.tabCustom}] key t.id {
+          Box {
+            weight: 1
+            padding: [0, 8]
+            radius: 6 * corners
+            background: mode == t.id ? alpha(accent, 0.25) : alpha(foreground, 0.05)
+            border: 1
+            borderColor: mode == t.id ? accent : alpha(foreground, 0.15)
+            onTap: mode = t.id
+            Text { text: t.label; align: center; color: mode == t.id ? foreground : muted; bold: mode == t.id }
+          }
+        }
+      }
+      if mode == "theme" {
+        Text { text: picked == null ? L.tapFirst : L.pickTheme; style: small; color: muted }
+        Column {
+          scroll: true
+          weight: 1
+          gap: 6
+          for p in palette key p.hex {
+            Row {
+              gap: 12; align: center
+              padding: [10, 8]
+              radius: 6 * corners
+              background: p.hex == pickedHex ? alpha(foreground, 0.12) : alpha(foreground, 0.04)
+              onTap: {
+                let k = picked
+                let was = pickedHex
+                if k != null && p.hex != was {
+                  haptic()
+                  applyReq = {k: k, v: p.hex, n: random()}
+                }
+                picked = null
+                close()
+              }
+              Box { width: 44; height: 32; radius: 4 * corners; background: p.hex; border: 1; borderColor: alpha(foreground, 0.3) }
+              Column {
+                gap: 0; weight: 1
+                Text { text: p.key; maxLines: 1 }
+                if p.hex == defaultHex {
+                  Text { text: L.defaultFor + picked; style: small; color: accent; maxLines: 1 }
+                }
+              }
+              Text { text: p.hex; style: small; color: muted; font: mono }
+              Text { text: p.hex == pickedHex ? "✓" : " "; color: accent; bold: true; width: 16; align: center }
+            }
+          }
+        }
+      } else {
+        Column {
+          scroll: true
+          weight: 1
+          gap: 10
+          // The chosen color, and applying it.
+          Row {
+            gap: 12; align: center
+            Box { width: 64; height: 48; radius: 6 * corners; background: rgb(cr, cg, cb); border: 1; borderColor: alpha(foreground, 0.4) }
+            Column {
+              gap: 0; weight: 1
+              Text { text: customHex; font: mono; bold: true }
+              Text { text: "${rgbText}  ${hslText}"; style: small; color: muted; font: mono; maxLines: 2 }
+            }
+          }
+          if picked != null {
+            Button {
+              text: L.applyTo + picked
+              onTap: {
+                let k = picked
+                let v = customHex
+                if v != pickedHex {
+                  haptic()
+                  applyReq = {k: k, v: v, n: random()}
+                }
+                picked = null
+                close()
+              }
+            }
+          }
+
+          // The dropdown: palettes, sliders and codes.
+          Row {
+            align: center
+            padding: [10, 8]
+            radius: 6 * corners
+            background: alpha(foreground, 0.06)
+            onTap: pickerOpen = !pickerOpen
+            Text { text: L.picker; weight: 1; bold: true }
+            Text { text: pickerOpen ? L.collapse : L.expand; style: small; color: accent }
+          }
+          if pickerOpen {
+            Column {
+              gap: 10
+              padding: 10
+              radius: 6 * corners
+              background: alpha(foreground, 0.03)
+              border: 1
+              borderColor: alpha(foreground, 0.1)
+              Grid {
+                columns: 2
+                gap: 6
+                for t in [{id: "tonal", label: L.gTonal}, {id: "func", label: L.gFunc}, {id: "grid", label: L.gGrid}, {id: "harm", label: L.gHarm}] key t.id {
+                  Box {
+                    padding: [6, 6]
+                    fill: width
+                    radius: 12 * corners
+                    background: gridMode == t.id ? alpha(accent, 0.25) : alpha(foreground, 0.05)
+                    border: 1
+                    borderColor: gridMode == t.id ? accent : alpha(foreground, 0.15)
+                    onTap: gridMode = t.id
+                    Text { text: t.label; style: small; align: center; maxLines: 1; color: gridMode == t.id ? foreground : muted }
+                  }
+                }
+              }
+              if gridMode == "grid" {
+                Grid {
+                  columns: 12
+                  gap: 3
+                  for c in hueCells {
+                    Box {
+                      height: 22
+                      fill: width
+                      radius: 2 * corners
+                      background: hsl(c.h, 0.8, c.l / 100)
+                      onTap: hslReq = {h: c.h, s: 80, l: c.l, n: random()}
+                    }
+                  }
+                  for g in grayCells {
+                    Box {
+                      height: 22
+                      fill: width
+                      radius: 2 * corners
+                      background: hsl(0, 0, g / 100)
+                      border: 1
+                      borderColor: alpha(foreground, 0.1)
+                      onTap: hslReq = {h: 0, s: 0, l: g, n: random()}
+                    }
+                  }
+                }
+              } else if gridMode == "tonal" {
+                Text { text: "${L.hue} ${round(hueShown)}° · ${L.tonalRows}"; style: small; color: muted }
+                Grid {
+                  columns: 12
+                  gap: 3
+                  for c in tonalCells {
+                    Box {
+                      height: 26
+                      fill: width
+                      radius: 2 * corners
+                      background: hsl(c.h, c.s / 100, c.l / 100)
+                      border: 1
+                      borderColor: alpha(foreground, 0.08)
+                      onTap: hslReq = {h: c.h, s: c.s, l: c.l, n: random()}
+                    }
+                  }
+                }
+              } else if gridMode == "func" {
+                for r in funcRows key r.id {
+                  Row {
+                    gap: 8; align: center
+                    Text { text: get(L, r.id); style: small; color: muted; width: 92; maxLines: 1 }
+                    Row {
+                      gap: 3; weight: 1
+                      for c in r.cells {
+                        Box {
+                          height: 24
+                          weight: 1
+                          radius: 2 * corners
+                          background: hsl(c.h, c.s / 100, c.l / 100)
+                          onTap: hslReq = {h: c.h, s: c.s, l: c.l, n: random()}
+                        }
+                      }
+                    }
+                  }
+                }
+              } else {
+                for r in harmRows key r.id {
+                  Column {
+                    gap: 3
+                    Text { text: get(L, r.id); style: small; color: muted }
+                    Row {
+                      gap: 4
+                      for c in r.cells {
+                        Box {
+                          height: 34
+                          weight: 1
+                          radius: 3 * corners
+                          background: hsl(c.h, c.s / 100, c.l / 100)
+                          border: c.base ? 2 : 1
+                          borderColor: c.base ? foreground : alpha(foreground, 0.15)
+                          align: center
+                          onTap: hslReq = {h: c.h, s: c.s, l: c.l, n: random()}
+                          Text { text: r.id == "mono" ? "${c.l}%" : "${c.h}°"; fontSize: 9; color: c.l > 55 ? "#000000" : "#ffffff"; align: center }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+              Text { text: "${L.hue} ${round(hueShown)}°"; style: small; color: muted }
+              Slider {
+                value: hueShown; min: 0; max: 359; step: 1; color: hsl(hueShown, 0.8, 0.55)
+                live: true
+                onChange: {
+                  hueKeep = value
+                  let h = value
+                  let l = cl
+                  let a = satShown * min(l, 1 - l)
+                  cr = round(255 * (l - a * max(-1, min((h / 30) % 12 - 3, 9 - (h / 30) % 12, 1))))
+                  cg = round(255 * (l - a * max(-1, min((8 + h / 30) % 12 - 3, 9 - (8 + h / 30) % 12, 1))))
+                  cb = round(255 * (l - a * max(-1, min((4 + h / 30) % 12 - 3, 9 - (4 + h / 30) % 12, 1))))
+                }
+              }
+              Text { text: "${L.sat} ${round(satShown * 100)}%"; style: small; color: muted }
+              Slider {
+                value: satShown * 100; min: 0; max: 100; step: 1; color: rgb(cr, cg, cb)
+                live: true
+                onChange: {
+                  satKeep = value / 100
+                  let h = hueShown
+                  let l = cl
+                  let a = value / 100 * min(l, 1 - l)
+                  cr = round(255 * (l - a * max(-1, min((h / 30) % 12 - 3, 9 - (h / 30) % 12, 1))))
+                  cg = round(255 * (l - a * max(-1, min((8 + h / 30) % 12 - 3, 9 - (8 + h / 30) % 12, 1))))
+                  cb = round(255 * (l - a * max(-1, min((4 + h / 30) % 12 - 3, 9 - (4 + h / 30) % 12, 1))))
+                }
+              }
+              Text { text: "${L.light} ${round(cl * 100)}%"; style: small; color: muted }
+              Slider {
+                value: cl * 100; min: 0; max: 100; step: 1; color: rgb(cr, cg, cb)
+                live: true
+                onChange: {
+                  let h = hueShown
+                  let l = value / 100
+                  let a = satShown * min(l, 1 - l)
+                  cr = round(255 * (l - a * max(-1, min((h / 30) % 12 - 3, 9 - (h / 30) % 12, 1))))
+                  cg = round(255 * (l - a * max(-1, min((8 + h / 30) % 12 - 3, 9 - (8 + h / 30) % 12, 1))))
+                  cb = round(255 * (l - a * max(-1, min((4 + h / 30) % 12 - 3, 9 - (4 + h / 30) % 12, 1))))
+                }
+              }
+
+              Text { text: L.codes; style: label }
+              Row {
+                gap: 8; align: center
+                Text { text: "HEX"; width: 40; style: small; color: muted }
+                Input { text: customHex; placeholder: "#8aa4d6 ${L.or} #8ad"; weight: 1; onSubmit: hexReq = {s: value, n: random()} }
+              }
+              Row {
+                gap: 8; align: center
+                Text { text: "RGB"; width: 40; style: small; color: muted }
+                Input {
+                  text: rgbText; placeholder: "rgb(138, 164, 214)"; weight: 1
+                  onSubmit: {
+                    let m = match(value, '(\d+)\D+(\d+)\D+(\d+)')
+                    if m != null {
+                      cr = clamp(int(m[0]), 0, 255)
+                      cg = clamp(int(m[1]), 0, 255)
+                      cb = clamp(int(m[2]), 0, 255)
+                    }
+                  }
+                }
+              }
+              Row {
+                gap: 8; align: center
+                Text { text: "HSL"; width: 40; style: small; color: muted }
+                Input {
+                  text: hslText; placeholder: "hsl(220, 50%, 69%)"; weight: 1
+                  onSubmit: {
+                    let m = match(value, '([\d.]+)\D+([\d.]+)\D+([\d.]+)')
+                    if m != null { hslReq = {h: num(m[0]), s: num(m[1]), l: num(m[2]), n: random()} }
+                  }
+                }
+              }
+            }
+          }
+
+          // 12 slots: tapping an empty one saves the current color, a filled one picks it, holding clears it.
+          Text { text: L.saved; style: label }
+          Grid {
+            columns: 6
+            gap: 6
+            for v, i in slots {
+              Box {
+                height: 40
+                fill: width
+                radius: 4 * corners
+                background: v ?? alpha(foreground, 0.04)
+                border: v == customHex ? 3 : 1
+                borderColor: v == customHex ? foreground : alpha(foreground, 0.25)
+                align: center
+                onTap: {
+                  if v == null {
+                    slots = set(slots, i, customHex)
+                    haptic()
+                  } else {
+                    hexReq = {s: v, n: random()}
+                  }
+                }
+                onLongPress: { slots = set(slots, i, null); haptic() }
+                if v == null {
+                  Text { text: "+"; color: muted; align: center }
+                }
+              }
+            }
+          }
+          Text { text: L.slotsHint; style: small; color: muted }
+        }
+      }
+      Button { text: L.cancel; onTap: { picked = null; close() } }
+    }
+  }
+}

@@ -1,0 +1,297 @@
+widget "daysUntil" {
+  page: 2
+  order: 3
+  size: 3x4
+  minSize: 3x3
+
+  requires { pacman: ["coreutils"] }
+
+  meta {
+    owl: 11
+    description: "Counts the days to the dates you care about: nearest first, past and far ones hidden, each with a colored bar that drains as the day comes. Tap to add or edit dates."
+    version: "1.0"
+    license: "MIT"
+    category: "time"
+  }
+
+  // Dates are a JSON file; coreutils is all the writing needs.
+  source now = clock every 1m
+
+  // The dates live in a file, so editing this widget never loses them.
+  source saved = file("~/.local/share/omalauncher/daysUntil.json") json
+  // Built-in dates for a fresh install, until the file exists (delete it to get them back).
+  let defaults = [{ id: "halloween", date: "2026-10-31", label: "🎃 Halloween", yearly: true }, { id: "christmas", date: "2026-12-25", label: "🎄 Christmas", yearly: true }, { id: "newyear", date: "2027-01-01", label: "🎆 New Year", yearly: true }]
+  let fileEvents = (saved == null || saved == "") ? defaults : saved
+
+  // Optimistic copy: a change shows at once, before the file write lands.
+  state local = null
+  let events = local ?? fileEvents
+
+  // [{ id, date: "YYYY-MM-DD", label, yearly }]
+  state draftDate = ""
+  state draftLabel = ""
+  state draftYearly = false
+  state editId = ""
+  state draftError = ""
+  state cal = ""                    // month the picker shows, "" = this month
+  state tab = "list"                // the screen's view: "list" or "add"/"edit"
+
+  // Drop the optimistic copy once the file has caught up with it.
+  when local != null && toJson(fileEvents) == toJson(local) { local = null }
+
+  let todayStr = fmtTime(now, "yyyy-MM-dd")
+  let y = int(fmtTime(now, "yyyy"))
+  let today = parseTime(todayStr)
+  // Keep the tile to this year and one month more (through the end of January).
+  let horizon = parseTime("${y + 1}-01-31")
+  let palette = [accent, blue, green, yellow, orange, magenta, cyan]
+
+  // The next occurrence of every date, as a "YYYY-MM-DD" string.
+  let nexts = map(events, e => merge(e, { when: e.yearly ? (sub(e.date, 5, 10) >= sub(todayStr, 5, 10) ? "${y}-${sub(e.date, 5, 10)}" : "${y + 1}-${sub(e.date, 5, 10)}") : e.date }))
+  // Local midnight, in seconds; a Feb 29 in a common year counts as Mar 1.
+  let all = map(nexts, e => merge(e, { target: parseTime(e.when) ?? (sub(e.when, 5, 10) == "02-29" ? parseTime("${sub(e.when, 0, 4)}-03-01") : null) }))
+  let shown = all.filter(e => e.target != null && e.target >= today && e.target <= horizon).sortBy(e => e.target)
+
+  // The date picker's month.
+  let ym = cal == "" ? fmtTime(now, "yyyy-MM") : cal
+  let cy = int(sub(ym, 0, 4))
+  let cm = int(sub(ym, 5, 7))
+  let prevYm = cm == 1 ? "${cy - 1}-12" : "${cy}-${pad(cm - 1, 2, "0")}"
+  let nextYm = cm == 12 ? "${cy + 1}-01" : "${cy}-${pad(cm + 1, 2, "0")}"
+  let first = parseTime("${ym}-01")
+  let lead = indexOf(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"], fmtTime(first, "EEE", null, "en"))
+  let dim = round((parseTime("${nextYm}-01") - first) / 86400)
+  let sel = parseTime(draftDate)
+  let selWhen = draftYearly ? (sub(draftDate, 5, 10) >= sub(todayStr, 5, 10) ? "${y}-${sub(draftDate, 5, 10)}" : "${y + 1}-${sub(draftDate, 5, 10)}") : draftDate
+  let selNext = parseTime(selWhen) ?? (sub(selWhen, 5, 10) == "02-29" ? parseTime("${sub(selWhen, 0, 4)}-03-01") : null)
+  let selDays = selNext == null ? null : round((selNext - today) / 86400)
+  let selShow = sel == null ? null : (draftYearly ? (selNext ?? sel) : sel)
+  let selInfo = selDays == null ? "" : selDays < 0 ? " · past" : " · ${selDays}d"
+  let selText = draftDate == "" ? "" : sel == null ? "invalid date" : "${fmtTime(selShow, "EEE d MMM yyyy", null, "en")}${selInfo}"
+
+  onTap: { cal = ""; tab = "list"; screen() }
+
+  Column {
+    gap: 8
+    fill: true
+    Row {
+      Text { text: "days until"; style: label; weight: 1 }
+      Text { text: "+"; style: title; color: accent; onTap: { cal = ""; editId = ""; draftDate = ""; draftLabel = ""; draftYearly = false; draftError = ""; tab = "add"; screen() } }
+    }
+    if len(shown) == 0 {
+      Column {
+        gap: 2
+        weight: 1
+        align: center
+        justify: center
+        Text { text: len(events) == 0 ? "no dates yet" : "nothing soon"; style: small; align: center }
+        Text { text: len(events) == 0 ? "tap to add one" : "tap to see all"; style: muted; align: center }
+      }
+    } else {
+      Column {
+        gap: 8
+        weight: 1
+        scroll: true
+        for e in shown key e.id {
+          let days = round((e.target - today) / 86400)
+          let span = max(round((horizon - today) / 86400), 1)
+          let col = palette[floor(hash(e.id) * len(palette))]
+          Column {
+            gap: 3
+            Row {
+              gap: 6
+              align: center
+              Text { text: "${days}d"; bold: true; color: col; width: 46; maxLines: 1 }
+              Text { text: e.label; style: small; weight: 1; maxLines: 1 }
+            }
+            // A grey track, with the color draining away as the date comes nearer.
+            Canvas {
+              height: 4
+              fill: width
+              rect(0, 0, width, 4, fill: alpha(muted, 0.28), radius: 4 * corners)
+              rect(0, 0, max(width * clamp(days / span, 0.03, 1), 5), 4, fill: col, radius: 4 * corners)
+            }
+          }
+        }
+      }
+    }
+  }
+
+  screen {
+    title: "days until"
+    Column {
+      gap: 12
+      padding: [12, 8]
+      fill: true
+
+      // Tabs and save status.
+      Row {
+        gap: 16
+        Text { text: "dates"; style: title; color: tab == "list" ? accent : muted; onTap: tab = "list" }
+        Text { text: editId == "" ? "add" : "edit"; style: title; color: tab == "add" ? accent : muted; onTap: { if tab != "add" { editId = ""; draftDate = ""; draftLabel = ""; draftYearly = false; draftError = ""; tab = "add" } } }
+        Spacer { weight: 1 }
+        Text { text: local != null ? "saving…" : (tab == "add" ? selText : ""); style: small; color: local != null ? accent : (tab == "add" && sel == null && draftDate != "" ? red : muted) }
+      }
+
+      // One scrolling view for both tabs, so long lists scroll under the tabs.
+      Column {
+        gap: 12
+        weight: 1
+        scroll: true
+
+        if tab == "add" {
+          Column {
+            gap: 12
+
+            // Calendar: tap a day to fill the date field.
+            Column {
+              gap: 4
+              padding: 10
+              background: alpha(surface, 0.6)
+              radius: 12 * corners
+              Row {
+                Text { text: "‹"; style: title; width: 44; align: center; onTap: cal = prevYm }
+                Text { text: fmtTime(first, "MMMM yyyy", null, "en"); weight: 1; align: center; bold: true }
+                Text { text: "›"; style: title; width: 44; align: center; onTap: cal = nextYm }
+              }
+              Grid {
+                columns: 7
+                gap: 2
+                for w in ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"] {
+                  Text { text: w; style: label; color: muted; align: center; height: 20 }
+                }
+                for i in range(lead + dim) {
+                  let day = i - lead + 1
+                  let ds = "${ym}-${pad(day, 2, "0")}"
+                  let istoday = ds == todayStr
+                  let issel = ds == draftDate
+                  Text {
+                    text: i < lead ? "" : "${day}"
+                    style: small
+                    align: center
+                    height: 34
+                    color: issel ? background : (istoday ? accent : foreground)
+                    background: issel ? accent : (istoday ? alpha(accent, 0.18) : alpha(foreground, 0))
+                    radius: 8 * corners
+                    onTap: { if i >= lead { draftDate = ds; draftError = "" } }
+                  }
+                }
+              }
+            }
+
+            // Date, label and the yearly flag.
+            Column {
+              gap: 8
+              Row {
+                gap: 8
+                Text { text: editId == "" ? "new date" : "edit date"; style: label; color: muted; weight: 1 }
+                if editId != "" {
+                  Text { text: "cancel"; style: small; color: accent; onTap: { editId = ""; draftDate = ""; draftLabel = ""; draftYearly = false; draftError = ""; tab = "list" } }
+                }
+              }
+              Row {
+                gap: 8
+                Input { text: draftDate; placeholder: "YYYY-MM-DD"; weight: 1; onChange: draftDate = value }
+                Text { text: "today"; style: small; color: accent; onTap: draftDate = todayStr }
+              }
+              Row {
+                gap: 8
+                Text { text: "+1w"; style: small; color: accent; onTap: draftDate = fmtTime(now + 7 * 86400, "yyyy-MM-dd") }
+                Text { text: "+1m"; style: small; color: accent; onTap: draftDate = fmtTime(now + 30 * 86400, "yyyy-MM-dd") }
+                Text { text: "+1y"; style: small; color: accent; onTap: draftDate = fmtTime(now + 365 * 86400, "yyyy-MM-dd") }
+              }
+              Input { text: draftLabel; placeholder: "label, emoji welcome 🎂"; onChange: draftLabel = value }
+              Row {
+                gap: 8
+                Text { text: draftYearly ? "☑" : "☐"; style: title; color: draftYearly ? accent : muted; onTap: draftYearly = !draftYearly }
+                Text { text: "every year"; weight: 1; onTap: draftYearly = !draftYearly }
+                Button {
+                  text: editId == "" ? "add" : "save"
+                  onTap: {
+                    if sel == null {
+                      draftError = draftDate == "" ? "pick a date" : "not a date: use YYYY-MM-DD"
+                    } else {
+                      let entry = { id: editId == "" ? "${now}-${random(100000)}" : editId, date: draftDate, label: trim(draftLabel) == "" ? fmtTime(sel, "d MMM", null, "en") : trim(draftLabel), yearly: draftYearly }
+                      let next = editId == "" ? events + [entry] : map(events, x => x.id == editId ? entry : x)
+                      local = next
+                      run("mkdir -p ~/.local/share/omalauncher && cp -f ~/.local/share/omalauncher/daysUntil.json ~/.local/share/omalauncher/daysUntil.json.bak 2>/dev/null; printf '%s' ${sh(toJson(next))} > ~/.local/share/omalauncher/daysUntil.json.tmp && mv ~/.local/share/omalauncher/daysUntil.json.tmp ~/.local/share/omalauncher/daysUntil.json")
+                      editId = ""
+                      draftDate = ""
+                      draftLabel = ""
+                      draftYearly = false
+                      draftError = ""
+                      haptic()
+                      tab = "list"
+                    }
+                  }
+                }
+              }
+              if draftError != "" {
+                Text { text: draftError; style: small; color: red }
+              }
+            }
+          }
+        } else {
+          // The saved dates, upcoming first, past ones after them.
+          Column {
+            gap: 10
+            if len(all) == 0 {
+              Box {
+                height: (screenHeight ?? 0) * 0.55
+                fill: width
+                align: center
+                Column {
+                  gap: 4
+                  align: center
+                  Text { text: "no dates yet"; style: title; align: center }
+                  Text { text: "tap add to start"; style: muted; align: center }
+                }
+              }
+            } else {
+              for e in all.sortBy(x => x.target != null && x.target >= today ? x.target : 999999999999 + (x.target ?? 0)) key e.id {
+                let past = e.target != null && e.target < today
+                let dtxt = e.yearly ? "${fmtTime(parseTime(e.date), "d MMM", null, "en")} · yearly" : e.date
+                Row {
+                  gap: 8
+                  align: center
+                  Text { text: past ? "past" : (e.target == null ? "?" : "${round((e.target - today) / 86400)}d"); style: label; color: past ? muted : accent; width: 48 }
+                  Column {
+                    gap: 0
+                    weight: 1
+                    onTap: { editId = e.id; draftDate = e.date; draftLabel = e.label; draftYearly = e.yearly; draftError = ""; cal = fmtTime(e.target, "yyyy-MM"); tab = "add" }
+                    Row {
+                      gap: 6
+                      Text { text: e.label; maxLines: 1; weight: 1; color: past ? muted : foreground }
+                      Text { text: "✎"; style: label; color: muted }
+                    }
+                    Text { text: dtxt; style: label; color: muted }
+                  }
+                  Text {
+                    text: e.yearly ? "☑" : "☐"
+                    style: title
+                    color: e.yearly ? accent : muted
+                    onTap: {
+                      let next = map(events, x => x.id == e.id ? merge(x, { yearly: !x.yearly }) : x)
+                      local = next
+                      run("mkdir -p ~/.local/share/omalauncher && cp -f ~/.local/share/omalauncher/daysUntil.json ~/.local/share/omalauncher/daysUntil.json.bak 2>/dev/null; printf '%s' ${sh(toJson(next))} > ~/.local/share/omalauncher/daysUntil.json.tmp && mv ~/.local/share/omalauncher/daysUntil.json.tmp ~/.local/share/omalauncher/daysUntil.json")
+                    }
+                  }
+                  Text {
+                    text: "✕"
+                    style: title
+                    color: muted
+                    onTap: {
+                      let next = events.filter(x => x.id != e.id)
+                      local = next
+                      run("mkdir -p ~/.local/share/omalauncher && cp -f ~/.local/share/omalauncher/daysUntil.json ~/.local/share/omalauncher/daysUntil.json.bak 2>/dev/null; printf '%s' ${sh(toJson(next))} > ~/.local/share/omalauncher/daysUntil.json.tmp && mv ~/.local/share/omalauncher/daysUntil.json.tmp ~/.local/share/omalauncher/daysUntil.json")
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

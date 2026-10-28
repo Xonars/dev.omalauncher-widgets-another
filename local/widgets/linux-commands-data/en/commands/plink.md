@@ -1,0 +1,125 @@
+# TAGLINE
+
+PuTTY command-line SSH connection tool
+
+# TLDR
+
+**Connect to SSH server**
+
+```plink [user]@[host]```
+
+**Execute remote command**
+
+```plink [user]@[host] [command]```
+
+**Use specific port**
+
+```plink -P [port] [user]@[host]```
+
+**Use private key**
+
+```plink -i [key.ppk] [user]@[host]```
+
+**SSH tunnel**
+
+```plink -L [local_port]:[remote_host]:[remote_port] [user]@[host]```
+
+# SYNOPSIS
+
+**plink** [_options_] [_user_@]_host_ [_command_]
+
+# PARAMETERS
+
+_HOST_
+> Remote host (optionally prefixed with _user_@).
+
+**-ssh**, **-telnet**, **-rlogin**, **-raw**, **-serial**
+> Force use of a specific protocol.
+
+**-P** _PORT_
+> Connect to the specified port.
+
+**-l** _USER_
+> Login username.
+
+**-pw** _PASSWORD_
+> Login with the given password (insecure; prefer -pwfile).
+
+**-pwfile** _FILE_
+> Read password from file.
+
+**-i** _KEY_
+> Private key file for authentication (.ppk format).
+
+**-load** _SESSION_
+> Load settings from a saved PuTTY session.
+
+**-L** [_bindaddr_:]_port_:_host_:_hostport_
+> Forward local port to remote destination.
+
+**-R** [_bindaddr_:]_port_:_host_:_hostport_
+> Forward remote port to local destination.
+
+**-D** [_bindaddr_:]_port_
+> Dynamic SOCKS-based local port forwarding.
+
+**-N**
+> Don't start a shell or command (SSH-2 only).
+
+**-T**, **-t**
+> Disable/enable pseudo-terminal allocation.
+
+**-A**, **-a**
+> Enable/disable agent forwarding.
+
+**-X**, **-x**
+> Enable/disable X11 forwarding.
+
+**-m** _FILE_
+> Read remote command(s) from file.
+
+**-batch**
+> Disable all interactive prompts.
+
+**-v**
+> Verbose output.
+
+**--help**
+> Display help.
+
+# DESCRIPTION
+
+**plink** is the command-line SSH connection tool from the PuTTY suite. It provides non-interactive SSH access for executing remote commands, port forwarding, and scripted SSH operations.
+
+Unlike the interactive PuTTY terminal, plink is designed for automation and batch operations. It supports SSH key authentication using PuTTY's .ppk key format. The **-batch** flag disables all interactive prompts, making it suitable for scripts and cron jobs.
+
+# CAVEATS
+
+Part of PuTTY. Uses PPK key format. Windows/Unix versions.
+
+# HISTORY
+
+Plink is part of **PuTTY** for command-line SSH operations.
+
+# INSTALL
+
+```apt: sudo apt install putty-tools```
+
+```dnf: sudo dnf install putty```
+
+```pacman: sudo pacman -S putty```
+
+```apk: sudo apk add putty```
+
+```zypper: sudo zypper install putty```
+
+```brew: brew install putty```
+
+```nix: nix profile install nixpkgs#putty```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[ssh](/man/ssh)(1), [putty](/man/putty)(1), [pscp](/man/pscp)(1)
+

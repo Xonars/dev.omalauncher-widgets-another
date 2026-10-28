@@ -1,0 +1,313 @@
+widget "terminal-profiles" {
+  size: 6x4
+  minSize: 2x2
+  padding: 0
+
+  meta {
+    owl: 6
+    description: "Live terminal with profiles: switch commands from the chevron, manage them from the menu"
+    version: "1.2"
+    license: "MIT"
+    category: "dev"
+  }
+
+  // Profiles: name + command run in the tile Terminal. Empty command = login shell.
+  state profiles = [
+    {id: "shell", name: "shell", command: ""},
+  ] persist
+  state defaultId = "shell" persist
+  state seq = 1 persist
+
+  // Not persisted: each start opens on the current default.
+  state activeId = defaultId
+  state dropOpen = false
+  state dotsOpen = false
+  state screenView = "list"
+  state editId = ""
+  state draftName = ""
+  state draftCmd = ""
+
+  let active = profiles.find(p => p.id == activeId) ?? profiles[0] ?? {id: "shell", name: "shell", command: ""}
+  let termCmd = trim(active.command ?? "") == "" ? "exec bash -l" : active.command
+  let editing = profiles.find(p => p.id == editId)
+  let barH = 28
+
+  Box {
+    fill: true
+
+    Column {
+      gap: 0
+      fill: true
+
+      Row {
+        gap: 4
+        align: center
+        height: barH
+        padding: [8, 0]
+        background: surface
+        fill: width
+
+        Text {
+          text: "${active.name ?? "shell"} ▼"
+          style: small
+          maxLines: 1
+          weight: 1
+          onTap: { dropOpen = !dropOpen; dotsOpen = false }
+        }
+
+        Text {
+          text: "⋯"
+          style: title
+          color: muted
+          width: 28
+          align: center
+          onTap: { dotsOpen = !dotsOpen; dropOpen = false }
+        }
+      }
+
+      // Changing command ends the old session and starts a new one.
+      Terminal { command: "exec bash -c ${sh(termCmd)}"; weight: 1; fill: true }
+    }
+
+    if dropOpen || dotsOpen {
+      Box {
+        fill: width
+        height: max(0, (tileHeight ?? 0) - barH)
+        offset: [0, barH]
+        onTap: { dropOpen = false; dotsOpen = false }
+      }
+    }
+
+    if dropOpen {
+      Box {
+        align: topStart
+        offset: [4, barH + 2]
+        width: 180
+        padding: 4
+        radius: 6
+        background: background
+        border: 1
+        borderColor: border
+        Column {
+          gap: 2
+          for p in profiles key p.id {
+            let on = p.id == activeId
+            Row {
+              gap: 6
+              align: center
+              padding: [8, 8]
+              radius: 4
+              background: on ? alpha(accent, 0.18) : rgb(0, 0, 0, 0)
+              onTap: {
+                activeId = p.id
+                dropOpen = false
+              }
+              Text { text: p.name; style: small; weight: 1; maxLines: 1; color: on ? accent : foreground }
+              if p.id == defaultId {
+                Text { text: "★"; style: small; color: muted; width: 14; align: center }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if dotsOpen {
+      Box {
+        align: topStart
+        offset: [max(4, (tileWidth ?? 360) - 148), barH + 2]
+        width: 140
+        padding: 4
+        radius: 6
+        background: background
+        border: 1
+        borderColor: border
+        Column {
+          gap: 2
+          Row {
+            padding: [10, 10]
+            radius: 4
+            onTap: {
+              dotsOpen = false
+              screenView = "list"
+              screen()
+            }
+            Text { text: "Profiles"; style: small; fill: width }
+          }
+          Row {
+            padding: [10, 10]
+            radius: 4
+            onTap: {
+              dotsOpen = false
+              draftName = ""
+              draftCmd = ""
+              screenView = "add"
+              screen()
+            }
+            Text { text: "Add Profile"; style: small; fill: width }
+          }
+        }
+      }
+    }
+  }
+
+  screen {
+    title: screenView == "edit" ? "edit profile" : screenView == "add" ? "add profile" : "profiles"
+
+    if screenView == "list" {
+      Column {
+        gap: 8
+        fill: true
+        Text { text: "tap a profile to edit"; style: muted }
+        Column {
+          gap: 4
+          weight: 1
+          scroll: true
+          for p in profiles key p.id {
+            let on = p.id == activeId
+            let isDef = p.id == defaultId
+            Row {
+              gap: 8
+              align: center
+              padding: [10, 10]
+              radius: 6
+              background: alpha(surface, 0.8)
+              onTap: {
+                editId = p.id
+                draftName = p.name
+                draftCmd = p.command ?? ""
+                screenView = "edit"
+              }
+              Column {
+                gap: 2
+                weight: 1
+                Text { text: p.name; maxLines: 1; color: on ? accent : foreground }
+                Text {
+                  text: trim(p.command ?? "") == "" ? "login shell" : p.command
+                  style: small
+                  color: muted
+                  maxLines: 1
+                }
+              }
+              if isDef {
+                Text { text: "default"; style: label; color: muted; width: 56 }
+              }
+            }
+          }
+        }
+        Button {
+          text: "Add Profile"
+          color: accent
+          onTap: {
+            draftName = ""
+            draftCmd = ""
+            screenView = "add"
+          }
+        }
+      }
+    } else if screenView == "edit" {
+      Column {
+        gap: 10
+        fill: true
+        scroll: true
+        Text { text: "name"; style: muted }
+        Input {
+          text: draftName
+          placeholder: "profile name"
+          onChange: draftName = value
+        }
+        Text { text: "command"; style: muted }
+        Input {
+          text: draftCmd
+          placeholder: "empty = login shell; e.g. btop; exec bash"
+          onChange: draftCmd = value
+        }
+        Text {
+          text: "runs when this profile is chosen from ▼"
+          style: small
+          color: muted
+        }
+        Button {
+          text: "save"
+          color: accent
+          onTap: {
+            profiles = profiles.map(p => p.id == editId
+              ? {id: p.id, name: trim(draftName) == "" ? p.name : trim(draftName), command: draftCmd}
+              : p)
+            screenView = "list"
+          }
+        }
+        Button {
+          text: "clone"
+          color: muted
+          onTap: {
+            profiles = profiles + [{
+              id: "p${seq}",
+              name: (trim(draftName) == "" ? (editing.name ?? "profile") : trim(draftName)) + " copy",
+              command: draftCmd
+            }]
+            seq = seq + 1
+            screenView = "list"
+          }
+        }
+        Button {
+          text: "make default"
+          color: muted
+          onTap: {
+            defaultId = editId
+            screenView = "list"
+          }
+        }
+        Button {
+          text: "delete"
+          color: red
+          onTap: {
+            activeId = len(profiles) > 1 && activeId == editId
+              ? profiles.find(p => p.id != editId).id
+              : activeId
+            defaultId = len(profiles) > 1 && defaultId == editId
+              ? profiles.find(p => p.id != editId).id
+              : defaultId
+            profiles = len(profiles) > 1 ? profiles.filter(p => p.id != editId) : profiles
+            screenView = "list"
+          }
+        }
+        Button { text: "back"; color: muted; onTap: screenView = "list" }
+      }
+    } else {
+      Column {
+        gap: 10
+        fill: true
+        scroll: true
+        Text { text: "name"; style: muted }
+        Input {
+          text: draftName
+          placeholder: "profile name"
+          onChange: draftName = value
+        }
+        Text { text: "command"; style: muted }
+        Input {
+          text: draftCmd
+          placeholder: "empty = login shell; e.g. btop; exec bash"
+          onChange: draftCmd = value
+        }
+        Button {
+          text: "add"
+          color: accent
+          onTap: {
+            profiles = profiles + [{
+              id: "p${seq}",
+              name: trim(draftName) == "" ? "profile ${seq}" : trim(draftName),
+              command: draftCmd
+            }]
+            activeId = "p${seq}"
+            seq = seq + 1
+            screenView = "list"
+            close()
+          }
+        }
+        Button { text: "cancel"; color: muted; onTap: { screenView = "list"; close() } }
+      }
+    }
+  }
+}

@@ -1,0 +1,113 @@
+widget "codex usage" {
+  meta { description: "Reads local Codex session events to show remaining 5-hour and weekly limits with reset times"; version: "1.0.1"; license: "MIT"; category: "dev" }
+  size: 3x2
+  minSize: 3x2
+
+  requires { pacman: ["jq", "findutils", "coreutils", "grep"] }
+
+  asset chatgptLogo = base64"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"
+
+  // Codex records the current account limits in its session event log.
+  source limits = cmd("""
+    record=$(find "$HOME/.codex/sessions" -type f -name '*.jsonl' -printf '%T@ %p\n' 2>/dev/null | sort -nr | cut -d' ' -f2- | while IFS= read -r f; do
+      line=$(grep '"rate_limits"' "$f" 2>/dev/null | tail -1)
+      if [ -n "$line" ]; then printf '%s\n' "$line"; break; fi
+    done)
+    data=$(printf '%s\n' "$record" | jq -c '.payload.rate_limits // empty' 2>/dev/null)
+    if [ -z "$data" ]; then printf '{"ok":false}'; exit 0; fi
+    five_used=$(printf '%s' "$data" | jq -r '.primary.used_percent // empty')
+    five_reset=$(printf '%s' "$data" | jq -r '.primary.resets_at // empty')
+    week_used=$(printf '%s' "$data" | jq -r '.secondary.used_percent // empty')
+    week_reset=$(printf '%s' "$data" | jq -r '.secondary.resets_at // empty')
+    if [ -z "$five_used" ] || [ -z "$five_reset" ] || [ -z "$week_used" ] || [ -z "$week_reset" ]; then
+      printf '{"ok":false}'; exit 0
+    fi
+    now=$(date +%s)
+    window_data() {
+      local used=$1 reset=$2 full_format=$3 short_format=$4 tiny_format=${5:-$4}
+      if [ "${reset%.*}" -le "$now" ]; then
+        printf '0\tfull\tfull\tfull\n'
+      else
+        printf '%s\t%s\t%s\t%s\n' "$used" \
+          "$(date -d "@$reset" "$full_format")" \
+          "$(date -d "@$reset" "$short_format")" \
+          "$(date -d "@$reset" "$tiny_format")"
+      fi
+    }
+    IFS=$'\t' read -r five_used five_at five_time _ <<< "$(window_data "$five_used" "$five_reset" '+%a, %b %-d · %H:%M' '+%H:%M')"
+    IFS=$'\t' read -r week_used week_at week_short week_day <<< "$(window_data "$week_used" "$week_reset" '+%a, %b %-d · %H:%M' '+%b %-d %H:%M' '+%a %H:%M')"
+    jq -nc --argjson five_used "$five_used" --argjson week_used "$week_used" \
+      --arg five_at "$five_at" --arg five_time "$five_time" --arg week_at "$week_at" --arg week_short "$week_short" --arg week_day "$week_day" \
+      '{ok:true, five_used:$five_used, five_at:$five_at, five_time:$five_time, week_used:$week_used, week_at:$week_at, week_short:$week_short, week_day:$week_day}'
+  """) every 1m json timeout 15s
+
+  let fiveUsed = limits.ok ? limits.five_used : null
+  let weekUsed = limits.ok ? limits.week_used : null
+  let compact = cols == null || cols < 3 || rows == null || rows < 3
+  let fiveReset = compact ? limits.five_time : limits.five_at
+  // A narrow tile (landscape) can't fit the date: the weekday is enough within a week.
+  let narrow = tileWidth != null && tileWidth < 170
+  let weekReset = !compact ? limits.week_at : narrow && limits.week_day != null ? limits.week_day : limits.week_short
+
+  component LimitDetails(used, reset, compact = false) {
+    Column {
+      gap: compact ? 1 : 2
+      Progress {
+        value: used == null ? 0 : 100 - used
+        color: accent
+        track: alpha(muted, 0.22)
+        height: compact ? 4 : 7
+        fill: width
+        animate value: spring()
+      }
+      Text {
+        text: reset == null ? "waiting for Codex data" : reset == "full" ? "full" : "resets ${reset}"
+        style: small
+        color: foreground
+        maxLines: 1
+      }
+    }
+  }
+
+  component Limit(label, used, reset, mark = false) {
+    Column {
+      gap: 2
+      Row {
+        gap: 4
+        align: center
+        if mark {
+          Image { src: chatgptLogo; width: 16; height: 16; tint: accent }
+        }
+        Text { text: label; fontSize: 18; font: mono; color: foreground; width: 100; bold: true }
+        Text { text: used == null ? "—" : "${round(100 - used)}%"; style: body; color: foreground; align: end; weight: 1 }
+      }
+      LimitDetails { used: used; reset: reset }
+    }
+  }
+
+  component CompactLimit(label, used, reset, mark = false) {
+    Column {
+      gap: 1
+      Row {
+        gap: 4
+        align: center
+        if mark {
+          Image { src: chatgptLogo; width: 14; height: 14; tint: accent }
+        }
+        Text { text: used == null ? "${label} —" : "${label} ${round(100 - used)}%"; fontSize: 15; font: mono; color: foreground; bold: true; weight: 1; maxLines: 1 }
+      }
+      LimitDetails { used: used; reset: reset; compact: true }
+    }
+  }
+
+  Column {
+    gap: compact ? 5 : 10
+    if compact {
+      CompactLimit { label: "5h"; used: fiveUsed; reset: limits.ok ? fiveReset : null; mark: true }
+      CompactLimit { label: "1week"; used: weekUsed; reset: limits.ok ? weekReset : null }
+    } else {
+      Limit { label: "5h"; used: fiveUsed; reset: limits.ok ? fiveReset : null; mark: true }
+      Limit { label: "1week"; used: weekUsed; reset: limits.ok ? weekReset : null }
+    }
+  }
+}

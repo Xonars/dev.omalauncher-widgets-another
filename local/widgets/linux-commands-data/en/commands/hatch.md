@@ -1,0 +1,111 @@
+# TAGLINE
+
+modern Python project manager
+
+# TLDR
+
+**Create new project**
+
+```hatch new [project-name]```
+
+**Build package**
+
+```hatch build```
+
+**Run tests**
+
+```hatch run test```
+
+**Enter environment**
+
+```hatch shell```
+
+**Publish to PyPI**
+
+```hatch publish```
+
+**Show or bump project version**
+
+```hatch version```
+
+# SYNOPSIS
+
+**hatch** [_options_] _command_ [_args_]
+
+# PARAMETERS
+
+**new** _name_
+> Create new project.
+
+**build**
+> Build distributions.
+
+**publish**
+> Publish to package index.
+
+**run** _cmd_
+> Run command in environment.
+
+**shell**
+> Enter project environment.
+
+**env** _subcommand_
+> Manage environments.
+
+**test**
+> Run tests across environments.
+
+**fmt**
+> Format code.
+
+**version**
+> Show/bump version.
+
+**clean**
+> Remove build artifacts.
+
+# DESCRIPTION
+
+**Hatch** is a modern, extensible Python project manager. It handles project creation, building, publishing, environment management, and testing in a unified tool. It is the official build backend recommended by the Python Packaging Authority (PyPA).
+
+Hatch uses pyproject.toml for configuration and supports current PEP standards. It provides reproducible environments and multi-environment testing via configurable matrices.
+
+# PYPROJECT.TOML
+
+```toml
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "myproject"
+version = "0.1.0"
+
+[tool.hatch.envs.default]
+dependencies = ["pytest"]
+
+[tool.hatch.envs.default.scripts]
+test = "pytest {args}"
+```
+
+# CAVEATS
+
+Relatively new; ecosystem still growing. Different workflow from pip/setuptools. Environment management differs from virtualenv. Some plugins may be needed.
+
+# HISTORY
+
+Hatch was created by **Ofek Lev** as a modern replacement for traditional Python packaging tools. It follows current PEP standards and aims to simplify the Python project lifecycle.
+
+# INSTALL
+
+```dnf: sudo dnf install hatch```
+
+```brew: brew install hatch```
+
+```nix: nix profile install nixpkgs#hatch```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[pip](/man/pip)(1), [poetry](/man/poetry)(1), [flit](/man/flit)(1), [pdm](/man/pdm)(1)

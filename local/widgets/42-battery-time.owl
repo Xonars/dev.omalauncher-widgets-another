@@ -1,0 +1,100 @@
+widget "Время аккумулятора" {
+  meta {
+    owl: 9
+    description: "Примерное время до разряда или полной зарядки по наблюдаемой скорости изменения заряда"
+    version: "1.1"
+    license: "MIT"
+    category: "system"
+  }
+  requires { pacman: [] }
+  size: 1x1
+  minSize: 1x1
+
+  source bat = android.battery
+  source now = clock every 1m
+  state samples = [] persist
+  state sampleMode = "" persist
+  let powered = bat.charging || (bat.plugged != null && bat.plugged != "none" && bat.plugged != "unplugged" && bat.plugged != 0)
+  let mode = bat.charging ? "charge" : powered ? "plugged" : "discharge"
+  let window = bat.charging ? 1h : 6h
+  let snapshot = {level: bat.level, mode: mode, tick: now}
+
+  // Keep one point per minute and battery level changes, within the same mode.
+  on snapshot first {
+    if bat.level != null && now != null {
+      let previous = last(samples)
+      if mode == "plugged" {
+        samples = []
+      } else if sampleMode != mode || previous == null || now < previous.t || now - previous.t > 24h || (bat.charging ? bat.level < previous.p : bat.level > previous.p) {
+        samples = [{t: now, p: bat.level}]
+      } else if now - previous.t >= 60 || bat.level != previous.p {
+        samples = take(reverse(flatten([filter(samples, s => s.t >= now - window), [{t: now, p: bat.level}]])), 400).reverse()
+      }
+      sampleMode = mode
+    }
+  }
+
+  let recent = filter(samples, s => s.t >= now - window)
+  let start = first(recent)
+  let finish = last(recent)
+  let elapsed = finish.t - start.t
+  let changed = bat.charging ? finish.p - start.p : start.p - finish.p
+  let full = powered && bat.level >= 100
+  let ready = sampleMode == mode && mode != "plugged" && !full && elapsed >= (bat.charging ? 2m : 10m) && changed >= 2
+  let rate = ready ? changed * 3600 / elapsed : null
+  let secondsLeft = ready ? (bat.charging ? 100 - bat.level : bat.level) / rate * 3600 : null
+  let minutesLeft = secondsLeft != null ? max(5, round(secondsLeft / 300) * 5) : null
+  let duration = minutesLeft < 60 ? "≈ ${minutesLeft} мин" : "≈ ${floor(minutesLeft / 60)} ч ${minutesLeft % 60} мин"
+  let tint = bat.level <= 15 ? red : bat.level <= 30 ? yellow : accent
+  onTap: screen()
+
+  Column {
+    gap: 8
+    Text { text: "АККУМУЛЯТОР · ${bat.level}%"; style: small; color: tint }
+    Text {
+      text: bat.level == null ? "…" : full ? "Заряжен" : ready ? duration : bat.charging ? "Заряжается" : powered ? "От сети" : "Собираю данные"
+      fontSize: ready ? 25 : 19
+      bold: true
+      maxLines: 2
+      color: powered ? accent : foreground
+    }
+    Text {
+      text: full ? "Аккумулятор заряжен на 100%" : bat.charging ? (ready ? "до полной зарядки" : "Для прогноза нужен рост на 2% и 2 мин") : powered ? "Зарядка приостановлена" : ready ? "осталось при таком расходе" : "Нужен разряд хотя бы на 2%"
+      style: small
+      color: muted
+      maxLines: 2
+    }
+    Progress { value: bat.level; max: 100; color: tint; height: 5 }
+    Text { text: ready ? "${bat.charging ? "+" : "−"}${round(rate, 1)}%/ч · подробнее ›" : "Примерная оценка · подробнее ›"; style: small; color: muted }
+  }
+
+  screen {
+    title: "Оставшееся время"
+    Column {
+      scroll: true
+      gap: 16
+      Text { text: "Заряд ${bat.level}%"; style: title; color: tint }
+      Text { text: full ? "Аккумулятор заряжен" : ready ? "${duration}${bat.charging ? " до 100%" : " до разряда"}" : bat.charging ? "Заряжается · собираю данные" : powered ? "Зарядка приостановлена" : "Собираю данные"; style: title }
+      Progress { value: bat.level; max: 100; color: tint }
+      if ready {
+        Text { text: "${bat.charging ? "Скорость зарядки" : "Средний расход"}: ${round(rate, 1)}% в час" }
+        Text { text: "За ${round(elapsed / 60)} мин заряд ${bat.charging ? "вырос" : "снизился"} на ${changed}%."; style: small; color: muted }
+      }
+      Text {
+        text: "При зарядке: (100% − текущий заряд) ÷ скорость зарядки за последний час. Нужен рост хотя бы на 2% и 2 минуты наблюдения. При разряде: текущий заряд ÷ средний расход за последние 6 часов; нужен разряд на 2% и 10 минут наблюдения. Время округляется до 5 минут."
+        style: small
+      }
+      Text {
+        text: "Это приблизительный прогноз при похожих условиях. Ближе к 100% зарядка обычно замедляется, поэтому фактическое время может быть больше. Нагрузка, температура и зарядное устройство влияют на скорость. Наблюдения обновляются, пока эта страница домашнего экрана или соседняя видна, либо открыт этот экран; промежутки вне экрана входят в средний расход."
+        style: small
+        color: muted
+      }
+      Text {
+        text: "История сохраняется между перезапусками. Смена режима зарядки, изменение процента против ожидаемого направления или перерыв более суток начинают наблюдение заново."
+        style: small
+        color: muted
+      }
+      Button { text: "Начать наблюдение заново"; onTap: samples = bat.level != null && now != null && mode != "plugged" ? [{t: now, p: bat.level}] : [] }
+    }
+  }
+}

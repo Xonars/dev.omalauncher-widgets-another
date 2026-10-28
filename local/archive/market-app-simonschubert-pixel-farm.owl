@@ -1,0 +1,895 @@
+app "pixel farm" {
+  // A cozy farm in pixel art, seen from above. Plant seeds in the field, come back when they're
+  // ripe and harvest them for coins, and fish the pond while you wait. Rarer seeds take longer
+  // and pay more, and open up as the farm levels; more field is for sale three plots at a time.
+  //
+  // There's no game loop. Each plot keeps the crop and the Unix time it was planted, so crops go
+  // on growing while the app is closed: a plot is ripe once the clock has passed its growing time.
+  // The pond works the same way: it holds five fish, and one swims back every ten minutes from
+  // `stockT`. Fishing goes by `time`: a cast picks the fish and the moment it bites, and while
+  // reeling the hook and the fish slide by formulas of the time since it was hooked, so a tap
+  // only has to compare where both are.
+
+  meta { owl: 12; description: "A cozy pixel art farm: plant crops that grow in real time, even while the app is closed, harvest them for coins and fish the pond between harvests"; version: "1.0"; license: "MIT"; category: "games" }
+
+  title: ""
+  statusBar: false
+  edge: true
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+    <clipPath id="t"><rect width="256" height="256" rx="56"/></clipPath>
+    <g clip-path="url(#t)">
+    <rect width="256" height="256" fill="#5ab0f0"/>
+    <rect y="136" width="256" height="120" fill="#6cbf4a"/>
+    <rect y="136" width="256" height="8" fill="#8ad860"/>
+    <rect y="176" width="256" height="80" fill="#9a6a40"/>
+    <rect y="192" width="256" height="8" fill="#7a5030"/>
+    <rect y="224" width="256" height="8" fill="#7a5030"/>
+    <rect x="208" y="16" width="16" height="8" fill="#ffd36a"/>
+    <rect x="192" y="24" width="48" height="8" fill="#ffd36a"/>
+    <rect x="192" y="32" width="48" height="8" fill="#ffd36a"/>
+    <rect x="192" y="40" width="48" height="8" fill="#ffd36a"/>
+    <rect x="208" y="48" width="16" height="8" fill="#ffd36a"/>
+    <rect x="120" y="72" width="16" height="8" fill="#6a4428"/>
+    <rect x="120" y="80" width="16" height="8" fill="#6a4428"/>
+    <rect x="136" y="80" width="16" height="8" fill="#8ad860"/>
+    <rect x="80" y="88" width="16" height="8" fill="#8ad860"/>
+    <rect x="96" y="88" width="8" height="8" fill="#3a8a3a"/>
+    <rect x="120" y="88" width="8" height="8" fill="#6a4428"/>
+    <rect x="128" y="88" width="24" height="8" fill="#8ad860"/>
+    <rect x="152" y="88" width="8" height="8" fill="#3a8a3a"/>
+    <rect x="80" y="96" width="8" height="8" fill="#8ad860"/>
+    <rect x="88" y="96" width="24" height="8" fill="#3a8a3a"/>
+    <rect x="120" y="96" width="8" height="8" fill="#6a4428"/>
+    <rect x="128" y="96" width="8" height="8" fill="#3a8a3a"/>
+    <rect x="136" y="96" width="8" height="8" fill="#8ad860"/>
+    <rect x="144" y="96" width="8" height="8" fill="#3a8a3a"/>
+    <rect x="56" y="104" width="56" height="8" fill="#2a1e30"/>
+    <rect x="112" y="104" width="16" height="8" fill="#c06a28"/>
+    <rect x="128" y="104" width="64" height="8" fill="#2a1e30"/>
+    <rect x="48" y="112" width="8" height="8" fill="#2a1e30"/>
+    <rect x="56" y="112" width="32" height="8" fill="#ff9a48"/>
+    <rect x="88" y="112" width="8" height="8" fill="#c06a28"/>
+    <rect x="96" y="112" width="16" height="8" fill="#ff9a48"/>
+    <rect x="112" y="112" width="16" height="8" fill="#c06a28"/>
+    <rect x="128" y="112" width="16" height="8" fill="#ff9a48"/>
+    <rect x="144" y="112" width="8" height="8" fill="#c06a28"/>
+    <rect x="152" y="112" width="40" height="8" fill="#ff9a48"/>
+    <rect x="192" y="112" width="8" height="8" fill="#2a1e30"/>
+    <rect x="40" y="120" width="8" height="8" fill="#2a1e30"/>
+    <rect x="48" y="120" width="16" height="8" fill="#ff9a48"/>
+    <rect x="64" y="120" width="16" height="8" fill="#ffd9a0"/>
+    <rect x="80" y="120" width="8" height="8" fill="#ff9a48"/>
+    <rect x="88" y="120" width="8" height="8" fill="#c06a28"/>
+    <rect x="96" y="120" width="24" height="8" fill="#ff9a48"/>
+    <rect x="120" y="120" width="8" height="8" fill="#c06a28"/>
+    <rect x="128" y="120" width="16" height="8" fill="#ff9a48"/>
+    <rect x="144" y="120" width="8" height="8" fill="#c06a28"/>
+    <rect x="152" y="120" width="32" height="8" fill="#ff9a48"/>
+    <rect x="184" y="120" width="16" height="8" fill="#c06a28"/>
+    <rect x="200" y="120" width="8" height="8" fill="#2a1e30"/>
+    <rect x="32" y="128" width="8" height="8" fill="#2a1e30"/>
+    <rect x="40" y="128" width="16" height="8" fill="#ff9a48"/>
+    <rect x="56" y="128" width="8" height="8" fill="#ffd9a0"/>
+    <rect x="64" y="128" width="24" height="8" fill="#ff9a48"/>
+    <rect x="88" y="128" width="8" height="8" fill="#c06a28"/>
+    <rect x="96" y="128" width="24" height="8" fill="#ff9a48"/>
+    <rect x="120" y="128" width="8" height="8" fill="#c06a28"/>
+    <rect x="128" y="128" width="24" height="8" fill="#ff9a48"/>
+    <rect x="152" y="128" width="8" height="8" fill="#c06a28"/>
+    <rect x="160" y="128" width="32" height="8" fill="#ff9a48"/>
+    <rect x="192" y="128" width="16" height="8" fill="#c06a28"/>
+    <rect x="208" y="128" width="8" height="8" fill="#2a1e30"/>
+    <rect x="32" y="136" width="8" height="8" fill="#2a1e30"/>
+    <rect x="40" y="136" width="8" height="8" fill="#ff9a48"/>
+    <rect x="48" y="136" width="8" height="8" fill="#ffd9a0"/>
+    <rect x="56" y="136" width="24" height="8" fill="#ff9a48"/>
+    <rect x="80" y="136" width="8" height="8" fill="#c06a28"/>
+    <rect x="88" y="136" width="32" height="8" fill="#ff9a48"/>
+    <rect x="120" y="136" width="8" height="8" fill="#c06a28"/>
+    <rect x="128" y="136" width="32" height="8" fill="#ff9a48"/>
+    <rect x="160" y="136" width="8" height="8" fill="#c06a28"/>
+    <rect x="168" y="136" width="24" height="8" fill="#ff9a48"/>
+    <rect x="192" y="136" width="16" height="8" fill="#c06a28"/>
+    <rect x="208" y="136" width="8" height="8" fill="#2a1e30"/>
+    <rect x="24" y="144" width="8" height="8" fill="#2a1e30"/>
+    <rect x="32" y="144" width="48" height="8" fill="#ff9a48"/>
+    <rect x="80" y="144" width="8" height="8" fill="#c06a28"/>
+    <rect x="88" y="144" width="32" height="8" fill="#ff9a48"/>
+    <rect x="120" y="144" width="8" height="8" fill="#c06a28"/>
+    <rect x="128" y="144" width="32" height="8" fill="#ff9a48"/>
+    <rect x="160" y="144" width="8" height="8" fill="#c06a28"/>
+    <rect x="168" y="144" width="32" height="8" fill="#ff9a48"/>
+    <rect x="200" y="144" width="16" height="8" fill="#c06a28"/>
+    <rect x="216" y="144" width="8" height="8" fill="#2a1e30"/>
+    <rect x="24" y="152" width="8" height="8" fill="#2a1e30"/>
+    <rect x="32" y="152" width="48" height="8" fill="#ff9a48"/>
+    <rect x="80" y="152" width="8" height="8" fill="#c06a28"/>
+    <rect x="88" y="152" width="32" height="8" fill="#ff9a48"/>
+    <rect x="120" y="152" width="8" height="8" fill="#c06a28"/>
+    <rect x="128" y="152" width="32" height="8" fill="#ff9a48"/>
+    <rect x="160" y="152" width="8" height="8" fill="#c06a28"/>
+    <rect x="168" y="152" width="32" height="8" fill="#ff9a48"/>
+    <rect x="200" y="152" width="16" height="8" fill="#c06a28"/>
+    <rect x="216" y="152" width="8" height="8" fill="#2a1e30"/>
+    <rect x="24" y="160" width="8" height="8" fill="#2a1e30"/>
+    <rect x="32" y="160" width="48" height="8" fill="#ff9a48"/>
+    <rect x="80" y="160" width="8" height="8" fill="#c06a28"/>
+    <rect x="88" y="160" width="32" height="8" fill="#ff9a48"/>
+    <rect x="120" y="160" width="8" height="8" fill="#c06a28"/>
+    <rect x="128" y="160" width="32" height="8" fill="#ff9a48"/>
+    <rect x="160" y="160" width="8" height="8" fill="#c06a28"/>
+    <rect x="168" y="160" width="32" height="8" fill="#ff9a48"/>
+    <rect x="200" y="160" width="16" height="8" fill="#c06a28"/>
+    <rect x="216" y="160" width="8" height="8" fill="#2a1e30"/>
+    <rect x="24" y="168" width="8" height="8" fill="#2a1e30"/>
+    <rect x="32" y="168" width="40" height="8" fill="#ff9a48"/>
+    <rect x="72" y="168" width="8" height="8" fill="#c06a28"/>
+    <rect x="80" y="168" width="40" height="8" fill="#ff9a48"/>
+    <rect x="120" y="168" width="8" height="8" fill="#c06a28"/>
+    <rect x="128" y="168" width="40" height="8" fill="#ff9a48"/>
+    <rect x="168" y="168" width="8" height="8" fill="#c06a28"/>
+    <rect x="176" y="168" width="24" height="8" fill="#ff9a48"/>
+    <rect x="200" y="168" width="16" height="8" fill="#c06a28"/>
+    <rect x="216" y="168" width="8" height="8" fill="#2a1e30"/>
+    <rect x="32" y="176" width="8" height="8" fill="#2a1e30"/>
+    <rect x="40" y="176" width="32" height="8" fill="#ff9a48"/>
+    <rect x="72" y="176" width="8" height="8" fill="#c06a28"/>
+    <rect x="80" y="176" width="40" height="8" fill="#ff9a48"/>
+    <rect x="120" y="176" width="8" height="8" fill="#c06a28"/>
+    <rect x="128" y="176" width="40" height="8" fill="#ff9a48"/>
+    <rect x="168" y="176" width="8" height="8" fill="#c06a28"/>
+    <rect x="176" y="176" width="16" height="8" fill="#ff9a48"/>
+    <rect x="192" y="176" width="16" height="8" fill="#c06a28"/>
+    <rect x="208" y="176" width="8" height="8" fill="#2a1e30"/>
+    <rect x="32" y="184" width="8" height="8" fill="#2a1e30"/>
+    <rect x="40" y="184" width="8" height="8" fill="#c06a28"/>
+    <rect x="48" y="184" width="24" height="8" fill="#ff9a48"/>
+    <rect x="72" y="184" width="8" height="8" fill="#c06a28"/>
+    <rect x="80" y="184" width="40" height="8" fill="#ff9a48"/>
+    <rect x="120" y="184" width="8" height="8" fill="#c06a28"/>
+    <rect x="128" y="184" width="40" height="8" fill="#ff9a48"/>
+    <rect x="168" y="184" width="8" height="8" fill="#c06a28"/>
+    <rect x="176" y="184" width="8" height="8" fill="#ff9a48"/>
+    <rect x="184" y="184" width="24" height="8" fill="#c06a28"/>
+    <rect x="208" y="184" width="8" height="8" fill="#2a1e30"/>
+    <rect x="40" y="192" width="8" height="8" fill="#2a1e30"/>
+    <rect x="48" y="192" width="16" height="8" fill="#c06a28"/>
+    <rect x="64" y="192" width="8" height="8" fill="#ff9a48"/>
+    <rect x="72" y="192" width="16" height="8" fill="#c06a28"/>
+    <rect x="88" y="192" width="32" height="8" fill="#ff9a48"/>
+    <rect x="120" y="192" width="8" height="8" fill="#c06a28"/>
+    <rect x="128" y="192" width="32" height="8" fill="#ff9a48"/>
+    <rect x="160" y="192" width="40" height="8" fill="#c06a28"/>
+    <rect x="200" y="192" width="8" height="8" fill="#2a1e30"/>
+    <rect x="48" y="200" width="16" height="8" fill="#2a1e30"/>
+    <rect x="64" y="200" width="120" height="8" fill="#c06a28"/>
+    <rect x="184" y="200" width="16" height="8" fill="#2a1e30"/>
+    <rect x="64" y="208" width="120" height="8" fill="#2a1e30"/>
+    </g>
+  </svg>"""
+
+  source now = clock every 1s
+
+  state bank = 30 persist
+  state xp = 0 persist
+  // how many plots of the field are open, from the top left, three more at a time
+  state plots = 6 persist
+  // each of the 24 plots: the crop growing on it (-1 for none) and when it was planted
+  state field = range(24).map(i => {k: -1, t: 0}) persist
+  // the fish in the pond when `stockT` was last settled; one more every STOCKS seconds
+  state stock = 5 persist
+  state stockT = 0 persist
+  // how many of each fish have been caught and each crop harvested, for the book
+  state caught = [0, 0, 0, 0, 0, 0, 0, 0, 0] persist
+  state grown = [0, 0, 0, 0, 0, 0, 0] persist
+  // the seed planted by a tap, or -1 for none
+  state seed = 0 persist
+  // when the app last ran, for the welcome back
+  state last = 0 persist
+  state greeted = false
+  state tab = 0
+  // when more field was asked for: a second tap within 3 s buys it
+  state armT = -99
+  state msg = ""
+  state msgT = -99
+  // coins rising from what was just harvested: the plot, the text and when
+  state pops = []
+
+  // ---- fishing: 0 waiting to cast, 1 holding to cast, 2 the line is out, 3 reeling, 4 caught,
+  // 5 lost (`why` says how) ----
+  state fs = 0
+  state pressT = 0
+  state power = 0
+  state fish = 0
+  state biteAt = 0
+  state reelT = 0
+  state hits = 0
+  state misses = 0
+  state why = ""
+  state fresh = false
+  state endT = 0
+
+  every 15s { last = now ?? last }
+  when now != null && !greeted {
+    greeted = true
+    if stockT == 0 { stockT = now }
+    if last > 0 && now - last > 120 {
+      msg = len(ripe) > 0 ? "WELCOME BACK!|${len(ripe)} READY TO HARVEST" : "WELCOME BACK!"
+      msgT = time
+    }
+    last = now
+  }
+  on lvl {
+    if value > (old ?? 99) {
+      msg = len(CROPS.filter(c => c.lv == value)) > 0 ? "LEVEL ${value}!|${CROPS.filter(c => c.lv == value)[0].n} SEEDS" : "LEVEL ${value}!"
+      msgT = time
+    }
+  }
+
+  // ---- what grows and what bites ------------------------------------------------------------------
+  // cost: a seed; g: seconds to grow; v: what a harvest sells for; x: experience; lv: the level
+  // that opens it
+  let CROPS = [
+    {n: "RADISH", cost: 5, g: 60, v: 9, x: 1, lv: 1},
+    {n: "CARROT", cost: 15, g: 300, v: 32, x: 3, lv: 1},
+    {n: "POTATO", cost: 40, g: 1200, v: 95, x: 7, lv: 2},
+    {n: "TOMATO", cost: 100, g: 3600, v: 260, x: 16, lv: 3},
+    {n: "CORN", cost: 250, g: 7200, v: 640, x: 30, lv: 5},
+    {n: "PUMPKIN", cost: 600, g: 14400, v: 1600, x: 60, lv: 7},
+    {n: "STRAWBERRY", cost: 1500, g: 28800, v: 4200, x: 120, lv: 9}
+  ]
+  // v: coins; need: good taps to land it; w: how wide it is on the reel, of 1; sp: how fast the
+  // hook sweeps; p: how far out it lives (the cast's power); h: 0 any time, 1 by day, 2 by night;
+  // wt: how often it bites; then its colours
+  let FISH = [
+    {n: "MINNOW", v: 6, x: 2, need: 2, w: 0.3, sp: 0.75, p: 0, h: 0, wt: 10, X: "#c0b8d0", d: "#7a7490", Z: "#fff6e8"},
+    {n: "PERCH", v: 15, x: 3, need: 3, w: 0.27, sp: 0.85, p: 0, h: 0, wt: 8, X: "#ffd36a", d: "#3a8a3a", Z: "#fff6e8"},
+    {n: "CARP", v: 35, x: 5, need: 3, w: 0.25, sp: 0.95, p: 0.3, h: 0, wt: 6, X: "#d8962a", d: "#6a4428", Z: "#f0d8b0"},
+    {n: "TROUT", v: 70, x: 8, need: 4, w: 0.23, sp: 1.05, p: 0.45, h: 1, wt: 5, X: "#ff8ab0", d: "#3a8a3a", Z: "#fff6e8"},
+    {n: "BASS", v: 110, x: 11, need: 4, w: 0.21, sp: 1.15, p: 0.5, h: 0, wt: 4, X: "#5fb048", d: "#3a8a3a", Z: "#f0d8b0"},
+    {n: "CATFISH", v: 180, x: 15, need: 5, w: 0.2, sp: 1.1, p: 0.4, h: 2, wt: 5, X: "#7a7490", d: "#4a4458", Z: "#c0b8d0"},
+    {n: "PIKE", v: 300, x: 20, need: 5, w: 0.18, sp: 1.3, p: 0.7, h: 0, wt: 3, X: "#8ad860", d: "#3a8a3a", Z: "#ffd36a"},
+    {n: "EEL", v: 420, x: 26, need: 6, w: 0.17, sp: 1.35, p: 0.6, h: 2, wt: 3, X: "#4a4458", d: "#2a2236", Z: "#9a5ad8"},
+    {n: "GOLDEN KOI", v: 1500, x: 60, need: 7, w: 0.15, sp: 1.45, p: 0.85, h: 0, wt: 1, X: "#ffd36a", d: "#ff9a48", Z: "#fff6e8"}
+  ]
+  let FIELDCOST = [150, 500, 1500, 4000, 10000, 25000]
+  let STOCKS = 600
+  // how long a bite waits for the tap
+  let BITE = 0.9
+
+  let tnow = now ?? 0
+  let lvl = floor(sqrt(xp / 12)) + 1
+  let lvFrom = 12 * (lvl - 1) * (lvl - 1)
+  let lvTo = 12 * lvl * lvl
+  let grow = field.map(f => f.k < 0 ? 0 : clamp((tnow - f.t) / CROPS[f.k].g, 0, 1))
+  let ripe = range(24).filter(p => field[p].k >= 0 && grow[p] >= 1)
+  let refill = floor(max(0, tnow - stockT) / STOCKS)
+  let fishLeft = min(5, stock + refill)
+  let nextFish = fishLeft >= 5 ? 0 : STOCKS - max(0, tnow - stockT) % STOCKS
+  let hour = num(fmtTime(tnow, "H"), 12)
+  let night = hour >= 20 || hour < 6
+  let dusk = hour == 19 || hour == 6
+  let fieldCost = plots < 24 ? FIELDCOST[(plots - 6) / 3] : 0
+
+  let fmt = n => n < 10000 ? str(floor(n))
+    : n < 1000000 ? "${fixed(n / 1000, n < 100000 ? 1 : 0)}K"
+    : "${fixed(n / 1000000, 1)}M"
+  let fmtT = s => s >= 3600 ? "${floor(s / 3600)}H ${pad(floor(s % 3600 / 60), 2, "0")}M" : s >= 60 ? "${floor(s / 60)}M ${pad(floor(s % 60), 2, "0")}S" : "${floor(s)}S"
+
+  // ---- the screen, in dp --------------------------------------------------------------------------
+  // The farm on top (the house, the field and the pond) and the panel below it, or in landscape
+  // the panel to the right.
+  let SW = screenWidth ?? 400
+  let SH = screenHeight ?? 800
+  let LS = SW > SH
+  let TOP = max(screenTop ?? 0, 12)
+  let INS = max(screenInset ?? 0, 16)
+  let HUD = 44
+  let C = floor(LS ? min((SH - TOP - HUD - INS - 8) / 8.3, (SW - 330) / 7) : min((SW - 16) / 7, (SH - TOP - HUD - INS - 250) / 8.3))
+  let q = C / 16
+  let SCW = LS ? 7 * C + 8 : SW
+  let FX = floor((SCW - 6 * C) / 2)
+  let SY = TOP + HUD
+  let FY = SY + floor(1.7 * C)
+  let PDX = floor(0.35 * C)
+  let PDY = FY + 4 * C + floor(0.4 * C)
+  let PDW = SCW - 2 * PDX
+  let PDH = floor(2.1 * C)
+  let SB = PDY + PDH + floor(0.3 * C)
+  let PX = LS ? SCW + 12 : 10
+  let PY = LS ? SY : SB + 8
+  let PW = LS ? SW - PX - 16 : SW - 20
+  let PH = SH - INS - PY
+  let TH = 30
+  let CY = PY + TH + 8
+  let CW = (PW - 18) / 4
+  let CH = min(96, (PH - TH - 64) / 2)
+  // the dock, the farmer at its end, the rod's tip and where the cast lands
+  let DY = PDY + floor(PDH / 2 - 0.45 * C)
+  let DX = PDX + floor(1.5 * C)
+  let FMX = DX - floor(0.85 * C)
+  let FMY = DY + floor(0.5 * C)
+  let TIPX = FMX + 20 * q
+  let TIPY = FMY - 20 * q
+  let BX0 = DX + 0.5 * C + power * (PDX + PDW - DX - 2 * C)
+  let BY0 = PDY + PDH * (0.3 + 0.4 * hash(floor(power * 100), 3))
+  let reelF = fs == 3 ? hits / FISH[fish].need : 0
+  let BX = lerp(BX0, DX + 0.4 * C, reelF)
+  let BY = lerp(BY0, DY + 0.5 * C, reelF)
+
+  // ---- the art ------------------------------------------------------------------------------------
+  let PAL = {o: "#2a1e30", K: "#2a2236", W: "#fff6e8", w: "#d8ccc0", R: "#e04848", r: "#a02838", Y: "#ffd36a", y: "#d8962a", B: "#4a90e0", b: "#2a5aa0", C: "#a8e8ff", c: "#3a9ad8", G: "#5fb048", g: "#3a8a3a", L: "#8ad860", P: "#ff8ab0", p: "#d05a88", T: "#b07a45", t: "#6a4428", S: "#c0b8d0", s: "#7a7490", O: "#ff9a48", n: "#c06a28", M: "#9a5ad8", U: "#f0d8b0", N: "#4a4458", F: "#f4c8a0"}
+  // the panel and the numbers over the farm, in colours of their own rather than the theme's
+  let UI = {bg: "#1d1838", card: "#2a2348", text: "#fff4e0", dim: "#a8a0d0", gold: "#ffd36a", go: "#5fa048", warn: "#ff7a5a", water: "#3a9ad8"}
+  let press = "https://raw.githubusercontent.com/google/fonts/main/ofl/pressstart2p/PressStart2P-Regular.ttf"
+
+  // ---- art as SVG: each a pixel art drawn in one call, where a sprite is a call for every run of
+  asset sown = base64"PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMCAzIiBzaGFwZS1yZW5kZXJpbmc9ImNyaXNwRWRnZXMiPjxwYXRoIGZpbGw9IiNmZmQzNmEiIGQ9Ik0zIDBoMXYxaC0xek04IDBoMXYxaC0xeiIvPjxwYXRoIGZpbGw9IiMyYTFlMzAiIGQ9Ik0yIDFoMXYxaC0xek00IDFoMXYxaC0xek03IDFoMXYxaC0xek05IDFoMXYxaC0xeiIvPjxwYXRoIGZpbGw9IiM2YTQ0MjgiIGQ9Ik0zIDFoMXYxaC0xek04IDFoMXYxaC0xek0xIDJoMXYxaC0xek00IDJoMXYxaC0xek02IDJoMXYxaC0xek05IDJoMXYxaC0xeiIvPjxwYXRoIGZpbGw9IiNiMDdhNDUiIGQ9Ik0yIDJoMnYxaC0yek03IDJoMnYxaC0yeiIvPjwvc3ZnPg=="
+  asset sprout = base64"PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMCA1IiBzaGFwZS1yZW5kZXJpbmc9ImNyaXNwRWRnZXMiPjxwYXRoIGZpbGw9IiM4YWQ4NjAiIGQ9Ik0yIDBoMXYxaC0xek03IDBoMXYxaC0xek0xIDFoMnYxaC0yek0yIDJoMXYxaC0xeiIvPjxwYXRoIGZpbGw9IiM1ZmIwNDgiIGQ9Ik0zIDBoMXYxaC0xek02IDBoMXYxaC0xek0zIDFoNHYxaC00ek0zIDJoMXYxaC0xek02IDJoMXYxaC0xek00IDNoMXYxaC0xeiIvPjxwYXRoIGZpbGw9IiMzYThhM2EiIGQ9Ik03IDFoMnYxaC0yek00IDJoMnYxaC0yek03IDJoMXYxaC0xek01IDNoMXYxaC0xek00IDRoMnYxaC0yeiIvPjwvc3ZnPg=="
+  asset young = base64"PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMiA5IiBzaGFwZS1yZW5kZXJpbmc9ImNyaXNwRWRnZXMiPjxwYXRoIGZpbGw9IiM4YWQ4NjAiIGQ9Ik00IDBoMnYxaC0yek0yIDFoNHYxaC00ek0xIDJoM3YxaC0zek01IDJoMXYxaC0xek0yIDNoMnYxaC0yek02IDNoMXYxaC0xek00IDRoMXYxaC0xek0wIDVoMXYxaC0xek00IDVoMXYxaC0xek0xIDZoMXYxaC0xeiIvPjxwYXRoIGZpbGw9IiM1ZmIwNDgiIGQ9Ik04IDBoMnYxaC0yek02IDFoNHYxaC00ek00IDJoMXYxaC0xek02IDJoMnYxaC0yek05IDJoMXYxaC0xek00IDNoMnYxaC0yek03IDNoMXYxaC0xek0wIDRoMnYxaC0yek01IDRoMnYxaC0yek0xMCA0aDF2MWgtMXpNMSA1aDN2MWgtM3pNNSA1aDF2MWgtMXpNNyA1aDF2MWgtMXpNOSA1aDF2MWgtMXpNMiA2aDV2MWgtNXpNMyA3aDR2MWgtNHpNNCA4aDF2MWgtMXoiLz48cGF0aCBmaWxsPSIjM2E4YTNhIiBkPSJNMTAgMWgxdjFoLTF6TTggMmgxdjFoLTF6TTEwIDJoMXYxaC0xek04IDNoMnYxaC0yek03IDRoMXYxaC0xek0xMSA0aDF2MWgtMXpNNiA1aDF2MWgtMXpNOCA1aDF2MWgtMXpNMTAgNWgxdjFoLTF6TTcgNmgzdjFoLTN6TTcgN2gydjFoLTJ6TTUgOGgydjFoLTJ6Ii8+PC9zdmc+"
+  asset radish = base64"PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNCAxMiIgc2hhcGUtcmVuZGVyaW5nPSJjcmlzcEVkZ2VzIj48cGF0aCBmaWxsPSIjOGFkODYwIiBkPSJNNSAwaDF2MWgtMXpNOSAwaDF2MWgtMXpNNCAxaDJ2MWgtMnpNOSAxaDJ2MWgtMnpNMyAyaDJ2MWgtMnpNMTAgMmgydjFoLTJ6TTQgM2gxdjFoLTF6Ii8+PHBhdGggZmlsbD0iIzVmYjA0OCIgZD0iTTYgMGgxdjFoLTF6TTggMGgxdjFoLTF6TTYgMWgzdjFoLTN6TTUgMmgxdjFoLTF6TTcgMmgxdjFoLTF6TTkgMmgxdjFoLTF6TTUgM2gxdjFoLTF6TTcgM2gxdjFoLTF6TTkgM2gxdjFoLTF6TTUgNGgxdjFoLTF6TTcgNGgxdjFoLTF6Ii8+PHBhdGggZmlsbD0iIzNhOGEzYSIgZD0iTTEwIDNoMXYxaC0xek02IDRoMXYxaC0xek04IDRoMnYxaC0yek02IDVoM3YxaC0zeiIvPjxwYXRoIGZpbGw9IiMyYTFlMzAiIGQ9Ik01IDZoMXYxaC0xek05IDZoMXYxaC0xek00IDdoMXYxaC0xek0xMCA3aDF2MWgtMXpNNCA4aDF2MWgtMXpNMTAgOGgxdjFoLTF6TTUgOWgxdjFoLTF6TTkgOWgxdjFoLTF6TTYgMTBoMXYxaC0xek04IDEwaDF2MWgtMXpNNyAxMWgxdjFoLTF6Ii8+PHBhdGggZmlsbD0iI2ZmOGFiMCIgZD0iTTYgNmgzdjFoLTN6TTUgN2gxdjFoLTF6TTcgN2gydjFoLTJ6TTUgOGg0djFoLTR6TTYgOWgydjFoLTJ6Ii8+PHBhdGggZmlsbD0iI2ZmZjZlOCIgZD0iTTYgN2gxdjFoLTF6Ii8+PHBhdGggZmlsbD0iI2QwNWE4OCIgZD0iTTkgN2gxdjFoLTF6TTkgOGgxdjFoLTF6TTggOWgxdjFoLTF6TTcgMTBoMXYxaC0xeiIvPjwvc3ZnPg=="
+  asset carrot = base64"PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNCAxMSIgc2hhcGUtcmVuZGVyaW5nPSJjcmlzcEVkZ2VzIj48cGF0aCBmaWxsPSIjOGFkODYwIiBkPSJNNSAwaDF2MWgtMXpNOSAwaDF2MWgtMXpNNCAxaDJ2MWgtMnpNOSAxaDJ2MWgtMnpNMyAyaDF2MWgtMXpNNiAyaDF2MWgtMXpNOCAyaDF2MWgtMXpNMTEgMmgxdjFoLTF6TTYgM2gxdjFoLTF6TTggM2gxdjFoLTF6Ii8+PHBhdGggZmlsbD0iIzVmYjA0OCIgZD0iTTYgMGgxdjFoLTF6TTggMGgxdjFoLTF6TTYgMWgzdjFoLTN6TTQgMmgxdjFoLTF6TTcgMmgxdjFoLTF6TTEwIDJoMXYxaC0xek00IDNoMXYxaC0xek03IDNoMXYxaC0xek0xMCAzaDF2MWgtMXpNNiA0aDF2MWgtMXpNOCA0aDF2MWgtMXoiLz48cGF0aCBmaWxsPSIjM2E4YTNhIiBkPSJNNSAzaDF2MWgtMXpNOSAzaDF2MWgtMXpNNyA0aDF2MWgtMXoiLz48cGF0aCBmaWxsPSIjMmExZTMwIiBkPSJNNSA1aDF2MWgtMXpNOSA1aDF2MWgtMXpNNSA3aDF2MWgtMXpNNiA5aDF2MWgtMXoiLz48cGF0aCBmaWxsPSIjZmY5YTQ4IiBkPSJNNiA1aDN2MWgtM3pNNSA2aDF2MWgtMXpNNyA2aDJ2MWgtMnpNNiA3aDJ2MWgtMnpNOSA3aDF2MWgtMXpNNiA4aDJ2MWgtMnpNNyA5aDF2MWgtMXoiLz48cGF0aCBmaWxsPSIjZmZmNmU4IiBkPSJNNiA2aDF2MWgtMXoiLz48cGF0aCBmaWxsPSIjYzA2YTI4IiBkPSJNOSA2aDF2MWgtMXpNOCA3aDF2MWgtMXpNOCA4aDF2MWgtMXpNOCA5aDF2MWgtMXpNNyAxMGgxdjFoLTF6Ii8+PC9zdmc+"
+  asset potato = base64"PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNCAxMCIgc2hhcGUtcmVuZGVyaW5nPSJjcmlzcEVkZ2VzIj48cGF0aCBmaWxsPSIjOGFkODYwIiBkPSJNNCAwaDJ2MWgtMnpNOSAwaDJ2MWgtMnpNMiAxaDJ2MWgtMnpNNiAxaDF2MWgtMXpNOCAxaDF2MWgtMXpNMTEgMWgxdjFoLTF6TTEgMmgxdjFoLTF6TTQgMmgxdjFoLTF6TTkgMmgxdjFoLTF6TTEyIDJoMXYxaC0xek0yIDNoMXYxaC0xek03IDNoMXYxaC0xek0zIDRoMXYxaC0xeiIvPjxwYXRoIGZpbGw9IiM1ZmIwNDgiIGQ9Ik02IDBoMXYxaC0xek04IDBoMXYxaC0xek00IDFoMnYxaC0yek03IDFoMXYxaC0xek05IDFoMnYxaC0yek0yIDJoMnYxaC0yek01IDJoNHYxaC00ek0xMCAyaDJ2MWgtMnpNMyAzaDF2MWgtMXpNNSAzaDJ2MWgtMnpNOCAzaDJ2MWgtMnpNMTEgM2gxdjFoLTF6TTQgNGgydjFoLTJ6TTcgNGgydjFoLTJ6TTEwIDRoMXYxaC0xek01IDVoMXYxaC0xek03IDVoMXYxaC0xeiIvPjxwYXRoIGZpbGw9IiNmZmY2ZTgiIGQ9Ik00IDNoMXYxaC0xek0xMCAzaDF2MWgtMXoiLz48cGF0aCBmaWxsPSIjM2E4YTNhIiBkPSJNNiA0aDF2MWgtMXpNOSA0aDF2MWgtMXpNNCA1aDF2MWgtMXpNNiA1aDF2MWgtMXpNOCA1aDJ2MWgtMnoiLz48cGF0aCBmaWxsPSIjMmExZTMwIiBkPSJNMiA2aDF2MWgtMXpNNSA2aDF2MWgtMXpNOCA2aDF2MWgtMXpNMTEgNmgxdjFoLTF6TTEgN2gxdjFoLTF6TTYgN2gydjFoLTJ6TTEyIDdoMXYxaC0xek0xIDhoMXYxaC0xek02IDhoMnYxaC0yek0xMiA4aDF2MWgtMXpNMiA5aDR2MWgtNHpNOCA5aDR2MWgtNHoiLz48cGF0aCBmaWxsPSIjZjBkOGIwIiBkPSJNMyA2aDJ2MWgtMnpNOSA2aDJ2MWgtMnpNMiA3aDF2MWgtMXpNNCA3aDJ2MWgtMnpNOCA3aDJ2MWgtMnpNMTEgN2gxdjFoLTF6TTIgOGgzdjFoLTN6TTkgOGgzdjFoLTN6Ii8+PHBhdGggZmlsbD0iI2IwN2E0NSIgZD0iTTMgN2gxdjFoLTF6TTEwIDdoMXYxaC0xek01IDhoMXYxaC0xek04IDhoMXYxaC0xeiIvPjwvc3ZnPg=="
+  asset tomato = base64"PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNCAxMiIgc2hhcGUtcmVuZGVyaW5nPSJjcmlzcEVkZ2VzIj48cGF0aCBmaWxsPSIjNmE0NDI4IiBkPSJNNiAwaDF2MWgtMXpNNiAxaDF2MWgtMXpNNiAyaDF2MWgtMXpNNiAzaDF2MWgtMXpNNyA0aDF2MWgtMXpNNyA1aDF2MWgtMXpNNyA2aDF2MWgtMXpNNiAxMWgxdjFoLTF6Ii8+PHBhdGggZmlsbD0iIzhhZDg2MCIgZD0iTTMgMWgxdjFoLTF6TTkgMWgxdjFoLTF6TTIgMmgxdjFoLTF6TTUgMmgxdjFoLTF6TTcgMmgxdjFoLTF6TTEwIDJoMXYxaC0xek0yIDdoMXYxaC0xek0xMSA3aDF2MWgtMXoiLz48cGF0aCBmaWxsPSIjNWZiMDQ4IiBkPSJNNCAxaDF2MWgtMXpNOCAxaDF2MWgtMXpNMyAyaDJ2MWgtMnpNOCAyaDJ2MWgtMnpNNyAzaDF2MWgtMXpNMyA3aDF2MWgtMXpNMTAgN2gxdjFoLTF6TTIgOGgxdjFoLTF6TTEwIDhoMXYxaC0xeiIvPjxwYXRoIGZpbGw9IiMyYTFlMzAiIGQ9Ik0yIDNoMXYxaC0xek01IDNoMXYxaC0xek04IDNoMXYxaC0xek0xMSAzaDF2MWgtMXpNMSA0aDF2MWgtMXpNNiA0aDF2MWgtMXpNMTIgNGgxdjFoLTF6TTEgNWgxdjFoLTF6TTYgNWgxdjFoLTF6TTggNWgxdjFoLTF6TTEyIDVoMXYxaC0xek0yIDZoMXYxaC0xek01IDZoMXYxaC0xek05IDZoMXYxaC0xek0xMiA2aDF2MWgtMXpNNSA3aDF2MWgtMXpNOCA3aDF2MWgtMXpNNCA4aDF2MWgtMXpNOSA4aDF2MWgtMXpNNCA5aDF2MWgtMXpNOSA5aDF2MWgtMXpNNSAxMGgxdjFoLTF6TTggMTBoMXYxaC0xeiIvPjxwYXRoIGZpbGw9IiNlMDQ4NDgiIGQ9Ik0zIDNoMnYxaC0yek05IDNoMnYxaC0yek0yIDRoMXYxaC0xek00IDRoMnYxaC0yek04IDRoMXYxaC0xek0xMCA0aDJ2MWgtMnpNMiA1aDN2MWgtM3pNOSA1aDJ2MWgtMnpNNiA3aDJ2MWgtMnpNNSA4aDF2MWgtMXpNNyA4aDJ2MWgtMnpNNSA5aDN2MWgtM3oiLz48cGF0aCBmaWxsPSIjZmZmNmU4IiBkPSJNMyA0aDF2MWgtMXpNOSA0aDF2MWgtMXpNNiA4aDF2MWgtMXoiLz48cGF0aCBmaWxsPSIjYTAyODM4IiBkPSJNNSA1aDF2MWgtMXpNMTEgNWgxdjFoLTF6TTMgNmgydjFoLTJ6TTEwIDZoMnYxaC0yek04IDloMXYxaC0xek02IDEwaDJ2MWgtMnoiLz48cGF0aCBmaWxsPSIjM2E4YTNhIiBkPSJNMyA4aDF2MWgtMXpNMTEgOGgxdjFoLTF6Ii8+PC9zdmc+"
+  asset corn = base64"PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNCAxMiIgc2hhcGUtcmVuZGVyaW5nPSJjcmlzcEVkZ2VzIj48cGF0aCBmaWxsPSIjZmZkMzZhIiBkPSJNNyAwaDF2MWgtMXpNNiAxaDJ2MWgtMnpNNiAzaDJ2MWgtMnpNNiA0aDF2MWgtMXpNNiA1aDJ2MWgtMnpNNiA2aDF2MWgtMXoiLz48cGF0aCBmaWxsPSIjOGFkODYwIiBkPSJNOCAxaDF2MWgtMXpNNSAyaDF2MWgtMXpNOCAyaDF2MWgtMXpNMyAzaDF2MWgtMXpNMTAgM2gxdjFoLTF6TTIgNGgxdjFoLTF6TTExIDRoMXYxaC0xek0xIDVoMXYxaC0xek0xMiA1aDF2MWgtMXoiLz48cGF0aCBmaWxsPSIjNWZiMDQ4IiBkPSJNNiAyaDJ2MWgtMnpNOSAzaDF2MWgtMXpNMyA0aDF2MWgtMXpNMTAgNGgxdjFoLTF6TTIgNWgxdjFoLTF6TTkgNWgxdjFoLTF6TTExIDVoMXYxaC0xek00IDZoMXYxaC0xek05IDZoMnYxaC0yek0zIDdoMnYxaC0yek05IDdoMXYxaC0xek0yIDhoMXYxaC0xek02IDhoMnYxaC0yek0xMSA4aDF2MWgtMXpNMSA5aDF2MWgtMXpNNiA5aDF2MWgtMXpNMTIgOWgxdjFoLTF6TTYgMTBoMXYxaC0xeiIvPjxwYXRoIGZpbGw9IiMyYTFlMzAiIGQ9Ik01IDNoMXYxaC0xek04IDNoMXYxaC0xek01IDRoMXYxaC0xek04IDRoMXYxaC0xek01IDVoMXYxaC0xek04IDVoMXYxaC0xek01IDZoMXYxaC0xek04IDZoMXYxaC0xek02IDdoMnYxaC0yeiIvPjxwYXRoIGZpbGw9IiNmZmY2ZTgiIGQ9Ik03IDRoMXYxaC0xeiIvPjxwYXRoIGZpbGw9IiNkODk2MmEiIGQ9Ik03IDZoMXYxaC0xeiIvPjxwYXRoIGZpbGw9IiMzYThhM2EiIGQ9Ik0xMCA3aDF2MWgtMXpNMyA4aDF2MWgtMXpNMTAgOGgxdjFoLTF6TTIgOWgxdjFoLTF6TTcgOWgxdjFoLTF6TTExIDloMXYxaC0xek03IDEwaDF2MWgtMXpNNiAxMWgydjFoLTJ6Ii8+PC9zdmc+"
+  asset pumpkin = base64"PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNCAxMSIgc2hhcGUtcmVuZGVyaW5nPSJjcmlzcEVkZ2VzIj48cGF0aCBmaWxsPSIjNmE0NDI4IiBkPSJNNiAwaDJ2MWgtMnpNNyAxaDF2MWgtMXpNNiAyaDF2MWgtMXoiLz48cGF0aCBmaWxsPSIjOGFkODYwIiBkPSJNOCAxaDF2MWgtMXpNMiAyaDF2MWgtMXpNNyAyaDJ2MWgtMnpNNCAxMGgxdjFoLTF6TTggMTBoMXYxaC0xeiIvPjxwYXRoIGZpbGw9IiM1ZmIwNDgiIGQ9Ik0zIDJoMXYxaC0xek05IDJoMXYxaC0xek0yIDEwaDF2MWgtMXpNMTAgMTBoMXYxaC0xeiIvPjxwYXRoIGZpbGw9IiMyYTFlMzAiIGQ9Ik0zIDNoMXYxaC0xek0xMCAzaDF2MWgtMXpNMiA0aDF2MWgtMXpNMTEgNGgxdjFoLTF6TTEgNWgxdjFoLTF6TTEyIDVoMXYxaC0xek0xIDZoMXYxaC0xek0xMiA2aDF2MWgtMXpNMSA3aDF2MWgtMXpNMTIgN2gxdjFoLTF6TTIgOGgxdjFoLTF6TTExIDhoMXYxaC0xek0zIDloMnYxaC0yek05IDloMnYxaC0yeiIvPjxwYXRoIGZpbGw9IiNmZjlhNDgiIGQ9Ik00IDNoMnYxaC0yek03IDNoMnYxaC0yek0zIDRoMnYxaC0yek02IDRoMnYxaC0yek05IDRoMnYxaC0yek0yIDVoMXYxaC0xek00IDVoMXYxaC0xek02IDVoMnYxaC0yek05IDVoMnYxaC0yek0yIDZoM3YxaC0zek02IDZoMnYxaC0yek05IDZoMnYxaC0yek0yIDdoMnYxaC0yek01IDdoMnYxaC0yek04IDdoMnYxaC0yek0zIDhoMXYxaC0xek01IDhoMnYxaC0yek04IDhoMnYxaC0yeiIvPjxwYXRoIGZpbGw9IiNjMDZhMjgiIGQ9Ik02IDNoMXYxaC0xek05IDNoMXYxaC0xek01IDRoMXYxaC0xek04IDRoMXYxaC0xek01IDVoMXYxaC0xek04IDVoMXYxaC0xek0xMSA1aDF2MWgtMXpNNSA2aDF2MWgtMXpNOCA2aDF2MWgtMXpNMTEgNmgxdjFoLTF6TTQgN2gxdjFoLTF6TTcgN2gxdjFoLTF6TTEwIDdoMnYxaC0yek00IDhoMXYxaC0xek03IDhoMXYxaC0xek0xMCA4aDF2MWgtMXpNNSA5aDR2MWgtNHoiLz48cGF0aCBmaWxsPSIjZmZmNmU4IiBkPSJNMyA1aDF2MWgtMXoiLz48cGF0aCBmaWxsPSIjM2E4YTNhIiBkPSJNMyAxMGgxdjFoLTF6TTkgMTBoMXYxaC0xeiIvPjwvc3ZnPg=="
+  asset strawberry = base64"PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNCAxMCIgc2hhcGUtcmVuZGVyaW5nPSJjcmlzcEVkZ2VzIj48cGF0aCBmaWxsPSIjOGFkODYwIiBkPSJNMiAwaDJ2MWgtMnpNOSAwaDJ2MWgtMnpNMSAxaDF2MWgtMXpNNSAxaDF2MWgtMXpNNyAxaDF2MWgtMXpNMTEgMWgxdjFoLTF6TTIgMmgxdjFoLTF6TTYgMmgxdjFoLTF6TTEwIDJoMXYxaC0xeiIvPjxwYXRoIGZpbGw9IiM1ZmIwNDgiIGQ9Ik00IDBoMXYxaC0xek04IDBoMXYxaC0xek0yIDFoM3YxaC0zek04IDFoM3YxaC0zek0zIDJoMXYxaC0xek01IDJoMXYxaC0xek03IDJoMXYxaC0xek05IDJoMXYxaC0xek0yIDNoMXYxaC0xek00IDNoNXYxaC01ek0xMCAzaDF2MWgtMXpNMyA0aDF2MWgtMXpNOSA0aDF2MWgtMXoiLz48cGF0aCBmaWxsPSIjM2E4YTNhIiBkPSJNNCAyaDF2MWgtMXpNOCAyaDF2MWgtMXoiLz48cGF0aCBmaWxsPSIjMmExZTMwIiBkPSJNMyAzaDF2MWgtMXpNOSAzaDF2MWgtMXpNMSA0aDF2MWgtMXpNNSA0aDF2MWgtMXpNNyA0aDF2MWgtMXpNMTEgNGgxdjFoLTF6TTAgNWgxdjFoLTF6TTYgNWgydjFoLTJ6TTEzIDVoMXYxaC0xek0wIDZoMXYxaC0xek02IDZoMnYxaC0yek0xMyA2aDF2MWgtMXpNMSA3aDF2MWgtMXpNNSA3aDF2MWgtMXpNOCA3aDF2MWgtMXpNMTIgN2gxdjFoLTF6TTIgOGgxdjFoLTF6TTQgOGgxdjFoLTF6TTkgOGgxdjFoLTF6TTExIDhoMXYxaC0xek0zIDloMXYxaC0xek0xMCA5aDF2MWgtMXoiLz48cGF0aCBmaWxsPSIjZTA0ODQ4IiBkPSJNMiA0aDF2MWgtMXpNNCA0aDF2MWgtMXpNOCA0aDF2MWgtMXpNMTAgNGgxdjFoLTF6TTEgNWgxdjFoLTF6TTMgNWgydjFoLTJ6TTggNWgxdjFoLTF6TTEwIDVoMnYxaC0yek0xIDZoMnYxaC0yek00IDZoMnYxaC0yek04IDZoMnYxaC0yek0xMSA2aDJ2MWgtMnpNMiA3aDJ2MWgtMnpNOSA3aDF2MWgtMXpNMTEgN2gxdjFoLTF6TTMgOGgxdjFoLTF6TTEwIDhoMXYxaC0xeiIvPjxwYXRoIGZpbGw9IiNmZmQzNmEiIGQ9Ik0yIDVoMXYxaC0xek01IDVoMXYxaC0xek05IDVoMXYxaC0xek0xMiA1aDF2MWgtMXpNMyA2aDF2MWgtMXpNMTAgNmgxdjFoLTF6TTQgN2gxdjFoLTF6TTEwIDdoMXYxaC0xeiIvPjwvc3ZnPg=="
+  asset house = base64"PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNiAxNiIgc2hhcGUtcmVuZGVyaW5nPSJjcmlzcEVkZ2VzIj48cGF0aCBmaWxsPSIjMmExZTMwIiBkPSJNMTAgMGg2djFoLTZ6TTIwIDBoMnYxaC0yek04IDFoMnYxaC0yek0xNiAxaDJ2MWgtMnpNMTkgMWgxdjFoLTF6TTIxIDFoMXYxaC0xek02IDJoMnYxaC0yek0xOCAyaDJ2MWgtMnpNMjEgMmgydjFoLTJ6TTQgM2gydjFoLTJ6TTIwIDNoMnYxaC0yek0yIDRoMnYxaC0yek0yMiA0aDJ2MWgtMnpNMCA1aDJ2MWgtMnpNMjQgNWgydjFoLTJ6TTAgNmgxdjFoLTF6TTI1IDZoMXYxaC0xek0xIDdoMXYxaC0xek0yNCA3aDF2MWgtMXpNMSA4aDF2MWgtMXpNMyA4aDV2MWgtNXpNMTcgOGg1djFoLTV6TTI0IDhoMXYxaC0xek0xIDloMXYxaC0xek0zIDloMXYxaC0xek03IDloMXYxaC0xek0xMSA5aDV2MWgtNXpNMTcgOWgxdjFoLTF6TTIxIDloMXYxaC0xek0yNCA5aDF2MWgtMXpNMSAxMGgxdjFoLTF6TTMgMTBoMXYxaC0xek03IDEwaDF2MWgtMXpNMTEgMTBoMXYxaC0xek0xNSAxMGgxdjFoLTF6TTE3IDEwaDF2MWgtMXpNMjEgMTBoMXYxaC0xek0yNCAxMGgxdjFoLTF6TTEgMTFoMXYxaC0xek0zIDExaDV2MWgtNXpNMTEgMTFoMXYxaC0xek0xNSAxMWgxdjFoLTF6TTE3IDExaDV2MWgtNXpNMjQgMTFoMXYxaC0xek0xIDEyaDF2MWgtMXpNMTEgMTJoMXYxaC0xek0xNSAxMmgxdjFoLTF6TTI0IDEyaDF2MWgtMXpNMSAxM2gxdjFoLTF6TTExIDEzaDF2MWgtMXpNMTUgMTNoMXYxaC0xek0yNCAxM2gxdjFoLTF6TTEgMTRoMXYxaC0xek0xMSAxNGgxdjFoLTF6TTE1IDE0aDF2MWgtMXpNMjQgMTRoMXYxaC0xek0xIDE1aDI0djFoLTI0eiIvPjxwYXRoIGZpbGw9IiNlMDQ4NDgiIGQ9Ik0xMCAxaDZ2MWgtNnpNOCAyaDEwdjFoLTEwek02IDNoMTR2MWgtMTR6TTQgNGgxOHYxaC0xOHpNMiA1aDIydjFoLTIyeiIvPjxwYXRoIGZpbGw9IiM3YTc0OTAiIGQ9Ik0yMCAxaDF2MWgtMXpNMjAgMmgxdjFoLTF6Ii8+PHBhdGggZmlsbD0iI2EwMjgzOCIgZD0iTTEgNmgyNHYxaC0yNHoiLz48cGF0aCBmaWxsPSIjZjBkOGIwIiBkPSJNMiA3aDIydjFoLTIyek0yIDhoMXYxaC0xek04IDhoOXYxaC05ek0yMiA4aDJ2MWgtMnpNMiA5aDF2MWgtMXpNOCA5aDN2MWgtM3pNMTYgOWgxdjFoLTF6TTIyIDloMnYxaC0yek0yIDEwaDF2MWgtMXpNOCAxMGgzdjFoLTN6TTE2IDEwaDF2MWgtMXpNMjIgMTBoMnYxaC0yek0yIDExaDF2MWgtMXpNOCAxMWgzdjFoLTN6TTE2IDExaDF2MWgtMXpNMjIgMTFoMnYxaC0yek0yIDEyaDl2MWgtOXpNMTYgMTJoOHYxaC04ek0yIDEzaDl2MWgtOXpNMTYgMTNoOHYxaC04ek0yIDE0aDl2MWgtOXpNMTYgMTRoOHYxaC04eiIvPjxwYXRoIGZpbGw9IiNhOGU4ZmYiIGQ9Ik00IDloMnYxaC0yek0xOCA5aDJ2MWgtMnpNNCAxMGgxdjFoLTF6TTE4IDEwaDF2MWgtMXoiLz48cGF0aCBmaWxsPSIjM2E5YWQ4IiBkPSJNNiA5aDF2MWgtMXpNMjAgOWgxdjFoLTF6TTUgMTBoMnYxaC0yek0xOSAxMGgydjFoLTJ6Ii8+PHBhdGggZmlsbD0iI2IwN2E0NSIgZD0iTTEyIDEwaDN2MWgtM3pNMTIgMTFoM3YxaC0zek0xMiAxMmgxdjFoLTF6TTE0IDEyaDF2MWgtMXpNMTIgMTNoM3YxaC0zek0xMiAxNGgzdjFoLTN6Ii8+PHBhdGggZmlsbD0iIzZhNDQyOCIgZD0iTTEzIDEyaDF2MWgtMXoiLz48L3N2Zz4="
+  asset farmer0 = base64"PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMiAxNCIgc2hhcGUtcmVuZGVyaW5nPSJjcmlzcEVkZ2VzIj48cGF0aCBmaWxsPSIjMmExZTMwIiBkPSJNMyAwaDZ2MWgtNnpNMiAxaDF2MWgtMXpNOSAxaDF2MWgtMXpNMSAyaDJ2MWgtMnpNOSAyaDJ2MWgtMnpNMCAzaDF2MWgtMXpNMTEgM2gxdjFoLTF6TTEgNGg5djFoLTl6TTMgNWgxdjFoLTF6TTggNWgxdjFoLTF6TTUgNmgxdjFoLTF6TTggNmgxdjFoLTF6TTMgN2gxdjFoLTF6TTggN2gxdjFoLTF6TTIgOGgxdjFoLTF6TTkgOGgxdjFoLTF6TTEgOWgxdjFoLTF6TTEwIDloMXYxaC0xek0xIDEwaDF2MWgtMXpNOSAxMGgxdjFoLTF6TTIgMTFoMXYxaC0xek05IDExaDF2MWgtMXpNMiAxMmgxdjFoLTF6TTUgMTJoMXYxaC0xek04IDEyaDF2MWgtMXpNMiAxM2gxdjFoLTF6TTggMTNoMXYxaC0xeiIvPjxwYXRoIGZpbGw9IiNmZmQzNmEiIGQ9Ik0zIDFoNnYxaC02ek0xIDNoMTB2MWgtMTB6Ii8+PHBhdGggZmlsbD0iI2Q4OTYyYSIgZD0iTTMgMmg2djFoLTZ6Ii8+PHBhdGggZmlsbD0iI2Y0YzhhMCIgZD0iTTQgNWg0djFoLTR6TTMgNmgydjFoLTJ6TTYgNmgydjFoLTJ6TTQgN2g0djFoLTR6TTkgOWgxdjFoLTF6Ii8+PHBhdGggZmlsbD0iIzRhOTBlMCIgZD0iTTMgOGg2djFoLTZ6TTIgOWgxdjFoLTF6TTQgOWg0djFoLTR6TTIgMTBoN3YxaC03ek0zIDExaDZ2MWgtNnoiLz48cGF0aCBmaWxsPSIjMmE1YWEwIiBkPSJNMyA5aDF2MWgtMXpNOCA5aDF2MWgtMXpNMyAxMmgydjFoLTJ6TTYgMTJoMnYxaC0yeiIvPjxwYXRoIGZpbGw9IiM2YTQ0MjgiIGQ9Ik0zIDEzaDJ2MWgtMnpNNiAxM2gydjFoLTJ6Ii8+PC9zdmc+"
+  asset farmer1 = base64"PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMiAxNCIgc2hhcGUtcmVuZGVyaW5nPSJjcmlzcEVkZ2VzIj48cGF0aCBmaWxsPSIjMmExZTMwIiBkPSJNMyAwaDZ2MWgtNnpNMiAxaDF2MWgtMXpNOSAxaDF2MWgtMXpNMSAyaDJ2MWgtMnpNOSAyaDJ2MWgtMnpNMCAzaDF2MWgtMXpNMTEgM2gxdjFoLTF6TTEgNGg5djFoLTl6TTMgNWgxdjFoLTF6TTggNWgxdjFoLTF6TTUgNmgxdjFoLTF6TTggNmgxdjFoLTF6TTMgN2gxdjFoLTF6TTggN2gxdjFoLTF6TTIgOGgxdjFoLTF6TTkgOGgxdjFoLTF6TTExIDhoMXYxaC0xek0xIDloMXYxaC0xek05IDloMXYxaC0xek0xIDEwaDF2MWgtMXpNOSAxMGgxdjFoLTF6TTIgMTFoMXYxaC0xek05IDExaDF2MWgtMXpNMiAxMmgxdjFoLTF6TTUgMTJoMXYxaC0xek04IDEyaDF2MWgtMXpNMiAxM2gxdjFoLTF6TTggMTNoMXYxaC0xeiIvPjxwYXRoIGZpbGw9IiNmZmQzNmEiIGQ9Ik0zIDFoNnYxaC02ek0xIDNoMTB2MWgtMTB6Ii8+PHBhdGggZmlsbD0iI2Q4OTYyYSIgZD0iTTMgMmg2djFoLTZ6Ii8+PHBhdGggZmlsbD0iI2Y0YzhhMCIgZD0iTTQgNWg0djFoLTR6TTMgNmgydjFoLTJ6TTYgNmgydjFoLTJ6TTQgN2g0djFoLTR6TTEwIDhoMXYxaC0xeiIvPjxwYXRoIGZpbGw9IiM0YTkwZTAiIGQ9Ik0zIDhoNnYxaC02ek0yIDloMXYxaC0xek00IDloNHYxaC00ek0yIDEwaDd2MWgtN3pNMyAxMWg2djFoLTZ6Ii8+PHBhdGggZmlsbD0iIzJhNWFhMCIgZD0iTTMgOWgxdjFoLTF6TTggOWgxdjFoLTF6TTMgMTJoMnYxaC0yek02IDEyaDJ2MWgtMnoiLz48cGF0aCBmaWxsPSIjNmE0NDI4IiBkPSJNMyAxM2gydjFoLTJ6TTYgMTNoMnYxaC0yeiIvPjwvc3ZnPg=="
+  asset plot = base64"PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMiA4IiBzaGFwZS1yZW5kZXJpbmc9ImNyaXNwRWRnZXMiPjxwYXRoIGZpbGw9IiMyYTFlMzAiIGQ9Ik0yIDFoOHYxaC04ek0xIDJoMXYxaC0xek0xMCAyaDF2MWgtMXpNMSAzaDF2MWgtMXpNMTAgM2gxdjFoLTF6TTEgNGgxdjFoLTF6TTEwIDRoMXYxaC0xek0xIDVoMXYxaC0xek0xMCA1aDF2MWgtMXpNMiA2aDh2MWgtOHpNMyA3aDF2MWgtMXpNOCA3aDF2MWgtMXoiLz48cGF0aCBmaWxsPSIjYjA3YTQ1IiBkPSJNMiAyaDF2MWgtMXpNNCAyaDF2MWgtMXpNNiAyaDF2MWgtMXpNOCAyaDF2MWgtMXpNMyAzaDF2MWgtMXpNNSAzaDF2MWgtMXpNNyAzaDF2MWgtMXpNOSAzaDF2MWgtMXpNMiA0aDF2MWgtMXpNNCA0aDF2MWgtMXpNNiA0aDF2MWgtMXpNOCA0aDF2MWgtMXpNMyA1aDF2MWgtMXpNNSA1aDF2MWgtMXpNNyA1aDF2MWgtMXpNOSA1aDF2MWgtMXoiLz48cGF0aCBmaWxsPSIjNmE0NDI4IiBkPSJNMyAyaDF2MWgtMXpNNSAyaDF2MWgtMXpNNyAyaDF2MWgtMXpNOSAyaDF2MWgtMXpNMiAzaDF2MWgtMXpNNCAzaDF2MWgtMXpNNiAzaDF2MWgtMXpNOCAzaDF2MWgtMXpNMyA0aDF2MWgtMXpNNSA0aDF2MWgtMXpNNyA0aDF2MWgtMXpNOSA0aDF2MWgtMXpNMiA1aDF2MWgtMXpNNCA1aDF2MWgtMXpNNiA1aDF2MWgtMXpNOCA1aDF2MWgtMXoiLz48L3N2Zz4="
+  asset houseLit = base64"PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNiAxNiIgc2hhcGUtcmVuZGVyaW5nPSJjcmlzcEVkZ2VzIj48cGF0aCBmaWxsPSIjMmExZTMwIiBkPSJNMTAgMGg2djFoLTZ6TTIwIDBoMnYxaC0yek04IDFoMnYxaC0yek0xNiAxaDJ2MWgtMnpNMTkgMWgxdjFoLTF6TTIxIDFoMXYxaC0xek02IDJoMnYxaC0yek0xOCAyaDJ2MWgtMnpNMjEgMmgydjFoLTJ6TTQgM2gydjFoLTJ6TTIwIDNoMnYxaC0yek0yIDRoMnYxaC0yek0yMiA0aDJ2MWgtMnpNMCA1aDJ2MWgtMnpNMjQgNWgydjFoLTJ6TTAgNmgxdjFoLTF6TTI1IDZoMXYxaC0xek0xIDdoMXYxaC0xek0yNCA3aDF2MWgtMXpNMSA4aDF2MWgtMXpNMyA4aDV2MWgtNXpNMTcgOGg1djFoLTV6TTI0IDhoMXYxaC0xek0xIDloMXYxaC0xek0zIDloMXYxaC0xek03IDloMXYxaC0xek0xMSA5aDV2MWgtNXpNMTcgOWgxdjFoLTF6TTIxIDloMXYxaC0xek0yNCA5aDF2MWgtMXpNMSAxMGgxdjFoLTF6TTMgMTBoMXYxaC0xek03IDEwaDF2MWgtMXpNMTEgMTBoMXYxaC0xek0xNSAxMGgxdjFoLTF6TTE3IDEwaDF2MWgtMXpNMjEgMTBoMXYxaC0xek0yNCAxMGgxdjFoLTF6TTEgMTFoMXYxaC0xek0zIDExaDV2MWgtNXpNMTEgMTFoMXYxaC0xek0xNSAxMWgxdjFoLTF6TTE3IDExaDV2MWgtNXpNMjQgMTFoMXYxaC0xek0xIDEyaDF2MWgtMXpNMTEgMTJoMXYxaC0xek0xNSAxMmgxdjFoLTF6TTI0IDEyaDF2MWgtMXpNMSAxM2gxdjFoLTF6TTExIDEzaDF2MWgtMXpNMTUgMTNoMXYxaC0xek0yNCAxM2gxdjFoLTF6TTEgMTRoMXYxaC0xek0xMSAxNGgxdjFoLTF6TTE1IDE0aDF2MWgtMXpNMjQgMTRoMXYxaC0xek0xIDE1aDI0djFoLTI0eiIvPjxwYXRoIGZpbGw9IiNlMDQ4NDgiIGQ9Ik0xMCAxaDZ2MWgtNnpNOCAyaDEwdjFoLTEwek02IDNoMTR2MWgtMTR6TTQgNGgxOHYxaC0xOHpNMiA1aDIydjFoLTIyeiIvPjxwYXRoIGZpbGw9IiM3YTc0OTAiIGQ9Ik0yMCAxaDF2MWgtMXpNMjAgMmgxdjFoLTF6Ii8+PHBhdGggZmlsbD0iI2EwMjgzOCIgZD0iTTEgNmgyNHYxaC0yNHoiLz48cGF0aCBmaWxsPSIjZjBkOGIwIiBkPSJNMiA3aDIydjFoLTIyek0yIDhoMXYxaC0xek04IDhoOXYxaC05ek0yMiA4aDJ2MWgtMnpNMiA5aDF2MWgtMXpNOCA5aDN2MWgtM3pNMTYgOWgxdjFoLTF6TTIyIDloMnYxaC0yek0yIDEwaDF2MWgtMXpNOCAxMGgzdjFoLTN6TTE2IDEwaDF2MWgtMXpNMjIgMTBoMnYxaC0yek0yIDExaDF2MWgtMXpNOCAxMWgzdjFoLTN6TTE2IDExaDF2MWgtMXpNMjIgMTFoMnYxaC0yek0yIDEyaDl2MWgtOXpNMTYgMTJoOHYxaC04ek0yIDEzaDl2MWgtOXpNMTYgMTNoOHYxaC04ek0yIDE0aDl2MWgtOXpNMTYgMTRoOHYxaC04eiIvPjxwYXRoIGZpbGw9IiNmZmQzNmEiIGQ9Ik00IDloMnYxaC0yek0xOCA5aDJ2MWgtMnpNNCAxMGgxdjFoLTF6TTE4IDEwaDF2MWgtMXoiLz48cGF0aCBmaWxsPSIjZmZiMDQwIiBkPSJNNiA5aDF2MWgtMXpNMjAgOWgxdjFoLTF6TTUgMTBoMnYxaC0yek0xOSAxMGgydjFoLTJ6Ii8+PHBhdGggZmlsbD0iI2IwN2E0NSIgZD0iTTEyIDEwaDN2MWgtM3pNMTIgMTFoM3YxaC0zek0xMiAxMmgxdjFoLTF6TTE0IDEyaDF2MWgtMXpNMTIgMTNoM3YxaC0zek0xMiAxNGgzdjFoLTN6Ii8+PHBhdGggZmlsbD0iIzZhNDQyOCIgZD0iTTEzIDEyaDF2MWgtMXoiLz48L3N2Zz4="
+  asset fish0 = base64"PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNCA3IiBzaGFwZS1yZW5kZXJpbmc9ImNyaXNwRWRnZXMiPjxwYXRoIGZpbGw9IiMyYTFlMzAiIGQ9Ik00IDBoNXYxaC01ek0yIDFoMnYxaC0yek05IDFoMnYxaC0yek0xMiAxaDJ2MWgtMnpNMSAyaDF2MWgtMXpNMTEgMmgxdjFoLTF6TTEzIDJoMXYxaC0xek0wIDNoMXYxaC0xek0yIDNoMXYxaC0xek0xMyAzaDF2MWgtMXpNMCA0aDF2MWgtMXpNMTEgNGgxdjFoLTF6TTEzIDRoMXYxaC0xek0xIDVoMnYxaC0yek05IDVoMnYxaC0yek0xMiA1aDJ2MWgtMnpNMyA2aDd2MWgtN3oiLz48cGF0aCBmaWxsPSIjN2E3NDkwIiBkPSJNNCAxaDV2MWgtNXpNMTIgMmgxdjFoLTF6TTExIDNoMnYxaC0yek0xMiA0aDF2MWgtMXoiLz48cGF0aCBmaWxsPSIjYzBiOGQwIiBkPSJNMiAyaDl2MWgtOXpNMyAzaDh2MWgtOHpNMSA0aDJ2MWgtMnpNOCA0aDN2MWgtM3oiLz48cGF0aCBmaWxsPSIjZmZmNmU4IiBkPSJNMSAzaDF2MWgtMXpNMyA0aDV2MWgtNXpNMyA1aDZ2MWgtNnoiLz48L3N2Zz4="
+  asset fish1 = base64"PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNCA3IiBzaGFwZS1yZW5kZXJpbmc9ImNyaXNwRWRnZXMiPjxwYXRoIGZpbGw9IiMyYTFlMzAiIGQ9Ik00IDBoNXYxaC01ek0yIDFoMnYxaC0yek05IDFoMnYxaC0yek0xMiAxaDJ2MWgtMnpNMSAyaDF2MWgtMXpNMTEgMmgxdjFoLTF6TTEzIDJoMXYxaC0xek0wIDNoMXYxaC0xek0yIDNoMXYxaC0xek0xMyAzaDF2MWgtMXpNMCA0aDF2MWgtMXpNMTEgNGgxdjFoLTF6TTEzIDRoMXYxaC0xek0xIDVoMnYxaC0yek05IDVoMnYxaC0yek0xMiA1aDJ2MWgtMnpNMyA2aDd2MWgtN3oiLz48cGF0aCBmaWxsPSIjM2E4YTNhIiBkPSJNNCAxaDV2MWgtNXpNMTIgMmgxdjFoLTF6TTExIDNoMnYxaC0yek0xMiA0aDF2MWgtMXoiLz48cGF0aCBmaWxsPSIjZmZkMzZhIiBkPSJNMiAyaDl2MWgtOXpNMyAzaDh2MWgtOHpNMSA0aDJ2MWgtMnpNOCA0aDN2MWgtM3oiLz48cGF0aCBmaWxsPSIjZmZmNmU4IiBkPSJNMSAzaDF2MWgtMXpNMyA0aDV2MWgtNXpNMyA1aDZ2MWgtNnoiLz48L3N2Zz4="
+  asset fish2 = base64"PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNCA3IiBzaGFwZS1yZW5kZXJpbmc9ImNyaXNwRWRnZXMiPjxwYXRoIGZpbGw9IiMyYTFlMzAiIGQ9Ik00IDBoNXYxaC01ek0yIDFoMnYxaC0yek05IDFoMnYxaC0yek0xMiAxaDJ2MWgtMnpNMSAyaDF2MWgtMXpNMTEgMmgxdjFoLTF6TTEzIDJoMXYxaC0xek0wIDNoMXYxaC0xek0yIDNoMXYxaC0xek0xMyAzaDF2MWgtMXpNMCA0aDF2MWgtMXpNMTEgNGgxdjFoLTF6TTEzIDRoMXYxaC0xek0xIDVoMnYxaC0yek05IDVoMnYxaC0yek0xMiA1aDJ2MWgtMnpNMyA2aDd2MWgtN3oiLz48cGF0aCBmaWxsPSIjNmE0NDI4IiBkPSJNNCAxaDV2MWgtNXpNMTIgMmgxdjFoLTF6TTExIDNoMnYxaC0yek0xMiA0aDF2MWgtMXoiLz48cGF0aCBmaWxsPSIjZDg5NjJhIiBkPSJNMiAyaDl2MWgtOXpNMyAzaDh2MWgtOHpNMSA0aDJ2MWgtMnpNOCA0aDN2MWgtM3oiLz48cGF0aCBmaWxsPSIjZmZmNmU4IiBkPSJNMSAzaDF2MWgtMXoiLz48cGF0aCBmaWxsPSIjZjBkOGIwIiBkPSJNMyA0aDV2MWgtNXpNMyA1aDZ2MWgtNnoiLz48L3N2Zz4="
+  asset fish3 = base64"PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNCA3IiBzaGFwZS1yZW5kZXJpbmc9ImNyaXNwRWRnZXMiPjxwYXRoIGZpbGw9IiMyYTFlMzAiIGQ9Ik00IDBoNXYxaC01ek0yIDFoMnYxaC0yek05IDFoMnYxaC0yek0xMiAxaDJ2MWgtMnpNMSAyaDF2MWgtMXpNMTEgMmgxdjFoLTF6TTEzIDJoMXYxaC0xek0wIDNoMXYxaC0xek0yIDNoMXYxaC0xek0xMyAzaDF2MWgtMXpNMCA0aDF2MWgtMXpNMTEgNGgxdjFoLTF6TTEzIDRoMXYxaC0xek0xIDVoMnYxaC0yek05IDVoMnYxaC0yek0xMiA1aDJ2MWgtMnpNMyA2aDd2MWgtN3oiLz48cGF0aCBmaWxsPSIjM2E4YTNhIiBkPSJNNCAxaDV2MWgtNXpNMTIgMmgxdjFoLTF6TTExIDNoMnYxaC0yek0xMiA0aDF2MWgtMXoiLz48cGF0aCBmaWxsPSIjZmY4YWIwIiBkPSJNMiAyaDl2MWgtOXpNMyAzaDh2MWgtOHpNMSA0aDJ2MWgtMnpNOCA0aDN2MWgtM3oiLz48cGF0aCBmaWxsPSIjZmZmNmU4IiBkPSJNMSAzaDF2MWgtMXpNMyA0aDV2MWgtNXpNMyA1aDZ2MWgtNnoiLz48L3N2Zz4="
+  asset fish4 = base64"PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNCA3IiBzaGFwZS1yZW5kZXJpbmc9ImNyaXNwRWRnZXMiPjxwYXRoIGZpbGw9IiMyYTFlMzAiIGQ9Ik00IDBoNXYxaC01ek0yIDFoMnYxaC0yek05IDFoMnYxaC0yek0xMiAxaDJ2MWgtMnpNMSAyaDF2MWgtMXpNMTEgMmgxdjFoLTF6TTEzIDJoMXYxaC0xek0wIDNoMXYxaC0xek0yIDNoMXYxaC0xek0xMyAzaDF2MWgtMXpNMCA0aDF2MWgtMXpNMTEgNGgxdjFoLTF6TTEzIDRoMXYxaC0xek0xIDVoMnYxaC0yek05IDVoMnYxaC0yek0xMiA1aDJ2MWgtMnpNMyA2aDd2MWgtN3oiLz48cGF0aCBmaWxsPSIjM2E4YTNhIiBkPSJNNCAxaDV2MWgtNXpNMTIgMmgxdjFoLTF6TTExIDNoMnYxaC0yek0xMiA0aDF2MWgtMXoiLz48cGF0aCBmaWxsPSIjNWZiMDQ4IiBkPSJNMiAyaDl2MWgtOXpNMyAzaDh2MWgtOHpNMSA0aDJ2MWgtMnpNOCA0aDN2MWgtM3oiLz48cGF0aCBmaWxsPSIjZmZmNmU4IiBkPSJNMSAzaDF2MWgtMXoiLz48cGF0aCBmaWxsPSIjZjBkOGIwIiBkPSJNMyA0aDV2MWgtNXpNMyA1aDZ2MWgtNnoiLz48L3N2Zz4="
+  asset fish5 = base64"PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNCA3IiBzaGFwZS1yZW5kZXJpbmc9ImNyaXNwRWRnZXMiPjxwYXRoIGZpbGw9IiMyYTFlMzAiIGQ9Ik00IDBoNXYxaC01ek0yIDFoMnYxaC0yek05IDFoMnYxaC0yek0xMiAxaDJ2MWgtMnpNMSAyaDF2MWgtMXpNMTEgMmgxdjFoLTF6TTEzIDJoMXYxaC0xek0wIDNoMXYxaC0xek0yIDNoMXYxaC0xek0xMyAzaDF2MWgtMXpNMCA0aDF2MWgtMXpNMTEgNGgxdjFoLTF6TTEzIDRoMXYxaC0xek0xIDVoMnYxaC0yek05IDVoMnYxaC0yek0xMiA1aDJ2MWgtMnpNMyA2aDd2MWgtN3oiLz48cGF0aCBmaWxsPSIjNGE0NDU4IiBkPSJNNCAxaDV2MWgtNXpNMTIgMmgxdjFoLTF6TTExIDNoMnYxaC0yek0xMiA0aDF2MWgtMXoiLz48cGF0aCBmaWxsPSIjN2E3NDkwIiBkPSJNMiAyaDl2MWgtOXpNMyAzaDh2MWgtOHpNMSA0aDJ2MWgtMnpNOCA0aDN2MWgtM3oiLz48cGF0aCBmaWxsPSIjZmZmNmU4IiBkPSJNMSAzaDF2MWgtMXoiLz48cGF0aCBmaWxsPSIjYzBiOGQwIiBkPSJNMyA0aDV2MWgtNXpNMyA1aDZ2MWgtNnoiLz48L3N2Zz4="
+  asset fish6 = base64"PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNCA3IiBzaGFwZS1yZW5kZXJpbmc9ImNyaXNwRWRnZXMiPjxwYXRoIGZpbGw9IiMyYTFlMzAiIGQ9Ik00IDBoNXYxaC01ek0yIDFoMnYxaC0yek05IDFoMnYxaC0yek0xMiAxaDJ2MWgtMnpNMSAyaDF2MWgtMXpNMTEgMmgxdjFoLTF6TTEzIDJoMXYxaC0xek0wIDNoMXYxaC0xek0yIDNoMXYxaC0xek0xMyAzaDF2MWgtMXpNMCA0aDF2MWgtMXpNMTEgNGgxdjFoLTF6TTEzIDRoMXYxaC0xek0xIDVoMnYxaC0yek05IDVoMnYxaC0yek0xMiA1aDJ2MWgtMnpNMyA2aDd2MWgtN3oiLz48cGF0aCBmaWxsPSIjM2E4YTNhIiBkPSJNNCAxaDV2MWgtNXpNMTIgMmgxdjFoLTF6TTExIDNoMnYxaC0yek0xMiA0aDF2MWgtMXoiLz48cGF0aCBmaWxsPSIjOGFkODYwIiBkPSJNMiAyaDl2MWgtOXpNMyAzaDh2MWgtOHpNMSA0aDJ2MWgtMnpNOCA0aDN2MWgtM3oiLz48cGF0aCBmaWxsPSIjZmZmNmU4IiBkPSJNMSAzaDF2MWgtMXoiLz48cGF0aCBmaWxsPSIjZmZkMzZhIiBkPSJNMyA0aDV2MWgtNXpNMyA1aDZ2MWgtNnoiLz48L3N2Zz4="
+  asset fish7 = base64"PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNCA3IiBzaGFwZS1yZW5kZXJpbmc9ImNyaXNwRWRnZXMiPjxwYXRoIGZpbGw9IiMyYTFlMzAiIGQ9Ik00IDBoNXYxaC01ek0yIDFoMnYxaC0yek05IDFoMnYxaC0yek0xMiAxaDJ2MWgtMnpNMSAyaDF2MWgtMXpNMTEgMmgxdjFoLTF6TTEzIDJoMXYxaC0xek0wIDNoMXYxaC0xek0yIDNoMXYxaC0xek0xMyAzaDF2MWgtMXpNMCA0aDF2MWgtMXpNMTEgNGgxdjFoLTF6TTEzIDRoMXYxaC0xek0xIDVoMnYxaC0yek05IDVoMnYxaC0yek0xMiA1aDJ2MWgtMnpNMyA2aDd2MWgtN3oiLz48cGF0aCBmaWxsPSIjMmEyMjM2IiBkPSJNNCAxaDV2MWgtNXpNMTIgMmgxdjFoLTF6TTExIDNoMnYxaC0yek0xMiA0aDF2MWgtMXoiLz48cGF0aCBmaWxsPSIjNGE0NDU4IiBkPSJNMiAyaDl2MWgtOXpNMyAzaDh2MWgtOHpNMSA0aDJ2MWgtMnpNOCA0aDN2MWgtM3oiLz48cGF0aCBmaWxsPSIjZmZmNmU4IiBkPSJNMSAzaDF2MWgtMXoiLz48cGF0aCBmaWxsPSIjOWE1YWQ4IiBkPSJNMyA0aDV2MWgtNXpNMyA1aDZ2MWgtNnoiLz48L3N2Zz4="
+  asset fish8 = base64"PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNCA3IiBzaGFwZS1yZW5kZXJpbmc9ImNyaXNwRWRnZXMiPjxwYXRoIGZpbGw9IiMyYTFlMzAiIGQ9Ik00IDBoNXYxaC01ek0yIDFoMnYxaC0yek05IDFoMnYxaC0yek0xMiAxaDJ2MWgtMnpNMSAyaDF2MWgtMXpNMTEgMmgxdjFoLTF6TTEzIDJoMXYxaC0xek0wIDNoMXYxaC0xek0yIDNoMXYxaC0xek0xMyAzaDF2MWgtMXpNMCA0aDF2MWgtMXpNMTEgNGgxdjFoLTF6TTEzIDRoMXYxaC0xek0xIDVoMnYxaC0yek05IDVoMnYxaC0yek0xMiA1aDJ2MWgtMnpNMyA2aDd2MWgtN3oiLz48cGF0aCBmaWxsPSIjZmY5YTQ4IiBkPSJNNCAxaDV2MWgtNXpNMTIgMmgxdjFoLTF6TTExIDNoMnYxaC0yek0xMiA0aDF2MWgtMXoiLz48cGF0aCBmaWxsPSIjZmZkMzZhIiBkPSJNMiAyaDl2MWgtOXpNMyAzaDh2MWgtOHpNMSA0aDJ2MWgtMnpNOCA0aDN2MWgtM3oiLz48cGF0aCBmaWxsPSIjZmZmNmU4IiBkPSJNMSAzaDF2MWgtMXpNMyA0aDV2MWgtNXpNMyA1aDZ2MWgtNnoiLz48L3N2Zz4="
+  // ---- end of the art as SVG
+  // a crop as it grows (just sown, a sprout, a young plant) and each crop ripe; widths and heights
+  // in art pixels
+  let stageImg = [sown, sprout, young]
+  let stageW = [10, 10, 12]
+  let stageH = [3, 5, 9]
+  let ripeImg = [radish, carrot, potato, tomato, corn, pumpkin, strawberry]
+  let ripeH = [12, 11, 10, 12, 12, 11, 10]
+  let fishImg = [fish0, fish1, fish2, fish3, fish4, fish5, fish6, fish7, fish8]
+  // what isn't caught or grown yet shows as a silhouette
+  let SHADOW = "#3a3360"
+  let bobberArt = [".oo.", "oRRo", "oWWo", ".oo."]
+  let lilyArt = [".gGGg.", "gGLGGg", "GLG.Gg", "gGGGg."]
+  let chickArt = [["..R....", ".oWWo..", "oWoWW..", "Y.WWWWo", "..WWWWo", "..oWWo.", "...y.y."], ["..R....", ".oWWo..", ".oWoWWo", "..WWWWo", "Y.WWWWo", "..oWWo.", "...y.y."]]
+  let coinArt = ["..ooo..", ".oYYYo.", "oYWYYyo", "oYWYYyo", "oYYYYyo", ".oyyyo.", "..ooo.."]
+  let sunArt = ["..Y..Y..", "...YY...", ".YYYYYY.", "YYYYYYYY", ".YYYYYY.", "...YY...", "..Y..Y.."]
+  let moonArt = ["..WWW...", ".WWW....", "WWW.....", "WWW.....", "WWW.....", ".WWW....", "..WWW..."]
+
+  // What doesn't move, worked out once: tufts of grass and flowers around the field
+  let tufts = range(60).map(i => [hash(i, 1) * SCW, SY + hash(i, 2) * (SB - SY), hash(i, 3) < 0.25 ? ["#fff6e8", "#ff8ab0", "#ffd36a"][floor(hash(i, 4) * 3)] : "#8ad860"]).filter(g => !(g[0] > FX - 6 && g[0] < FX + 6 * C + 6 && g[1] > FY - 6 && g[1] < FY + 4 * C + 6) && !(g[0] > PDX - 4 && g[0] < PDX + PDW + 4 && g[1] > PDY - 4 && g[1] < PDY + PDH + 4))
+  let ripples = range(7).map(i => [PDX + (0.12 + hash(i, 5) * 0.76) * PDW, PDY + (0.15 + hash(i, 6) * 0.7) * PDH, hash(i, 7) * 6])
+  let lilies = range(3).map(i => [PDX + (0.45 + hash(i, 8) * 0.45) * PDW, PDY + (0.12 + hash(i, 9) * 0.65) * PDH])
+
+  Canvas {
+    fill: true
+    background: UI.bg
+
+    // ---- fishing goes by the finger going down, for the timing ----
+    onPress: {
+      let inPond = x >= PDX && x < PDX + PDW && y >= PDY && y < PDY + PDH && x > DX
+      let inPanel = (LS ? x >= PX : y >= PY) && y >= PY + TH + 4
+      // a cast from before the clock started over (the app was reloaded) is dropped
+      if (fs == 1 && pressT > time) || (fs == 2 && biteAt > time + 6) || (fs == 3 && reelT > time) || (fs >= 4 && endT > time) {
+        fs = 0
+      }
+      if tab == 1 && (inPanel || inPond) {
+        if fs == 0 {
+          if fishLeft > 0 {
+            fs = 1
+            pressT = time
+          } else {
+            msg = "THE FISH ARE RESTING|BACK IN ${[nextFish].map(fmtT)[0]}"
+            msgT = time
+          }
+        } else if fs == 2 {
+          if time < biteAt {
+            fs = 5
+            why = "TOO SOON!"
+            endT = time
+          } else if time <= biteAt + BITE {
+            fs = 3
+            reelT = time
+            hits = 0
+            misses = 0
+            haptic()
+          } else {
+            fs = 0
+          }
+        } else if fs == 3 {
+          let f = FISH[fish]
+          let rt = time - reelT
+          let m = 1 - abs((rt * f.sp) % 2 - 1)
+          let z = 0.5 + 0.22 * sin(rt * (0.9 + fish * 0.08)) + 0.14 * sin(rt * (2.3 + fish * 0.1) + 1.7)
+          if abs(m - z) <= f.w / 2 + 0.03 {
+            hits = hits + 1
+            haptic()
+            if hits >= f.need {
+              fresh = caught[fish] == 0
+              caught = set(caught, fish, caught[fish] + 1)
+              bank = bank + f.v
+              xp = xp + f.x
+              if fishLeft >= 5 {
+                stock = 4
+                stockT = tnow
+              } else {
+                stock = fishLeft - 1
+                stockT = stockT + refill * STOCKS
+              }
+              fs = 4
+              endT = time
+            }
+          } else {
+            misses = misses + 1
+            if misses >= 3 {
+              fs = 5
+              why = "THE LINE SNAPPED"
+              endT = time
+            }
+          }
+        } else if fs >= 4 && time - endT > 0.6 {
+          fs = 0
+        }
+      }
+    }
+
+    // letting go casts: the further the gauge had swung, the further out, and the rarer the fish
+    onRelease: {
+      if fs == 1 {
+        power = 1 - abs(((time - pressT) * 0.8) % 2 - 1)
+        let ok = range(9).filter(i => FISH[i].p <= power && (FISH[i].h == 0 || (FISH[i].h == 2) == night))
+        let ws = ok.map(i => FISH[i].wt * (1 + power * i * 0.4))
+        let r = random() * sum(ws)
+        fish = ok[min(len(ok) - 1, count(scan(ws, (a, b) => a + b, 0), c => c <= r))]
+        biteAt = time + 1.5 + random() * 4
+        fs = 2
+      }
+    }
+
+    onTap: {
+      let col = floor((x - FX) / C)
+      let row = floor((y - FY) / C)
+      let p = row * 6 + col
+      let inPanel = LS ? x >= PX : y >= PY
+      if x >= FX && x < FX + 6 * C && y >= FY && y < FY + 4 * C {
+        if p >= plots {
+          if plots >= 24 {
+          } else if time - armT < 3 && time >= armT {
+            if bank >= fieldCost {
+              bank = bank - fieldCost
+              plots = plots + 3
+              armT = -99
+              msg = "MORE FIELD!"
+              msgT = time
+              haptic()
+            } else {
+              msg = "NOT ENOUGH COINS"
+              msgT = time
+            }
+          } else {
+            armT = time
+            msg = "3 MORE PLOTS: ${[fieldCost].map(fmt)[0]}|TAP AGAIN TO BUY"
+            msgT = time
+          }
+        } else if field[p].k >= 0 && grow[p] >= 1 {
+          let k = field[p].k
+          let big = random() < 0.06
+          let v = CROPS[k].v * (big ? 3 : 1)
+          bank = bank + v
+          xp = xp + CROPS[k].x
+          grown = set(grown, k, grown[k] + 1)
+          field = set(field, p, {k: -1, t: 0})
+          pops = drop(pops, max(0, len(pops) - 7)) + [{p: p, s: big ? "GIANT! +${v}" : "+${v}", t: time}]
+          haptic()
+        } else if field[p].k >= 0 {
+          msg = "${CROPS[field[p].k].n}|READY IN ${[CROPS[field[p].k].g - (tnow - field[p].t)].map(fmtT)[0]}"
+          msgT = time
+        } else if seed < 0 {
+          msg = "PICK A SEED BELOW"
+          msgT = time
+        } else if bank >= CROPS[seed].cost {
+          bank = bank - CROPS[seed].cost
+          field = set(field, p, {k: seed, t: tnow})
+        } else {
+          msg = "NOT ENOUGH COINS"
+          msgT = time
+        }
+      } else if x >= PDX && x < PDX + PDW && y >= PDY && y < PDY + PDH {
+        tab = 1
+      } else if inPanel && y >= PY && y < PY + TH {
+        tab = clamp(floor((x - PX) / (PW / 3)), 0, 2)
+      } else if inPanel && tab == 0 && y >= CY && y < CY + 2 * CH + 6 {
+        let j = floor((y - CY) / (CH + 6)) * 4 + floor((x - PX) / (CW + 6))
+        if j >= 0 && j < 7 {
+          if lvl >= CROPS[j].lv {
+            seed = seed == j ? -1 : j
+          } else {
+            msg = "${CROPS[j].n}|AT LEVEL ${CROPS[j].lv}"
+            msgT = time
+          }
+        } else if j == 7 && plots < 24 {
+          if time - armT < 3 && time >= armT {
+            if bank >= fieldCost {
+              bank = bank - fieldCost
+              plots = plots + 3
+              armT = -99
+              msg = "MORE FIELD!"
+              msgT = time
+              haptic()
+            } else {
+              msg = "NOT ENOUGH COINS"
+              msgT = time
+            }
+          } else {
+            armT = time
+          }
+        }
+      }
+    }
+
+    // a finger dragged over the field harvests what's ripe and sows the seed picked
+    onDrag: {
+      let col = floor((x - FX) / C)
+      let row = floor((y - FY) / C)
+      let p = row * 6 + col
+      if x >= FX && x < FX + 6 * C && y >= FY && y < FY + 4 * C && p < plots {
+        if field[p].k >= 0 && grow[p] >= 1 {
+          let k = field[p].k
+          let big = random() < 0.06
+          let v = CROPS[k].v * (big ? 3 : 1)
+          bank = bank + v
+          xp = xp + CROPS[k].x
+          grown = set(grown, k, grown[k] + 1)
+          field = set(field, p, {k: -1, t: 0})
+          pops = drop(pops, max(0, len(pops) - 7)) + [{p: p, s: big ? "GIANT! +${v}" : "+${v}", t: time}]
+          haptic()
+        } else if field[p].k < 0 && seed >= 0 && bank >= CROPS[seed].cost {
+          bank = bank - CROPS[seed].cost
+          field = set(field, p, {k: seed, t: tnow})
+        }
+      }
+    }
+
+    // ---- the grass, with tufts and flowers ----
+    rect(0, SY, SCW, SB - SY, fill: "#6cbf4a")
+    for g in tufts { rect(g[0], g[1], g[2] == "#8ad860" ? 2 * q : q, q, fill: g[2]) }
+
+    // ---- the house, a tree and a hen above the field ----
+    let hx = FX + 2 * q
+    let hy = FY - 3 * q - 16 * q * 1.4
+    rect(hx + 12 * 1.4 * q, hy + 16 * 1.4 * q, 4 * 1.4 * q, FY - hy - 16 * 1.4 * q, fill: "#e8d4a8")
+    image(night || dusk ? houseLit : house, hx, hy, 26 * 1.4 * q, 16 * 1.4 * q)
+    let tx = FX + 6 * C - 18 * q
+    let ty = FY - 4 * q
+    rect(tx + 7 * q, ty - 7 * q, 2 * q, 5 * q, fill: "#6a4428")
+    rect(tx + 2 * q, ty - 17 * q, 12 * q, 10 * q, fill: "#2a1e30")
+    rect(tx + 3 * q, ty - 18 * q, 10 * q, 12 * q, fill: "#2a1e30")
+    rect(tx + 3 * q, ty - 16 * q, 10 * q, 8 * q, fill: "#3a8a3a")
+    rect(tx + 4 * q, ty - 17 * q, 8 * q, 10 * q, fill: "#3a8a3a")
+    rect(tx + 3 * q, ty - 16 * q, 9 * q, 5 * q, fill: "#5fb048")
+    rect(tx + 4 * q, ty - 17 * q, 7 * q, 7 * q, fill: "#5fb048")
+    rect(tx + 5 * q, ty - 16 * q, 3 * q, 2 * q, fill: "#8ad860")
+    rect(tx + 9 * q, ty - 13 * q, 2 * q, 2 * q, fill: "#e04848")
+    rect(tx + 5 * q, ty - 11 * q, 2 * q, 2 * q, fill: "#e04848")
+    let cx0 = hx + 30 * 1.4 * q + (tx - hx - 30 * 1.4 * q) * (0.3 + 0.4 * (0.5 + 0.5 * sin(time * 0.21)))
+    sprite(chickArt[floor(time * 1.6) % 5 == 0 ? 1 : 0], cx0, FY - 11 * q, q, palette: PAL)
+
+    // ---- the field, behind a fence ----
+    rect(FX - 3 * q, FY - 3 * q, 6 * C + 6 * q, q, fill: "#8a5a32")
+    rect(FX - 3 * q, FY + 4 * C + 2 * q, 6 * C + 6 * q, q, fill: "#8a5a32")
+    for i in range(7) {
+      rect(FX - 2 * q + i * (C - 2 * q / 6 * 0), FY - 5 * q, 2 * q, 4 * q, fill: "#6a4428")
+      rect(FX - 2 * q + i * C, FY + 4 * C, 2 * q, 4 * q, fill: "#6a4428")
+    }
+    for p in range(24) {
+      let px = FX + p % 6 * C
+      let py = FY + floor(p / 6) * C
+      if p < plots {
+        rect(px + q, py + q, C - 2 * q, C - 2 * q, fill: field[p].k >= 0 ? "#7a5030" : "#9a6a40")
+        rect(px + 3 * q, py + 5 * q, C - 6 * q, q, fill: field[p].k >= 0 ? "#5e3c22" : "#7a5030")
+        rect(px + 3 * q, py + 10 * q, C - 6 * q, q, fill: field[p].k >= 0 ? "#5e3c22" : "#7a5030")
+      } else {
+        rect(px + q, py + q, C - 2 * q, C - 2 * q, fill: "#5aa83e")
+        rect(px + (3 + floor(hash(p, 1) * 8)) * q, py + (3 + floor(hash(p, 2) * 8)) * q, 2 * q, q, fill: "#3a8a3a")
+        rect(px + (3 + floor(hash(p, 3) * 8)) * q, py + (3 + floor(hash(p, 4) * 8)) * q, 2 * q, q, fill: "#3a8a3a")
+      }
+    }
+    // the next plots for sale
+    if plots < 24 {
+      let sp = plots
+      let sx = FX + (sp % 6 + 1.5) * C
+      let sy = FY + (floor(sp / 6) + 0.5) * C
+      image(plot, sx - 6 * 1.2 * q, sy - 5 * 1.2 * q, 12 * 1.2 * q, 8 * 1.2 * q)
+      text([fieldCost].map(fmt)[0], sx, sy + 6 * q, size: 3.4 * q, color: "#2a1e30", font: press, align: center)
+      if time - armT < 3 && time >= armT {
+        rect(FX + sp % 6 * C, FY + floor(sp / 6) * C, 3 * C, C, stroke: UI.gold, width: 2)
+      }
+    }
+    // the crops, each as far along as it is
+    for p in range(plots) {
+      let f = field[p]
+      if f.k >= 0 {
+        let px = FX + p % 6 * C
+        let py = FY + floor(p / 6) * C
+        let g = grow[p]
+        if g >= 1 {
+          let bob = floor(sin(time * 2.4 + p) + 1) * q * 0.5
+          image(ripeImg[f.k], px + q, py + C - 2 * q - ripeH[f.k] * q - bob, 14 * q, ripeH[f.k] * q)
+          if (time * 0.7 + hash(p, 9)) % 2 < 0.25 {
+            rect(px + 12 * q, py + 2 * q, q, 3 * q, fill: "#fff6e8")
+            rect(px + 11 * q, py + 3 * q, 3 * q, q, fill: "#fff6e8")
+          }
+        } else {
+          let st = g < 0.15 ? 0 : g < 0.5 ? 1 : 2
+          image(stageImg[st], px + (C - stageW[st] * q) / 2, py + C - 3 * q - stageH[st] * q, stageW[st] * q, stageH[st] * q)
+          rect(px + 3 * q, py + C - 3 * q, C - 6 * q, q, fill: "#3a2414")
+          rect(px + 3 * q, py + C - 3 * q, (C - 6 * q) * g, q, fill: "#ffd36a")
+        }
+      }
+    }
+    for pp in pops {
+      if time >= pp.t && time - pp.t < 1.2 {
+        let a = min(1, (1.2 - (time - pp.t)) * 3)
+        text(pp.s, FX + (pp.p % 6 + 0.5) * C, FY + (floor(pp.p / 6) + 0.3) * C - (time - pp.t) * 0.6 * C, size: 3.6 * q, color: alpha("#ffd36a", a), font: press, align: center)
+      }
+    }
+
+    // ---- the pond: a sandy shore, water with ripples, lilies, reeds and the fish under it ----
+    rect(PDX - 2 * q, PDY + q, PDW + 4 * q, PDH - 2 * q, fill: "#d8c8a0")
+    rect(PDX + q, PDY - 2 * q, PDW - 2 * q, PDH + 4 * q, fill: "#d8c8a0")
+    rect(PDX, PDY + 3 * q, PDW, PDH - 6 * q, fill: "#3a9ad8")
+    rect(PDX + 3 * q, PDY, PDW - 6 * q, PDH, fill: "#3a9ad8")
+    rect(PDX + 3 * q, PDY, PDW - 6 * q, 2 * q, fill: "#2a7ac0")
+    for f in range(fishLeft) {
+      let a = time * (0.12 + 0.03 * f) + f * 1.9
+      let fx = PDX + PDW * (0.55 + 0.33 * sin(a) * (f % 2 == 0 ? 1 : -1))
+      let fy = PDY + PDH * (0.5 + 0.3 * sin(a * 1.7 + f))
+      rect(fx - 3 * q, fy - q, 6 * q, 2 * q, fill: alpha("#1a4a80", 0.55))
+      rect(fx + (cos(a) * (f % 2 == 0 ? 1 : -1) > 0 ? -5 * q : 3 * q), fy - q, 2 * q, 2 * q, fill: alpha("#1a4a80", 0.55))
+    }
+    for r in ripples {
+      let w = (2 + 2 * sin(time * 0.8 + r[2])) * q
+      rect(r[0] - w, r[1], 2 * w, q, fill: alpha("#a8e8ff", 0.7))
+    }
+    for l in lilies { sprite(lilyArt, l[0], l[1], q, palette: PAL) }
+    for i in range(5) {
+      let rx = PDX + PDW - (3 + i * 2.5) * q
+      rect(rx, PDY + PDH - (8 + hash(i, 11) * 6) * q, q, (8 + hash(i, 11) * 6) * q, fill: "#3a8a3a")
+      rect(rx, PDY + PDH - (8 + hash(i, 11) * 6) * q - 2 * q, q, 2 * q, fill: "#6a4428")
+    }
+
+    // ---- the line and the bobber ----
+    if fs >= 2 && fs <= 3 {
+      let bite = fs == 2 && time >= biteAt && time <= biteAt + BITE
+      let nib = fs == 2 && time < biteAt && (time - biteAt) % 1.7 > -0.25 && biteAt - time > 0.6
+      let dip = bite ? 2 * q : nib ? q : 0
+      let by = BY + sin(time * 2.2) * q * 0.6 + dip
+      let bx = BX + (fs == 3 ? sin(time * 9) * q : 0)
+      line(TIPX, TIPY, bx + 2 * q, by, stroke: alpha("#fff6e8", 0.8), width: 1)
+      if bite || fs == 3 {
+        for j in range(4) {
+          let sp = (time * 3 + j / 4) % 1
+          rect(bx + 2 * q + (j - 1.5) * 2 * q * (1 + sp), by + q - sp * 3 * q, q, q, fill: "#fff6e8")
+        }
+      }
+      sprite(bobberArt, bx, by - 2 * q, q, palette: PAL)
+      if bite {
+        text("!", bx + 2 * q, by - 7 * q, size: 6 * q, color: "#ffd36a", font: press, align: center)
+      }
+    }
+
+    // ---- the dock and the farmer at its end ----
+    rect(PDX - 3 * q, DY + 0.9 * C - q, DX - PDX + 3 * q, 2 * q, fill: alpha("#000000", 0.18))
+    rect(PDX - 3 * q, DY, DX - PDX + 3 * q, floor(0.9 * C), fill: "#b07a45")
+    for i in range(floor((DX - PDX) / (3 * q))) { rect(PDX + i * 3 * q, DY, q / 2, floor(0.9 * C), fill: "#8a5a32") }
+    rect(PDX - 3 * q, DY, DX - PDX + 3 * q, q, fill: "#d8a870")
+    rect(DX - 2 * q, DY + 0.9 * C, 2 * q, 3 * q, fill: "#6a4428")
+    rect(PDX + 2 * q, DY + 0.9 * C, 2 * q, 3 * q, fill: "#6a4428")
+    let pull = fs == 1 ? -1 : fs == 3 ? floor(time * 6) % 2 : 0
+    line(FMX + 10 * q, FMY - 5 * q, TIPX + (pull < 0 ? -10 * q : pull * q), TIPY + (pull < 0 ? 6 * q : pull * 2 * q), stroke: "#6a4428", width: max(1.5, q * 0.8))
+    image(fs == 3 && floor(time * 6) % 2 == 1 ? farmer1 : farmer0, FMX, FMY - 14 * q, 12 * q, 14 * q)
+    if fs == 4 && time - endT < 2.5 {
+      let ly = FMY - 24 * q - clamp((time - endT) * 4, 0, 1) * 3 * q
+      image(fishImg[fish], FMX - q, ly, 14 * q, 7 * q)
+      if floor(time * 5) % 2 == 0 {
+        rect(FMX - 3 * q, ly - 2 * q, q, q, fill: "#ffd36a")
+        rect(FMX + 14 * q, ly + q, q, q, fill: "#ffd36a")
+      }
+    }
+
+    // ---- day and night, by the phone's clock: dusk darkens the farm, and fireflies come out ----
+    if night || dusk {
+      rect(0, SY, SCW, SB - SY, fill: alpha("#101848", night ? 0.4 : 0.18))
+    }
+    if night {
+      for i in range(8) {
+        if (time * 0.6 + hash(i, 21) * 3) % 3 < 1.6 {
+          rect(hash(i, 22) * SCW + 6 * q * sin(time * 0.5 + i), SY + 0.15 * (SB - SY) + hash(i, 23) * 0.8 * (SB - SY) + 4 * q * sin(time * 0.7 + i * 2), q, q, fill: "#e8ff80")
+        }
+      }
+    } else {
+      for i in range(2) {
+        let bx = FX + (0.5 + 0.45 * sin(time * 0.17 + i * 3)) * 6 * C
+        let by = FY + (0.5 + 0.45 * sin(time * 0.23 + i * 2)) * 4 * C
+        let wing = floor(time * 8 + i) % 2
+        rect(bx - (1 + wing) * q, by - q, (1 + wing) * q, (2 - wing) * q, fill: i == 0 ? "#ff8ab0" : "#fff6e8")
+        rect(bx + q, by - q, (1 + wing) * q, (2 - wing) * q, fill: i == 0 ? "#ff8ab0" : "#fff6e8")
+        rect(bx, by - q, q, 2 * q, fill: "#2a1e30")
+      }
+    }
+
+    // ---- the coins, the level and what's ready ----
+    sprite(coinArt, 14, TOP + 6, 2.8, palette: PAL)
+    text([bank].map(fmt)[0], 40, TOP + 14, size: 13, color: UI.text, font: press)
+    text("LV ${lvl}", 40, TOP + 32, size: 7, color: UI.dim, font: press)
+    rect(84, TOP + 29, 60, 6, fill: UI.card)
+    rect(84, TOP + 29, 60 * clamp((xp - lvFrom) / (lvTo - lvFrom), 0, 1), 6, fill: UI.go)
+    sprite(night ? moonArt : sunArt, SW - 30, TOP + 6, 2, palette: PAL)
+    text(fmtTime(tnow, "HH:mm"), SW - 36, TOP + 14, size: 9, color: UI.text, font: press, align: end)
+    text(len(ripe) > 0 ? "${len(ripe)} READY" : len(filter(field, f => f.k >= 0)) > 0 ? "GROWING" : "", SW - 16, TOP + 32, size: 7, color: len(ripe) > 0 ? UI.gold : UI.dim, font: press, align: end)
+
+    // ---- the panel ----
+    for t in range(3) {
+      let tx = PX + t * PW / 3
+      rect(tx + 2, PY, PW / 3 - 4, TH, fill: tab == t ? UI.gold : UI.card, radius: 6 * corners)
+      text(["SEEDS", "FISH", "BOOK"][t], tx + PW / 6, PY + TH / 2, size: 8, color: tab == t ? UI.bg : UI.text, font: press, align: center)
+    }
+    if tab == 0 {
+      for k in range(8) {
+        let cx = PX + k % 4 * (CW + 6)
+        let cy = CY + floor(k / 4) * (CH + 6)
+        let ip = min(3, (CH - 34) / 13, (CW - 8) / 14)
+        rect(cx, cy, CW, CH, fill: UI.card, radius: 6 * corners)
+        if k < 7 {
+          let open = lvl >= CROPS[k].lv
+          if seed == k { rect(cx + 1, cy + 1, CW - 2, CH - 2, stroke: UI.gold, width: 2, radius: 6 * corners) }
+          if open {
+            image(ripeImg[k], cx + (CW - 14 * ip) / 2, cy + 5 + (12 - ripeH[k]) * ip, 14 * ip, ripeH[k] * ip)
+          } else {
+            image(ripeImg[k], cx + (CW - 14 * ip) / 2, cy + 5 + (12 - ripeH[k]) * ip, 14 * ip, ripeH[k] * ip, color: SHADOW)
+          }
+          text(CROPS[k].n, cx + CW / 2, cy + CH - 23, size: CW < 90 ? 5 : 6, color: open ? UI.text : UI.dim, font: press, align: center)
+          text(open ? "${CROPS[k].cost} · ${CROPS[k].g >= 3600 ? "${CROPS[k].g / 3600}H" : "${CROPS[k].g / 60}M"}" : "LEVEL ${CROPS[k].lv}", cx + CW / 2, cy + CH - 10, size: 5, color: open ? (bank >= CROPS[k].cost ? UI.gold : UI.warn) : UI.dim, font: press, align: center)
+        } else {
+          let armed = time - armT < 3 && time >= armT
+          if armed { rect(cx + 1, cy + 1, CW - 2, CH - 2, stroke: UI.gold, width: 2, radius: 6 * corners) }
+          image(plot, cx + (CW - 12 * ip) / 2, cy + 5 + 3 * ip, 12 * ip, 8 * ip)
+          text(plots >= 24 ? "ALL FIELD" : armed ? "TAP AGAIN" : "+3 PLOTS", cx + CW / 2, cy + CH - 23, size: CW < 90 ? 5 : 6, color: UI.text, font: press, align: center)
+          text(plots >= 24 ? "OPEN" : [fieldCost].map(fmt)[0], cx + CW / 2, cy + CH - 10, size: 5, color: plots >= 24 ? UI.dim : bank >= fieldCost ? UI.gold : UI.warn, font: press, align: center)
+        }
+      }
+      let hy0 = CY + 2 * CH + 22
+      if hy0 + 30 < PY + PH {
+        text(seed >= 0 ? "TAP SOIL TO PLANT ${CROPS[seed].n}" : "NO SEED PICKED: TAPS ONLY HARVEST", PX + 4, hy0, size: 6, color: UI.text, font: press)
+        text("DRAG OVER THE FIELD TO HARVEST", PX + 4, hy0 + 16, size: 6, color: UI.dim, font: press)
+        text("AND SOW IN ONE GO", PX + 4, hy0 + 30, size: 6, color: UI.dim, font: press)
+      }
+    } else if tab == 1 {
+      // the fish in the pond
+      for i in range(5) {
+        if i < fishLeft {
+          image(fish0, PX + 4 + i * 34, CY + 2, 28, 14)
+        } else {
+          image(fish0, PX + 4 + i * 34, CY + 2, 28, 14, color: SHADOW)
+        }
+      }
+      text(fishLeft >= 5 ? "POND FULL" : "NEXT ${[nextFish].map(fmtT)[0]}", PX + PW - 4, CY + 9, size: 6, color: UI.dim, font: press, align: end)
+      let AY = CY + 30
+      let AH = PY + PH - AY
+      let mid = AY + AH / 2 - 10
+      rect(PX, AY, PW, AH, fill: UI.card, radius: 8 * corners)
+      if fs == 0 {
+        if fishLeft > 0 {
+          if time % 1.4 < 1.05 { text("HOLD TO CAST", PX + PW / 2, mid - 10, size: 12, color: UI.gold, font: press, align: center) }
+          text("LET GO TO THROW", PX + PW / 2, mid + 16, size: 7, color: UI.text, font: press, align: center)
+          text("FARTHER OUT, RARER FISH", PX + PW / 2, mid + 32, size: 7, color: UI.dim, font: press, align: center)
+          if night { text("SOME ONLY BITE AT NIGHT", PX + PW / 2, mid + 48, size: 7, color: UI.dim, font: press, align: center) }
+        } else {
+          text("THE FISH ARE RESTING", PX + PW / 2, mid - 6, size: 9, color: UI.text, font: press, align: center)
+          text("ONE BACK IN ${[nextFish].map(fmtT)[0]}", PX + PW / 2, mid + 16, size: 7, color: UI.dim, font: press, align: center)
+        }
+      } else if fs == 1 {
+        let pw = 1 - abs(((time - pressT) * 0.8) % 2 - 1)
+        let bw = PW - 48
+        text("LET GO!", PX + PW / 2, mid - 30, size: 11, color: UI.gold, font: press, align: center)
+        rect(PX + 24, mid - 8, bw, 20, fill: UI.bg, radius: 4 * corners)
+        rect(PX + 24 + bw * 0.85, mid - 8, bw * 0.15, 20, fill: alpha(UI.gold, 0.25))
+        rect(PX + 26, mid - 6, (bw - 4) * pw, 16, fill: mix(UI.water, UI.gold, pw), radius: 3 * corners)
+        text("NEAR", PX + 24, mid + 28, size: 6, color: UI.dim, font: press)
+        text("FAR", PX + 24 + bw, mid + 28, size: 6, color: UI.dim, font: press, align: end)
+      } else if fs == 2 {
+        if time < biteAt {
+          text("WAIT FOR A BITE${["", ".", "..", "..."][floor(time * 2) % 4]}", PX + PW / 2, mid - 6, size: 9, color: UI.text, font: press, align: center)
+          text("TAP WHEN THE BOBBER GOES UNDER", PX + PW / 2, mid + 16, size: 6, color: UI.dim, font: press, align: center)
+        } else if time <= biteAt + BITE {
+          text("!! TAP !!", PX + PW / 2, mid, size: 16, color: floor(time * 8) % 2 == 0 ? UI.gold : UI.warn, font: press, align: center)
+        } else {
+          text("IT GOT AWAY", PX + PW / 2, mid - 6, size: 10, color: UI.text, font: press, align: center)
+          text("TAP TO CAST AGAIN", PX + PW / 2, mid + 16, size: 7, color: UI.dim, font: press, align: center)
+        }
+      } else if fs == 3 {
+        let f = FISH[fish]
+        let rt = time - reelT
+        let m = 1 - abs((rt * f.sp) % 2 - 1)
+        let z = 0.5 + 0.22 * sin(rt * (0.9 + fish * 0.08)) + 0.14 * sin(rt * (2.3 + fish * 0.1) + 1.7)
+        let bx = PX + 20
+        let bw = PW - 40
+        text("TAP WHEN THE HOOK", PX + PW / 2, mid - 42, size: 7, color: UI.text, font: press, align: center)
+        text("IS ON THE FISH", PX + PW / 2, mid - 28, size: 7, color: UI.text, font: press, align: center)
+        rect(bx, mid - 12, bw, 28, fill: "#2a7ac0", radius: 4 * corners)
+        rect(bx + bw * (z - f.w / 2), mid - 12, bw * f.w, 28, fill: alpha("#a8e8ff", 0.45))
+        image(fish0, bx + bw * z - 14, mid - 5, 28, 14, color: "#1a4a80")
+        rect(bx + bw * m - 2, mid - 18, 4, 40, fill: UI.gold)
+        rect(bx + bw * m - 5, mid + 18, 10, 4, fill: UI.gold)
+        for i in range(f.need) {
+          rect(PX + PW / 2 - f.need * 9 + i * 18 + 3, mid + 34, 12, 12, fill: i < hits ? UI.gold : UI.bg, radius: 6)
+        }
+        for i in range(3) {
+          text("✕", PX + PW / 2 - 18 + i * 18, mid + 62, size: 12, color: i < misses ? UI.warn : alpha(UI.dim, 0.35), align: center)
+        }
+      } else if fs == 4 {
+        let f = FISH[fish]
+        image(fishImg[fish], PX + PW / 2 - 28, mid - 46, 56, 28)
+        text(f.n, PX + PW / 2, mid + 2, size: 11, color: UI.text, font: press, align: center)
+        text("+${f.v} COINS", PX + PW / 2, mid + 22, size: 8, color: UI.gold, font: press, align: center)
+        if fresh { text("NEW IN YOUR BOOK!", PX + PW / 2, mid + 40, size: 7, color: UI.go, font: press, align: center) }
+        text("TAP TO CAST AGAIN", PX + PW / 2, mid + 62, size: 6, color: UI.dim, font: press, align: center)
+      } else {
+        text(why, PX + PW / 2, mid - 6, size: 10, color: UI.text, font: press, align: center)
+        text("TAP TO CAST AGAIN", PX + PW / 2, mid + 16, size: 7, color: UI.dim, font: press, align: center)
+      }
+    } else {
+      // the book: every fish and crop, and how many
+      let found = count(caught, c => c > 0)
+      text("FISH ${found}/9", PX + 4, CY + 6, size: 8, color: UI.text, font: press)
+      let BW = (PW - 12) / 3
+      let BH = min(48, (PH - TH - 120) / 3)
+      for i in range(9) {
+        let bx = PX + i % 3 * (BW + 6)
+        let by = CY + 20 + floor(i / 3) * (BH + 6)
+        rect(bx, by, BW, BH, fill: UI.card, radius: 6 * corners)
+        if caught[i] > 0 {
+          image(fishImg[i], bx + 6, by + BH / 2 - 7, 28, 14)
+        } else {
+          image(fishImg[i], bx + 6, by + BH / 2 - 7, 28, 14, color: SHADOW)
+        }
+        text(caught[i] > 0 ? FISH[i].n : "???", bx + 40, by + BH / 2 - 7, size: 5, color: caught[i] > 0 ? UI.text : UI.dim, font: press)
+        text(caught[i] > 0 ? "x${caught[i]}" : FISH[i].h == 2 ? "AT NIGHT" : FISH[i].p >= 0.6 ? "FAR OUT" : "", bx + 40, by + BH / 2 + 7, size: 5, color: UI.dim, font: press)
+      }
+      let gy = CY + 20 + 3 * (BH + 6) + 12
+      text("HARVESTS ${sum(grown)}", PX + 4, gy, size: 8, color: UI.text, font: press)
+      let GW = PW / 7
+      for k in range(7) {
+        let gx = PX + k * GW
+        let ip = min(2, (GW - 4) / 14)
+        if grown[k] > 0 {
+          image(ripeImg[k], gx + (GW - 14 * ip) / 2, gy + 14 + (12 - ripeH[k]) * ip, 14 * ip, ripeH[k] * ip)
+        } else {
+          image(ripeImg[k], gx + (GW - 14 * ip) / 2, gy + 14 + (12 - ripeH[k]) * ip, 14 * ip, ripeH[k] * ip, color: SHADOW)
+        }
+        text("${grown[k]}", gx + GW / 2, gy + 14 + 12 * ip + 10, size: 6, color: grown[k] > 0 ? UI.text : UI.dim, font: press, align: center)
+      }
+    }
+
+    // ---- messages ----
+    if time - msgT < 2.4 && time >= msgT {
+      let ma = min(1, (2.4 - (time - msgT)) * 3)
+      let ls = split(msg, "|")
+      let my = FY + 2 * C
+      rect(FX + 8, my - 10 - len(ls) * 9, 6 * C - 16, 20 + len(ls) * 18, fill: alpha("#2a1e30", 0.88 * ma), radius: 6 * corners)
+      for l, i in ls {
+        text(l, FX + 3 * C, my - (len(ls) - 1) * 9 + i * 18, size: i == 0 ? 9 : 7, color: alpha(i == 0 ? "#ffd36a" : "#fff6e8", ma), font: press, align: center)
+      }
+    }
+  }
+}

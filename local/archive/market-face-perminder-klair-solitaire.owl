@@ -1,0 +1,259 @@
+face "solitaire" {
+  // Klondike, the classic patience: build the four foundations up from ace to king by suit,
+  // moving runs between the seven columns in alternating colors, down from king.
+  //
+  //   tap a card     moves it (and the cards on it) to the best place: its foundation first,
+  //                  then a column it fits on, then an empty column for a king
+  //   hold a card    picks it up; then tap the column or foundation it should go to
+  //   tap the stock  turns one card (or three) onto the waste; empty, it takes the waste back
+  //
+  // Once the stock and waste are empty and every card is face up, the rest goes up by itself.
+
+  meta { owl: 10; description: "Classic Klondike solitaire: tap a card to send it where it fits, draw one or three, undo, auto-finish"; version: "1.0"; license: "MIT"; category: "games" }
+  requires { pacman: [] }
+
+  page: -1
+  padding: 0
+  background: linear(0, 0, 0, 1, [alpha(background, 0.82), alpha(background, 0.7), alpha(background, 0.88)])
+
+  // The cards are 0-51: suit floor(c / 13) as ♠ ♥ ♦ ♣ (so suit % 3 != 0 is red), rank c % 13 + 1.
+  // The top of the stock and of the waste is their last card; a column's face-down cards are its
+  // first `down[c]`.
+  state stock = [] persist
+  state waste = [] persist
+  state found = [0, 0, 0, 0] persist
+  state tab = [[], [], [], [], [], [], []] persist
+  state down = [0, 0, 0, 0, 0, 0, 0] persist
+  state hist = [] persist
+  state moves = 0 persist
+  state wins = 0 persist
+  state counted = false persist
+  state draw3 = false persist
+  state deals = 0
+  state sure = false
+  state sel = null
+  state tp = {x: 0, y: 0, n: 0, hold: false}
+
+  let ranks = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"]
+  // each with U+FE0E, which asks for the text glyph rather than the emoji
+  let suits = ["♠︎", "♥︎", "♦︎", "♣︎"]
+  let won = sum(found) == 52
+  let ready = !won && len(flatten(tab)) > 0 && len(stock) == 0 && len(waste) == 0 && all(range(7), c => down[c] == 0)
+
+  // ---- dealing, finishing ----------------------------------------------------------------------
+  when len(stock) + len(waste) + sum(found) + len(flatten(tab)) == 0 { deals = deals + 1 }
+  on deals {
+    let d = shuffle(range(52))
+    tab = range(7).map(c => drop(take(d, (c + 1) * (c + 2) / 2), c * (c + 1) / 2))
+    down = range(7)
+    stock = drop(d, 28)
+    waste = []
+    found = [0, 0, 0, 0]
+    hist = []
+    moves = 0
+    sel = null
+    sure = false
+    counted = false
+  }
+  when ready {
+    hist = drop(flatten([hist, [{s: stock, w: waste, f: found, t: tab, d: down, m: moves}]]), max(0, len(hist) - 59))
+    found = [13, 13, 13, 13]
+    tab = [[], [], [], [], [], [], []]
+  }
+  when won && !counted { counted = true; wins = wins + 1; haptic() }
+
+  // ---- the table's layout, in dp, as the Canvas sees it ----------------------------------------
+  let W = tileWidth ?? 412
+  let Hc = (tileHeight ?? 915) - 150 - (screenInset ?? 0)
+  let g = clamp(W * 0.012, 3, 10)
+  let cw = min((W - 16 - 6 * g) / 7, Hc * 0.16)
+  let ch = cw * 1.4
+  let ox = (W - 7 * cw - 6 * g) / 2
+  let y0 = 6
+  let tabY = y0 + ch + max(10, ch * 0.2)
+  let fd = ch * 0.12
+  let fu = ch * 0.3
+  let fan = cw * 0.32
+  let rr = 1 + cw * 0.1 * corners
+  let fs = cw * 0.3
+  let colX = range(7).map(c => ox + c * (cw + g))
+  // each column squeezed to fit what's below the top row, then each card's top
+  let need = range(7).map(c => min(down[c], len(tab[c])) * fd + max(0, len(tab[c]) - down[c] - 1) * fu)
+  let kk = range(7).map(c => need[c] > 0 ? min(1, (Hc - tabY - ch) / need[c]) : 1)
+  let ys = range(7).map(c => range(len(tab[c])).map(i => tabY + (min(i, down[c]) * fd + max(0, i - down[c]) * fu) * kk[c]))
+  let wshow = drop(waste, max(0, len(waste) - (draw3 ? 3 : 1)))
+
+  // ---- what a picked-up card fits on, to outline it ---------------------------------------------
+  let sc = sel == null ? [] : sel.k == "waste" ? [last(waste)] : sel.k == "found" ? [sel.c * 13 + found[sel.c] - 1] : drop(tab[sel.c], sel.i)
+  let sm = sc[0] ?? 0
+  let selF = sel != null && sel.k != "found" && len(sc) == 1 && found[floor(sm / 13)] == sm % 13
+  let selT = range(7).map(d => sel != null && !(sel.k == "tab" && sel.c == d) && (len(tab[d]) == 0 ? sm % 13 == 12 : (last(tab[d]) % 13 == sm % 13 + 1 && (floor(last(tab[d]) / 13) % 3 != 0) != (floor(sm / 13) % 3 != 0))))
+
+  // ---- a tap or a hold on the table ---------------------------------------------------------------
+  on tp {
+    let tx = value.x
+    let ty = value.y
+    let col = clamp(floor((tx - ox + g / 2) / (cw + g)), 0, 6)
+    let top = ty <= y0 + ch + 6
+    let kind = won ? "" : top ? (col == 0 ? "stock" : col <= 2 ? "waste" : "found") : "tab"
+    let ci = kind == "tab" ? len(ys[col].filter(yy => yy <= ty)) - 1 : -1
+    let onCard = ci >= 0 && ty <= ys[col][ci] + ch
+    let here = {k: kind, c: kind == "found" ? col - 3 : col, i: ci}
+    let srcOK = (kind == "waste" && len(waste) > 0) || (kind == "found" && found[col - 3] > 0) || (kind == "tab" && onCard && ci >= down[col])
+    let same = sel != null && sel.k == here.k && sel.c == here.c && (sel.k != "tab" || sel.i == here.i)
+
+    // what moves, and where it can go
+    let src = value.hold ? null : sel != null ? sel : srcOK ? here : null
+    let manual = sel != null && !same
+    let cards = src == null ? [] : src.k == "waste" ? [last(waste)] : src.k == "found" ? [src.c * 13 + found[src.c] - 1] : drop(tab[src.c], src.i)
+    let m = cards[0] ?? 0
+    let mr = m % 13 + 1
+    let ms = floor(m / 13)
+    let mred = ms % 3 != 0
+    let fitsF = src != null && src.k != "found" && len(cards) == 1 && found[ms] == mr - 1
+    let fitsT = range(7).map(d => src != null && !(src.k == "tab" && src.c == d) && (len(tab[d]) == 0 ? mr == 13 : (last(tab[d]) % 13 == mr && (floor(last(tab[d]) / 13) % 3 != 0) != mred)))
+    let from = src != null && src.k == "tab" ? src.c : -1
+    let order = range(1, 8).map(k => (from + k + 7) % 7)
+    let tFull = order.find(d => fitsT[d] && len(tab[d]) > 0)
+    let tEmpty = order.find(d => fitsT[d] && len(tab[d]) == 0 && !(src.k == "tab" && src.i == 0))
+    let smart = fitsF ? {k: "found", c: ms} : tFull != null ? {k: "tab", c: tFull} : tEmpty != null ? {k: "tab", c: tEmpty} : null
+    let picked = here.k == "found" && fitsF ? {k: "found", c: ms} : here.k == "tab" && fitsT[col] ? {k: "tab", c: col} : null
+    let dst = manual ? picked : smart
+
+    sure = false
+    if value.hold {
+      sel = srcOK && !same ? here : null
+      if sel != null { haptic() }
+    } else if kind == "stock" && sel == null {
+      if len(stock) + len(waste) > 0 {
+        hist = drop(flatten([hist, [{s: stock, w: waste, f: found, t: tab, d: down, m: moves}]]), max(0, len(hist) - 59))
+        moves = moves + 1
+        if len(stock) > 0 {
+          let n = min(draw3 ? 3 : 1, len(stock))
+          waste = flatten([waste, reverse(drop(stock, len(stock) - n))])
+          stock = take(stock, len(stock) - n)
+        } else {
+          stock = reverse(waste)
+          waste = []
+        }
+      }
+    } else if src != null && dst != null {
+      hist = drop(flatten([hist, [{s: stock, w: waste, f: found, t: tab, d: down, m: moves}]]), max(0, len(hist) - 59))
+      let f1 = src.k == "found" ? set(found, src.c, found[src.c] - 1) : found
+      let t1 = src.k == "tab" ? set(tab, src.c, take(tab[src.c], src.i)) : tab
+      if src.k == "waste" { waste = take(waste, len(waste) - 1) }
+      if src.k == "tab" && src.i > 0 && src.i == down[src.c] { down = set(down, src.c, src.i - 1) }
+      found = dst.k == "found" ? set(f1, ms, f1[ms] + 1) : f1
+      tab = dst.k == "tab" ? set(t1, dst.c, flatten([t1[dst.c], cards])) : t1
+      moves = moves + 1
+      sel = null
+    } else {
+      if src != null && sel == null { haptic() }
+      sel = null
+    }
+  }
+
+  // every card on show, bottom to top: [x, y, card (-1 is the stock's back), face up, picked up]
+  let vis = flatten([
+    len(stock) > 0 ? [[colX[0], y0, -1, false, false]] : [],
+    range(len(wshow)).map(j => [colX[1] + j * fan, y0, wshow[j], true, sel.k == "waste" && j == len(wshow) - 1]),
+    range(4).filter(s => found[s] > 0).map(s => [colX[3 + s], y0, s * 13 + found[s] - 1, true, sel.k == "found" && sel.c == s]),
+    flatten(range(7).map(c => range(len(tab[c])).map(i => [colX[c], ys[c][i], tab[c][i], i >= down[c], sel.k == "tab" && sel.c == c && i >= sel.i])))
+  ])
+
+  Column {
+    gap: 0
+    fill: true
+
+    // ---- the header ----
+    Row {
+      padding: [14, 8]
+      align: center
+      gap: 6
+      Text { text: "solitaire"; style: title; fontWeight: 300 }
+      Spacer { weight: 1 }
+      Button { text: draw3 ? "draw 3" : "draw 1"; onTap: { draw3 = !draw3; sure = false } }
+      Button { text: "undo"; color: len(hist) > 0 ? foreground : muted; onTap: {
+        sure = false
+        if len(hist) > 0 {
+          let h = last(hist)
+          stock = h.s
+          waste = h.w
+          found = h.f
+          tab = h.t
+          down = h.d
+          moves = h.m
+          hist = take(hist, len(hist) - 1)
+          sel = null
+        }
+      } }
+      Button { text: sure ? "new game?" : "new"; color: sure ? accent : foreground; onTap: {
+        if sure || moves == 0 || won { deals = deals + 1 } else { sure = true }
+      } }
+    }
+
+    // ---- the table ----
+    Canvas {
+      weight: 1
+      fill: width
+      onTap: tp = {x: x, y: y, n: tp.n + 1, hold: false}
+      onLongPress: tp = {x: x, y: y, n: tp.n + 1, hold: true}
+
+      // the empty places: stock, foundations, columns
+      let slot = alpha(foreground, 0.22)
+      rect(colX[0], y0, cw, ch, radius: rr, stroke: slot, width: 1.5)
+      if len(stock) == 0 && len(waste) > 0 { text("↻", colX[0] + cw / 2, y0 + ch / 2, size: cw * 0.5, color: alpha(foreground, 0.4), align: center) }
+      for s in range(4) {
+        rect(colX[3 + s], y0, cw, ch, radius: rr, stroke: selF && floor(sm / 13) == s ? accent : slot, width: selF && floor(sm / 13) == s ? 2.5 : 1.5)
+        text(suits[s], colX[3 + s] + cw / 2, y0 + ch / 2, size: cw * 0.5, color: alpha(foreground, 0.16), align: center)
+      }
+      for c in range(7) {
+        rect(colX[c], tabY, cw, ch, radius: rr, stroke: selT[c] && len(tab[c]) == 0 ? accent : slot, width: selT[c] && len(tab[c]) == 0 ? 2.5 : 1.5)
+        if len(tab[c]) == 0 { text("K", colX[c] + cw / 2, tabY + ch / 2, size: cw * 0.4, color: alpha(foreground, 0.12), align: center) }
+      }
+
+      // the cards
+      for v in vis {
+        let x = v[0]
+        let y = v[1]
+        if v[3] {
+          let k = v[2]
+          let ink = floor(k / 13) % 3 != 0 ? red : foreground
+          rect(x, y, cw, ch, radius: rr, fill: v[4] ? mix(surface, accent, 0.25) : surface, stroke: v[4] ? accent : alpha(foreground, 0.28), width: v[4] ? 2.5 : 1)
+          text(ranks[k % 13], x + cw * 0.08, y + fs * 0.72, size: fs, color: ink, bold: true)
+          text(suits[floor(k / 13)], x + cw * 0.93, y + fs * 0.72, size: fs * 0.9, color: ink, align: end)
+          if k % 13 >= 10 {
+            text(ranks[k % 13], x + cw / 2, y + ch * 0.6, size: cw * 0.5, color: alpha(ink, 0.85), align: center, fontWeight: 300)
+          } else {
+            text(suits[floor(k / 13)], x + cw / 2, y + ch * 0.6, size: cw * 0.55, color: ink, align: center)
+          }
+        } else {
+          rect(x, y, cw, ch, radius: rr, fill: mix(accent, background, 0.35), stroke: alpha(background, 0.6), width: 1)
+          rect(x + cw * 0.12, y + cw * 0.12, cw * 0.76, ch - cw * 0.24, radius: rr * 0.6, stroke: alpha(background, 0.45), width: 1)
+          circle(x + cw / 2, y + ch / 2, cw * 0.14, stroke: alpha(background, 0.45), width: 1)
+        }
+      }
+
+      // a picked-up column it fits on
+      for c in range(7) {
+        if selT[c] && len(tab[c]) > 0 { rect(colX[c] - 2, last(ys[c]) - 2, cw + 4, ch + 4, radius: rr + 2, stroke: accent, width: 2.5) }
+      }
+
+      if won {
+        let cy = tabY + ch * 1.4
+        rect(ox + cw, cy - ch * 0.7, W - 2 * ox - 2 * cw, ch * 1.4, radius: 16 * corners, fill: alpha(surface, 0.92), stroke: accent, width: 1.5)
+        text("you won", W / 2, cy - ch * 0.18, size: cw * 0.55, color: accent, align: center, fontWeight: 300)
+        text("${moves} moves · tap new for another deal", W / 2, cy + ch * 0.3, size: max(11, cw * 0.22), color: muted, align: center)
+      }
+    }
+
+    // ---- the footer ----
+    Row {
+      padding: [14, 6]
+      Text { text: "${moves} moves · ${len(stock)} in stock · ${wins} won"; style: small; color: muted }
+      Spacer { weight: 1 }
+      Text { text: sel != null ? "tap where it goes" : "tap: move · hold: pick up"; style: small; color: muted }
+    }
+    Spacer { height: screenInset }
+  }
+}

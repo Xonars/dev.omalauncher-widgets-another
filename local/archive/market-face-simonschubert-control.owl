@@ -1,0 +1,598 @@
+face "control" {
+  // Mission control: the phone and its Linux at a glance, and the means to act on both.
+  // Gauges and history up top, a panel of processes, network, a shell, a live terminal and the inbox,
+  // the phone's switches, recent apps, and a prompt bar that asks your agent (or runs "!command").
+  page: -3
+
+  meta {
+    owl: 10
+    description: "Mission control: live CPU, memory, storage and latency, processes you can kill, a shell, a terminal, your inbox, phone switches and an agent prompt"
+    version: "1.0"
+    license: "MIT"
+    category: "system"
+  }
+
+  requires { pacman: ["procps-ng", "iputils", "iproute2", "btop"] }
+
+  padding: 0
+  background: linear(0, 0, 0, 1, [alpha(background, 0.92), alpha(background, 0.7), alpha(background, 0.8), alpha(background, 0.94)])
+
+  source now = clock every 1s
+  source bat = android.battery
+  source sys = android.system every 10s
+  source modes = android.modes
+  source vol = android.volume
+  source m = android.media
+  source n = android.notifications
+  source rec = android.recent
+  source ag = android.agents
+  source alarm = android.alarm
+  source wx = http("https://wttr.in/?format=j1") every 30m timeout 15s json
+  source pub = http("https://ipinfo.io/json") every 15m timeout 10s json
+  // Memory and swap, in bytes.
+  source st = cmd("free -b | awk '/^Mem:/ {m = $2 \" \" $7} /^Swap:/ {s = $2 \" \" $3} END {print m, s}'") every 5s
+  // CPU from every process's ticks over a second (proot freezes /proc/stat): first the whole system's
+  // percentage, process count and cores, then the twelve busiest as "cpu% pid rss name".
+  source pr = cmd("""
+    t0=$(date +%s%N); A=$(cat /proc/[0-9]*/stat 2>/dev/null); sleep 1; B=$(cat /proc/[0-9]*/stat 2>/dev/null); t1=$(date +%s%N)
+    awk -v ms=$(( (t1 - t0) / 1000000 )) -v cores=$(nproc) '
+      function parse(l,  r) { n = l; sub(/^[^(]*[(]/, "", n); sub(/[)][^)]*$/, "", n); r = l; sub(/^.*[)] /, "", r); split(r, f, " "); return f[12] + f[13] }
+      NR == FNR { a[$1] = parse($0); next }
+      { t = parse($0); d = ($1 in a) ? t - a[$1] : 0; tot += d; k++; out[k] = sprintf("%.1f %d %d %s", d * 1000 / ms, $1, f[22] * 4096, n) }
+      END { print sprintf("%.1f %d %d", tot * 1000 / ms / cores, k, cores); fflush(); for (i = 1; i <= k; i++) print out[i] | "sort -rn | head -12" }
+    ' <(echo "$A") <(echo "$B")
+  """) every 3s timeout 15s
+  source ipx = cmd("ip -br addr") every 1m
+  source upd = cmd("pacman -Qu 2>/dev/null | wc -l") every 30m
+  source png = stream("while :; do ping -O -n -i 5 -W 4 1.1.1.1; sleep 5; done")
+
+  state tab = "procs" persist
+  state sel = null
+  state out = null
+  state busy = false
+  state last = ""
+  state past = [] persist
+  on out { busy = false }
+
+  let jb = "https://raw.githubusercontent.com/google/fonts/main/ofl/jetbrainsmono/JetBrainsMono%5Bwght%5D.ttf"
+
+  // Linux
+  let s = words(st ?? "")
+  let memT = num(s[0])
+  let memA = num(s[1])
+  let memPct = memT ? (memT - memA) / memT * 100 : null
+  let swapT = num(s[2])
+  let swapU = num(s[3])
+  let pl = lines(pr ?? "")
+  let ph = words(pl[0] ?? "")
+  let cpu = ph[0] == null ? null : clamp(num(ph[0]), 0, 100)
+  let cpuHist = history(cpu, 60)
+  let nprocs = ph[1]
+  let cores = ph[2]
+  let procs = drop(pl, 1).map(l => words(l)).filter(w => len(w) >= 4).map(w => {
+    cpu: num(w[0]),
+    pid: int(w[1]),
+    rss: num(w[2]),
+    name: join(drop(w, 3), " ")
+  })
+  let ifs = lines(ipx ?? "").map(l => words(l)).filter(w => len(w) >= 2 && w[0] != "lo" && !startsWith(w[0], "dummy")).map(w => {
+    name: w[0],
+    up: w[1] == "UP",
+    v4: drop(w, 2).find(a => contains(a, ".")) ?? "",
+    v6: count(drop(w, 2), a => contains(a, ":") && !startsWith(a, "fe80"))
+  })
+  let vpn = any(ifs, i => startsWith(i.name, "tun") || startsWith(i.name, "wg"))
+  let pm = match(png ?? "", "time=([0-9.]+)")
+  let ms = pm != null ? round(num(pm[0])) : contains(png ?? "", "no answer") ? -1 : null
+  let msHist = history(ms != null && ms >= 0 ? ms : null, 60)
+
+  // Phone
+  let disk = sys.storage
+  let diskPct = disk && disk.total ? disk.used / disk.total * 100 : null
+  let playing = m != null && m.available != false && m.title != null && m.title != ""
+  let cur = wx.current_condition[0]
+  let hour = num(fmtTime(now, "H"))
+  let agent = ag.default
+  let strip = (rec ?? []).take(8)
+  let updates = num(upd, 0)
+
+  let wide = (tileWidth ?? 0) > (tileHeight ?? 1)
+  let typing = screenInset > 120
+  let glass = alpha(background, 0.5)
+  let edge = alpha(accent, 0.22)
+  let msColor = ms == null ? muted : ms < 0 ? red : ms > 250 ? red : ms > 100 ? yellow : green
+
+  component Label(t, tint = accent) {
+    Text { text: t; font: jb; fontSize: 10; fontWeight: 600; letterSpacing: 1.5; color: tint; maxLines: 1 }
+  }
+
+  component Chip(t, tint = foreground) {
+    Text { text: t; font: jb; fontSize: 11; color: tint; maxLines: 1; padding: [9, 5]; background: alpha(tint, 0.12); border: 1; borderColor: alpha(tint, 0.3); radius: 10 * corners }
+  }
+
+  component Gauge(label, pct, sub) {
+    Column {
+      gap: 4
+      weight: 1
+      align: center
+      Box {
+        size: 62
+        align: center
+        Ring { value: pct ?? 0; max: 100; thickness: 5; color: (pct == null ? muted : pct > 85 ? red : pct > 60 ? yellow : green); track: alpha(foreground, 0.1); size: 62; animate value: spring() }
+        Text { text: pct == null ? "…" : "${round(pct)}"; font: jb; fontSize: 18; fontWeight: 500; align: center; width: 62 }
+      }
+      Label { t: label; tint: muted }
+      Text { text: sub; font: jb; fontSize: 10; color: alpha(foreground, 0.7); align: center; maxLines: 1 }
+    }
+  }
+
+  component Header() {
+    Row {
+      gap: 12
+      align: bottom
+      Column {
+        gap: 0
+        weight: 1
+        Label { t: "${lower(fmtTime(now, "EEEE d MMMM"))}" }
+        Text { spans: [fmtTime(now, "HH"), {text: ":", color: accent}, fmtTime(now, "mm"), {text: " ${fmtTime(now, "ss")}", fontSize: 20, color: muted}]; font: jb; fontSize: wide ? 48 : 60; fontWeight: 200; letterSpacing: -2; maxLines: 1 }
+      }
+      if cur {
+        Column {
+          gap: 0
+          width: 120
+          align: end
+          onTap: url("https://wttr.in")
+          Row {
+            gap: 6
+            align: center
+            Text { text: weatherIcon(cur.weatherCode, hour < 7 || hour >= 19); font: icon; fontSize: 26; color: yellow }
+            Text { text: "${cur.temp_C}°"; font: jb; fontSize: 26; fontWeight: 300 }
+          }
+          Text { text: lower(trim(cur.weatherDesc[0].value)); font: jb; fontSize: 10; color: muted; align: end; maxLines: 1 }
+        }
+      }
+    }
+  }
+
+  component Status() {
+    Flow {
+      gap: 6
+      Chip { t: bat.charging ? "⚡${bat.level}%" : "${bat.level}%"; tint: bat.level < 20 && !bat.charging ? red : bat.charging ? green : foreground }
+      Chip { t: "up ${fmtDuration(sys.uptime)}"; tint: muted }
+      if updates > 0 {
+        Text { text: "↑ ${updates} updates"; font: jb; fontSize: 11; color: yellow; padding: [9, 5]; background: alpha(yellow, 0.12); border: 1; borderColor: alpha(yellow, 0.3); radius: 10 * corners; onTap: terminal("pacman -Syu", "update") }
+      }
+      if vpn {
+        Chip { t: "vpn"; tint: green }
+      }
+      if alarm.set {
+        Text { text: "⏰ ${fmtTime(alarm.time, "EEE HH:mm")}"; font: jb; fontSize: 11; color: accent; padding: [9, 5]; background: alpha(accent, 0.12); border: 1; borderColor: alpha(accent, 0.3); radius: 10 * corners; onTap: androidApp(alarm.app) }
+      }
+      if modes.dnd {
+        Chip { t: "dnd"; tint: magenta }
+      }
+      if modes.saver {
+        Chip { t: "saver"; tint: yellow }
+      }
+      if modes.ringer != null && modes.ringer != "normal" {
+        Chip { t: modes.ringer; tint: muted }
+      }
+    }
+  }
+
+  component Gauges() {
+    Column {
+      gap: 8
+      padding: [12, 10]
+      frost: 24
+      background: glass
+      border: 1
+      borderColor: edge
+      radius: 16 * corners
+      Row {
+        gap: 4
+        Gauge { label: "CPU"; pct: cpu; sub: cores ? "${cores} cores" : "…" }
+        Gauge { label: "MEM"; pct: memPct; sub: memT ? "${fmtBytes(memT - memA)}/${fmtBytes(memT)}" : "…" }
+        Gauge { label: "DISK"; pct: diskPct; sub: disk ? "${fmtBytes(disk.free)} free" : "…" }
+        Gauge { label: "BAT"; pct: bat.level; sub: bat.temp ? "${round(bat.temp)}°C" : (bat.status ?? "") }
+      }
+      Row {
+        gap: 12
+        height: 44
+        Column {
+          gap: 2
+          weight: 1
+          fill: height
+          Row {
+            Label { t: "CPU 3M"; tint: muted }
+            Spacer { weight: 1 }
+            Text { text: cpu == null ? "…" : "${round(cpu)}%"; font: jb; fontSize: 10; color: (cpu == null ? muted : cpu > 85 ? red : cpu > 60 ? yellow : green) }
+          }
+          Sparkline { values: cpuHist; min: 0; max: 100; color: accent; area: true; fill: width; weight: 1 }
+        }
+        Column {
+          gap: 2
+          weight: 1
+          fill: height
+          onTap: tab = "net"
+          Row {
+            Label { t: "PING 1.1.1.1"; tint: muted }
+            Spacer { weight: 1 }
+            Text { text: ms == null ? "…" : ms < 0 ? "offline" : "${ms} ms"; font: jb; fontSize: 10; color: msColor }
+          }
+          Sparkline { values: msHist; min: 0; color: cyan; area: true; fill: width; weight: 1 }
+        }
+      }
+    }
+  }
+
+  component Tab(id, label) {
+    Column {
+      gap: 3
+      weight: 1
+      align: center
+      onTap: { tab = id; haptic() }
+      Text { text: label; font: jb; fontSize: 11; fontWeight: tab == id ? 700 : 400; color: tab == id ? accent : muted; align: center; maxLines: 1 }
+      Box { width: 18; height: 2; background: tab == id ? accent : alpha(accent, 0) }
+    }
+  }
+
+  component Procs() {
+    Column {
+      gap: 0
+      weight: 1
+      Row {
+        gap: 8
+        padding: [0, 4]
+        Label { t: "PROCESS"; tint: muted }
+        Spacer { weight: 1 }
+        Label { t: "${nprocs ?? "…"} running"; tint: muted }
+      }
+      Column {
+        gap: 2
+        scroll: true
+        weight: 1
+        for p in procs key p.pid {
+          Column {
+            gap: 4
+            padding: [8, 5]
+            background: sel == p.pid ? alpha(accent, 0.14) : alpha(accent, 0)
+            radius: 8 * corners
+            onTap: sel = sel == p.pid ? null : p.pid
+            Row {
+              gap: 8
+              align: center
+              Text { text: p.name; font: jb; fontSize: 12; maxLines: 1; weight: 1 }
+              Text { text: fmtBytes(p.rss); font: jb; fontSize: 11; color: muted; width: 48; align: end }
+              Text { text: "${fixed(p.cpu, 1)}%"; font: jb; fontSize: 12; color: (p.cpu == null ? muted : p.cpu > 85 ? red : p.cpu > 60 ? yellow : green); width: 52; align: end }
+            }
+            Progress { value: min(p.cpu, 100); color: alpha((p.cpu == null ? muted : p.cpu > 85 ? red : p.cpu > 60 ? yellow : green), 0.7); track: alpha(foreground, 0.06); height: 2; fill: width }
+            if sel == p.pid {
+              Row {
+                gap: 6
+                Text { text: "pid ${p.pid}"; font: jb; fontSize: 11; color: muted; weight: 1 }
+                Text { text: "term"; font: jb; fontSize: 11; color: yellow; maxLines: 1; padding: [9, 5]; background: alpha(yellow, 0.12); border: 1; borderColor: alpha(yellow, 0.3); radius: 10 * corners; onTap: { haptic(); run("kill -TERM ${int(p.pid)}"); sel = null } }
+                Text { text: "kill -9"; font: jb; fontSize: 11; color: red; maxLines: 1; padding: [9, 5]; background: alpha(red, 0.12); border: 1; borderColor: alpha(red, 0.3); radius: 10 * corners; onTap: { haptic(); run("kill -KILL ${int(p.pid)}"); sel = null } }
+              }
+            }
+          }
+        }
+      }
+      Row {
+        gap: 6
+        Text { text: "btop"; font: jb; fontSize: 11; color: accent; maxLines: 1; padding: [9, 5]; background: alpha(accent, 0.12); border: 1; borderColor: alpha(accent, 0.3); radius: 10 * corners; onTap: terminal("btop", "btop") }
+        Chip { t: "swap ${swapT ? fmtBytes(swapU) : "off"}"; tint: muted }
+        Spacer { weight: 1 }
+        Text { text: "tap a process to end it"; font: jb; fontSize: 10; color: muted; maxLines: 1 }
+      }
+    }
+  }
+
+  component Net() {
+    Column {
+      gap: 10
+      weight: 1
+      scroll: true
+      Row {
+        gap: 12
+        align: center
+        Text { text: ms == null ? "…" : ms < 0 ? "offline" : "${ms}"; font: jb; fontSize: 40; fontWeight: 200; color: msColor }
+        Column {
+          gap: 0
+          weight: 1
+          Label { t: "LATENCY MS"; tint: muted }
+          Text { text: len(msHist.filter(x => x != null)) > 1 ? "min ${min(msHist.filter(x => x != null))} · avg ${round(avg(msHist.filter(x => x != null)))} · max ${max(msHist.filter(x => x != null))}" : "measuring…"; font: jb; fontSize: 11; color: alpha(foreground, 0.75); maxLines: 1 }
+        }
+      }
+      Sparkline { values: msHist; min: 0; color: cyan; area: true; fill: width; height: 48 }
+      Label { t: "PUBLIC"; tint: muted }
+      Row {
+        gap: 8
+        align: center
+        onTap: { copy(pub.ip ?? ""); haptic() }
+        Text { text: pub.ip ?? "…"; font: jb; fontSize: 14; weight: 1; maxLines: 1 }
+        Text { text: lower("${pub.city ?? ""} ${pub.country ?? ""}"); font: jb; fontSize: 11; color: muted; maxLines: 1 }
+      }
+      Text { text: pub.org ?? ""; font: jb; fontSize: 11; color: muted; maxLines: 1 }
+      Label { t: "INTERFACES"; tint: muted }
+      for i in ifs key i.name {
+        Row {
+          gap: 8
+          align: center
+          onTap: { copy(i.v4); haptic() }
+          Text { text: "●"; fontSize: 9; color: i.up ? green : red }
+          Text { text: i.name; font: jb; fontSize: 12; color: startsWith(i.name, "tun") || startsWith(i.name, "wg") ? green : foreground; width: 64; maxLines: 1 }
+          Text { text: i.v4 == "" ? "—" : i.v4; font: jb; fontSize: 12; weight: 1; maxLines: 1 }
+          if i.v6 > 0 {
+            Text { text: "+${i.v6} v6"; font: jb; fontSize: 10; color: muted }
+          }
+        }
+      }
+    }
+  }
+
+  component Shell() {
+    Column {
+      gap: 8
+      weight: 1
+      Row {
+        gap: 8
+        align: center
+        Text { text: "$"; font: jb; fontSize: 14; color: accent }
+        Input {
+          placeholder: "run a command…"
+          clear: true
+          fontSize: 13
+          weight: 1
+          onSubmit: {
+            if trim(value) != "" {
+              last = value
+              busy = true
+              past = unique(flatten([[value], past])).take(12)
+              out = run("cd ~ && { timeout 30 bash -c ${sh(value)}; echo \"[exit $? · $(date +%T)]\" >&2; } 2>&1 | tail -c 8000")
+            }
+          }
+        }
+      }
+      Flow {
+        gap: 6
+        for c in (len(past) > 0 ? past : ["df -h /", "free -h", "ip -br a", "pacman -Qu", "uptime"]).take(8) {
+          Text { text: c; font: jb; fontSize: 10; color: alpha(foreground, 0.8); maxLines: 1; padding: [8, 4]; background: alpha(foreground, 0.07); radius: 8 * corners
+            onTap: {
+              last = c
+              busy = true
+              out = run("cd ~ && { timeout 30 bash -c ${sh(c)}; echo \"[exit $? · $(date +%T)]\" >&2; } 2>&1 | tail -c 8000")
+            }
+            onLongPress: { past = past.filter(x => x != c); haptic() }
+          }
+        }
+      }
+      Column {
+        gap: 0
+        weight: 1
+        scroll: true
+        padding: 10
+        background: alpha(background, 0.6)
+        radius: 10 * corners
+        if last != "" {
+          Text { spans: [{text: "$ ", color: accent}, last]; font: jb; fontSize: 11; color: muted }
+        }
+        Text { text: busy ? "running…" : out ?? "output shows here. long-press a saved command to forget it."; font: jb; fontSize: 11; color: busy || out == null ? muted : foreground }
+      }
+    }
+  }
+
+  component Term() {
+    Column {
+      gap: 6
+      weight: 1
+      Box {
+        weight: 1
+        fill: width
+        radius: 10 * corners
+        clip: true
+        Terminal { fontSize: 7 }
+      }
+      Text { text: "tap to type · tap outside or Back to let go"; font: jb; fontSize: 10; color: muted; align: center }
+    }
+  }
+
+  component Inbox() {
+    Column {
+      gap: 6
+      weight: 1
+      if !n.available {
+        Text { text: "allow notification access to see them here"; font: jb; fontSize: 12; color: muted }
+        Text { text: "allow"; font: jb; fontSize: 11; color: accent; maxLines: 1; padding: [9, 5]; background: alpha(accent, 0.12); border: 1; borderColor: alpha(accent, 0.3); radius: 10 * corners; onTap: notification("open", "") }
+      } else if n.count == 0 {
+        Spacer { weight: 1 }
+        Text { text: "󰄬"; font: icon; fontSize: 32; color: green; align: center }
+        Text { text: "inbox zero"; font: jb; fontSize: 12; color: muted; align: center }
+        Spacer { weight: 1 }
+      } else {
+        Column {
+          gap: 6
+          scroll: true
+          weight: 1
+          for item in n.items.take(20) key item.key {
+            Row {
+              gap: 10
+              align: center
+              padding: [10, 8]
+              background: alpha(foreground, 0.05)
+              radius: 10 * corners
+              onTap: notification("open", item.key)
+              onLongPress: { haptic(); notification("dismiss", item.key) }
+              Image { src: item.icon; size: 24 }
+              Column {
+                gap: 0
+                weight: 1
+                Text { text: item.title; bold: true; fontSize: 13; maxLines: 1 }
+                if item.text != "" {
+                  Text { text: item.text; fontSize: 12; color: muted; maxLines: 2 }
+                }
+              }
+              Text { text: fmtAgo(item.time, now); font: jb; fontSize: 10; color: muted }
+            }
+          }
+        }
+        Text { text: "tap to open · hold to dismiss"; font: jb; fontSize: 10; color: muted; align: center }
+      }
+    }
+  }
+
+  component Panel() {
+    Column {
+      gap: 8
+      padding: [12, 10]
+      weight: 1
+      frost: 24
+      background: glass
+      border: 1
+      borderColor: edge
+      radius: 16 * corners
+      Row {
+        gap: 0
+        Tab { id: "procs"; label: "procs" }
+        Tab { id: "net"; label: "net" }
+        Tab { id: "shell"; label: "shell" }
+        Tab { id: "term"; label: "term" }
+        Tab { id: "inbox"; label: n.available && n.count > 0 ? "inbox ${n.count}" : "inbox" }
+      }
+      if tab == "net" {
+        Net { }
+      } else if tab == "shell" {
+        Shell { }
+      } else if tab == "term" {
+        Term { }
+      } else if tab == "inbox" {
+        Inbox { }
+      } else {
+        Procs { }
+      }
+    }
+  }
+
+  component Controls() {
+    Row {
+      gap: 10
+      align: center
+      padding: [12, 8]
+      frost: 24
+      background: glass
+      border: 1
+      borderColor: edge
+      radius: 16 * corners
+      if modes.torch != null {
+        Text { text: "◉"; fontSize: 18; color: modes.torch ? yellow : muted; onTap: { torch("toggle"); haptic() } }
+      }
+      Text { text: vol.muted ? "🔇" : "♪"; fontSize: 15; color: vol.muted ? red : muted; onTap: volume("toggle") }
+      Slider { value: vol.level ?? 0; color: accent; track: alpha(foreground, 0.12); weight: 1; onChange: volume(value) }
+      if playing {
+        Column {
+          gap: 0
+          width: 104
+          onTap: media("open")
+          Text { text: m.title; font: jb; fontSize: 10; maxLines: 1 }
+          Text { text: m.artist ?? ""; font: jb; fontSize: 9; color: muted; maxLines: 1 }
+        }
+        Text { text: "⏮"; fontSize: 16; onTap: media("previous") }
+        Text { text: m.playing ? "❚❚" : "▶"; fontSize: 15; color: accent; onTap: media("toggle") }
+        Text { text: "⏭"; fontSize: 16; onTap: media("next") }
+      }
+    }
+  }
+
+  component Dock() {
+    Column {
+      gap: 10
+      Row {
+        gap: 0
+        justify: spaceBetween
+        for r in strip key r.key {
+          Image { src: r.icon; size: 40; onTap: open(r.key) }
+        }
+      }
+      Row {
+        gap: 10
+        align: center
+        padding: [12, 4]
+        frost: 24
+        background: glass
+        border: 1
+        borderColor: alpha(accent, 0.45)
+        radius: 22 * corners
+        if agent != null {
+          Image { src: agent.icon; size: 22; onTap: open(agent.key) }
+        }
+        Input {
+          placeholder: agent == null ? "!command to run" : "ask ${lower(agent.name ?? agent.bin)} · !command to run"
+          clear: true
+          underline: false
+          fontSize: 14
+          weight: 1
+          onSubmit: {
+            if startsWith(value, "!") {
+              let c = trim(sub(value, 1, len(value)))
+              tab = "shell"
+              last = c
+              busy = true
+              past = unique(flatten([[c], past])).take(12)
+              out = run("cd ~ && { timeout 30 bash -c ${sh(c)}; echo \"[exit $? · $(date +%T)]\" >&2; } 2>&1 | tail -c 8000")
+            } else if trim(value) != "" {
+              ask(value)
+            }
+          }
+        }
+        Text { text: "⌂"; fontSize: 18; color: muted; onTap: launcher("drawer") }
+      }
+    }
+  }
+
+  Box {
+    fill: true
+    if wide {
+      Row {
+        gap: 16
+        fill: true
+        padding: [20, 8]
+        Column {
+          gap: 10
+          weight: 1
+          fill: height
+          Header { }
+          Status { }
+          Gauges { }
+          Spacer { weight: 1 }
+          Controls { }
+          Dock { }
+          Spacer { height: screenInset }
+        }
+        Column {
+          gap: 10
+          weight: 1
+          fill: height
+          Panel { }
+          Spacer { height: screenInset }
+        }
+      }
+    } else {
+      Column {
+        gap: 10
+        fill: true
+        padding: [14, 6]
+        if !typing {
+          Header { }
+          Status { }
+          Gauges { }
+        }
+        Panel { }
+        if !typing {
+          Controls { }
+        }
+        Dock { }
+        Spacer { height: screenInset }
+      }
+    }
+  }
+}

@@ -1,0 +1,701 @@
+widget "speedtest" {
+  page: 3
+  order: 6
+  size: 6x3
+  minSize: 3x3
+  padding: 10
+  background: skin == "neon" ? #060b16 : background
+
+  meta {
+    owl: 7
+    description: "One-tap internet speed test powered by Fast.com (Netflix CDN) and Cloudflare: live download, upload, ping, jitter, sparkline history, and neon blue CLI mode."
+    version: "1.0"
+    license: "MIT"
+    category: "system"
+  }
+
+  requires { pacman: ["curl", "jq"] }
+
+  state skin = "neon" persist
+
+  source live = file("~/.local/share/omalauncher/speedtest/status.json") json
+  source boot = cmd("""
+    d="$HOME/.local/share/omalauncher/speedtest"
+    mkdir -p "$d"
+    if [ ! -s "$d/status.json" ]; then
+      printf '{"running":false,"phase":"READY","step":"Tap widget to run speed test","progress":0,"down":0,"up":0,"ping":0,"jitter":0,"ip":"—","isp":"Ready to test","server":"Auto CDN","engine":"fast","history":[]}\n' > "$d/status.json"
+    elif jq -e '(.running == true and ((now - (.ts // 0)) > 25)) or (.phase == "ERROR" and ((now - (.ts // 0)) > 120))' "$d/status.json" >/dev/null 2>&1; then
+      jq -c '.running = false | .phase = "READY" | .step = "Tap to test again"' "$d/status.json" > "$d/status.json.tmp" && mv "$d/status.json.tmp" "$d/status.json"
+    fi
+    cat "$d/status.json"
+  """) every 15s json
+
+  let data = live.phase != null ? live : boot
+  let running = data.running ?? false
+  let phase = data.phase ?? "READY"
+  let stepText = data.step ?? "Tap anywhere to test speed"
+  let progress = num(data.progress, 0)
+  let down = num(data.down, 0)
+  let up = num(data.up, 0)
+  let ping = num(data.ping, 0)
+  let jitter = num(data.jitter, 0)
+  let ip = data.ip ?? "—"
+  let isp = data.isp ?? "Tap to measure"
+  let server = data.server ?? "Auto CDN"
+  let engine = data.engine ?? "fast"
+  let hist = data.history ?? []
+  let failed = !running && phase == "ERROR"
+  let downText = down > 0 ? fixed(down, 1) : "—"
+  let upText = up > 0 ? fixed(up, 1) : "—"
+  let pingText = ping > 0 ? "${round(ping)}" : "—"
+  let jitterText = jitter > 0 ? "${round(jitter)}" : "—"
+
+  let neon = skin == "neon"
+  let cBg = neon ? #060b16 : background
+  let cCard = neon ? #0a1426 : surface
+  let cCardHi = neon ? #0f203c : surface
+  let cBorder = neon ? #0ea5e9 : border
+  let cCyan = neon ? #00f0ff : cyan
+  let cBlue = neon ? #38bdf8 : blue
+  let cDeep = neon ? #0066ff : accent
+  let cIce = neon ? #e2f8ff : foreground
+  let cMuted = neon ? #5e84b0 : muted
+  let cGood = neon ? #00ffcc : green
+  let cBad = neon ? #ff5577 : red
+
+  let wide = (cols ?? 6) >= 5
+  // The top bar's chips need ~214 dp; narrower tiles drop the engine and CLI chips
+  let compactBar = (tileWidth ?? 420) < 340
+  // 3-column tiles drop the stat units; 5-column ones tighten the wide layout
+  let tiny = (tileWidth ?? 420) < 260
+  let snug = (tileWidth ?? 420) < 380
+  let statW = snug ? 46 : 54
+  let statS = snug ? 13 : 15
+  // Ping only gates the top tier, so grade and shortGrade always agree
+  let tier = down <= 0 ? 0 : (down >= 100 && ping <= 45) ? 4 : down >= 25 ? 3 : down >= 10 ? 2 : 1
+  let grade = tier == 4 ? "4K ULTRA · GAMING" : tier == 3 ? "4K STREAM · HD" : tier == 2 ? "HD STREAM · WEB" : tier == 1 ? "BASIC LINK" : running ? "TESTING…" : "IDLE"
+  let shortGrade = tier == 4 ? "4K ULTRA" : tier == 3 ? "4K READY" : tier == 2 ? "HD READY" : tier == 1 ? "BASIC" : "READY"
+
+  // Normalized 0..1 gauge deflection (smooth curve so 10..250 Mbps all read clearly); while testing it follows progress
+  let gaugeRatio = running ? clamp(progress / 100, 0.08, 0.95) : clamp(sqrt(clamp(down, 0, 250) / 250), 0, 1)
+
+  let toggleEngineCmd = """
+    d="$HOME/.local/share/omalauncher/speedtest"
+    mkdir -p "$d"
+    sf="$d/status.json"
+    if [ -s "$sf" ]; then
+      jq -c '.engine = (if .engine == "cloudflare" then "fast" else "cloudflare" end)' "$sf" > "$sf.tmp" && mv "$sf.tmp" "$sf"
+    fi
+  """
+
+  // Set (not toggle) the engine and only write when it changes, so a handler needs no `if` (owl 9)
+  let setFastCmd = """
+    sf="$HOME/.local/share/omalauncher/speedtest/status.json"
+    if [ -s "$sf" ] && ! jq -e '.engine == "fast"' "$sf" >/dev/null 2>&1; then
+      jq -c '.engine = "fast"' "$sf" > "$sf.tmp" && mv "$sf.tmp" "$sf"
+    fi
+  """
+
+  let setCloudflareCmd = """
+    sf="$HOME/.local/share/omalauncher/speedtest/status.json"
+    if [ -s "$sf" ] && ! jq -e '.engine == "cloudflare"' "$sf" >/dev/null 2>&1; then
+      jq -c '.engine = "cloudflare"' "$sf" > "$sf.tmp" && mv "$sf.tmp" "$sf"
+    fi
+  """
+
+  // The token in the Fast.com URLs is the public one fast.com's own web page ships to every visitor; it isn't an account key
+  let runTestCmd = """
+    d="$HOME/.local/share/omalauncher/speedtest"
+    mkdir -p "$d"
+    sf="$d/status.json"
+    lf="$d/run.pid"
+    if [ -f "$lf" ]; then
+      oldp=$(cat "$lf" 2>/dev/null || true)
+      if [ -n "$oldp" ] && kill -0 "$oldp" 2>/dev/null; then exit 0; fi
+    fi
+    echo $$ > "$lf"
+    trap 'rm -f "$lf"' EXIT
+    prev=$(cat "$sf" 2>/dev/null || printf '{}')
+    eng=$(printf '%s\n' "$prev" | jq -r '.engine // "fast"')
+    update_state() {
+      printf '%s\n' "$prev" | jq -c \
+        --argjson run "$1" --arg ph "$2" --arg st "$3" --argjson pr "$4" \
+        --argjson dn "$5" --argjson up "$6" --argjson pg "$7" --argjson jt "$8" \
+        --arg ip "$9" --arg isp "${10}" --arg srv "${11}" --arg eg "$eng" --argjson ts "$(date +%s)" \
+        '{
+          running: $run, phase: $ph, step: $st, progress: $pr,
+          down: $dn, up: $up, ping: $pg, jitter: $jt,
+          ip: $ip, isp: $isp, server: $srv, engine: $eg, ts: $ts,
+          history: (if ($run == false and $ph == "DONE" and $dn > 0) then (((.history // []) + [$dn]) | .[-20:]) else (.history // []) end)
+        }' > "$sf.tmp" && mv "$sf.tmp" "$sf"
+      prev=$(cat "$sf")
+    }
+    old_dn=$(printf '%s\n' "$prev" | jq -r '.down // 0')
+    old_up=$(printf '%s\n' "$prev" | jq -r '.up // 0')
+    old_pg=$(printf '%s\n' "$prev" | jq -r '.ping // 0')
+    old_jt=$(printf '%s\n' "$prev" | jq -r '.jitter // 0')
+    old_ip=$(printf '%s\n' "$prev" | jq -r '.ip // "—" | tostring')
+    old_isp=$(printf '%s\n' "$prev" | jq -r '.isp // "Probing network…" | tostring')
+    old_srv=$(printf '%s\n' "$prev" | jq -r '.server // "Connecting…" | tostring')
+
+    update_state true "PING" "Measuring latency & jitter…" 18 "$old_dn" "$old_up" "$old_pg" "$old_jt" "$old_ip" "$old_isp" "$old_srv"
+
+    set --
+    for i in 1 2 3 4 5 6 7 8; do set -- "$@" -o /dev/null "https://speed.cloudflare.com/__down?bytes=0&$i"; done
+    rtts=$(curl -s --fail-early --connect-timeout 3 -m 4 -w "%{http_code} %{time_starttransfer}\n" "$@" 2>/dev/null || true)
+    pj=$(printf '%s\n' "$rtts" | jq -Rsc '
+      [splits("\n") | select(length > 0) | split(" ") | select(.[0] == "200") | (.[1] | tonumber? | . * 1000)] |
+      if length > 1 then .[1:] else . end |
+      if length == 0 then {p: null, j: null}
+      else
+        (min | round) as $p |
+        (if length > 1 then ([range(0; length-1) as $i | (.[$i+1] - .[$i]) | if . < 0 then -. else . end] | add / length | round | if . < 1 then 1 else . end) else 0 end) as $j |
+        {p: $p, j: $j}
+      end
+    ' 2>/dev/null)
+    pg=$(printf '%s\n' "$pj" | jq -r '.p // empty' 2>/dev/null)
+    jt=$(printf '%s\n' "$pj" | jq -r '.j // 0' 2>/dev/null)
+    if [ -z "$pg" ]; then
+      update_state false "ERROR" "No connection" 0 "$old_dn" "$old_up" "$old_pg" "$old_jt" "$old_ip" "$old_isp" "$old_srv"
+      exit 0
+    fi
+
+    ip="$old_ip"; isp="$old_isp"; srv="$old_srv"; urls=""
+    if [ "$eng" = "fast" ]; then
+      update_state true "DOWNLOAD" "Testing download via Fast.com CDN…" 48 0 "$old_up" "$pg" "$jt" "$ip" "$isp" "Netflix OCA"
+      fmeta=$(curl -s -m 4 "https://api.fast.com/netflix/speedtest/v2?https=true&token=YXNkZmFzZGxmbnNkYWZoYXNkZmhrYWxm&urlCount=3" 2>/dev/null || true)
+      if [ -n "$fmeta" ] && printf '%s\n' "$fmeta" | jq -e '.targets[0].url' >/dev/null 2>&1; then
+        ip=$(printf '%s\n' "$fmeta" | jq -r '.client.ip // "—"')
+        city=$(printf '%s\n' "$fmeta" | jq -r '.client.location.city // ""')
+        cnt=$(printf '%s\n' "$fmeta" | jq -r '.client.location.country // ""')
+        asn=$(printf '%s\n' "$fmeta" | jq -r '.client.asn // ""')
+        srv=$(printf '%s\n' "$fmeta" | jq -r '.targets[0].location.city // "Netflix OCA"')
+        isp="AS${asn} · ${city}, ${cnt}"
+        urls=$(printf '%s\n' "$fmeta" | jq -r '.targets[].url')
+      fi
+    fi
+
+    if [ -z "$urls" ]; then
+      update_state true "DOWNLOAD" "Testing download via Cloudflare Edge…" 48 0 "$old_up" "$pg" "$jt" "$ip" "$isp" "Cloudflare Edge"
+      imeta=$(curl -s -m 3 "https://ipinfo.io/json" 2>/dev/null || true)
+      if [ -n "$imeta" ] && printf '%s\n' "$imeta" | jq -e '.ip' >/dev/null 2>&1; then
+        ip=$(printf '%s\n' "$imeta" | jq -r '.ip // "—"')
+        isp=$(printf '%s\n' "$imeta" | jq -r '.org // "Cloudflare Net" | sub("^AS[0-9]+ "; "")')
+        srv=$(printf '%s\n' "$imeta" | jq -r '.city // "Cloudflare Edge"')
+      fi
+      urls="https://speed.cloudflare.com/__down?bytes=25000000&s=1
+https://speed.cloudflare.com/__down?bytes=25000000&s=2
+https://speed.cloudflare.com/__down?bytes=25000000&s=3"
+    fi
+
+    update_state true "DOWNLOAD" "Measuring multi-stream download…" 62 0 "$old_up" "$pg" "$jt" "$ip" "$isp" "$srv"
+    tdir=$(mktemp -d)
+    cleanup() { [ -d "$tdir" ] && rm -f "$tdir"/* && rmdir "$tdir"; }
+    idx=0
+    for u in $urls; do
+      idx=$((idx + 1))
+      (curl -s -o /dev/null -m 3 -w "%{speed_download}\n" "$u" > "$tdir/d$idx" 2>/dev/null || true) &
+    done
+    wait
+    dn=$(cat "$tdir"/d* 2>/dev/null | jq -Rsc '[splits("\n") | select(length > 0) | tonumber? | select(. != null and . > 0)] | if length == 0 then 0 else ((add * 8 / 1000000 * 10) | round / 10) end')
+
+    if [ -z "$dn" ] || [ "$dn" = "0" ]; then
+      cleanup
+      update_state false "ERROR" "Download failed" 0 "$old_dn" "$old_up" "$old_pg" "$old_jt" "$old_ip" "$old_isp" "$old_srv"
+      exit 0
+    fi
+
+    update_state true "UPLOAD" "Measuring multi-stream upload…" 85 "$dn" 0 "$pg" "$jt" "$ip" "$isp" "$srv"
+    for s in 1 2; do
+      (dd if=/dev/zero bs=100000 count=15 2>/dev/null | curl -s -o /dev/null -m 3 -w "%{speed_upload}\n" --data-binary @- "https://speed.cloudflare.com/__up?s=$s" > "$tdir/u$s" 2>/dev/null || true) &
+    done
+    wait
+    up=$(cat "$tdir"/u* 2>/dev/null | jq -Rsc '[splits("\n") | select(length > 0) | tonumber? | select(. != null and . > 0)] | if length == 0 then 0 else ((add * 8 / 1000000 * 10) | round / 10) end')
+    cleanup
+    [ -n "$up" ] || up=0
+
+    update_state false "DONE" "Test complete · Tap to re-run" 100 "$dn" "$up" "$pg" "$jt" "$ip" "$isp" "$srv"
+  """
+
+  // Same public Fast.com token as in runTestCmd
+  let termCmd = """
+    mkdir -p "$HOME/.local/share/omalauncher/speedtest"
+    sf="$HOME/.local/share/omalauncher/speedtest/status.json"
+    ENG=$(jq -r '.engine // "fast"' "$sf" 2>/dev/null || echo "fast")
+    C0='\033[0m'
+    C_NEON='\033[1;38;2;0;240;255m'
+    C_BLUE='\033[1;38;2;56;189;248m'
+    C_DEEP='\033[1;38;2;0;102;255m'
+    C_ICE='\033[1;38;2;226;248;255m'
+    C_MUTED='\033[38;2;94;132;176m'
+    C_GOOD='\033[1;38;2;0;255;204m'
+    C_BAD='\033[1;38;2;255;85;119m'
+
+    bar() {
+      local pct=$1 w=28
+      local fill=$(( pct * w / 100 ))
+      local empty=$(( w - fill ))
+      printf "${C_DEEP}["
+      if [ "$fill" -gt 0 ]; then
+        for _ in $(seq 1 "$fill"); do printf "${C_NEON}█"; done
+      fi
+      if [ "$empty" -gt 0 ]; then
+        for _ in $(seq 1 "$empty"); do printf "${C_MUTED}░"; done
+      fi
+      printf "${C_DEEP}] ${C_NEON}%3d%%${C0}" "$pct"
+    }
+
+    cli_run() {
+      clear
+      printf "${C_DEEP}╔══════════════════════════════════════════════════════╗${C0}\n"
+      printf "${C_DEEP}║  ${C_NEON}⚡ NEON SPEEDTEST CLI${C_MUTED}  ·  ENGINE: ${C_ICE}%-16s${C_DEEP}║${C0}\n" "$(echo "$ENG" | tr 'a-z' 'A-Z')"
+      printf "${C_DEEP}╚══════════════════════════════════════════════════════╝${C0}\n\n"
+
+      printf "  ${C_BLUE}▸ [1/3] PING & JITTER${C0}     "
+      bar 25
+      set --
+      for i in 1 2 3 4 5 6 7 8; do set -- "$@" -o /dev/null "https://speed.cloudflare.com/__down?bytes=0&$i"; done
+      rtts=$(curl -s --fail-early --connect-timeout 3 -m 4 -w "%{http_code} %{time_starttransfer}\n" "$@" 2>/dev/null || true)
+      pj=$(printf '%s\n' "$rtts" | jq -Rsc '
+        [splits("\n") | select(length > 0) | split(" ") | select(.[0] == "200") | (.[1] | tonumber? | . * 1000)] |
+        if length > 1 then .[1:] else . end |
+        if length == 0 then {p: null, j: null}
+        else (min | round) as $p | (if length > 1 then ([range(0; length-1) as $i | (.[$i+1] - .[$i]) | if . < 0 then -. else . end] | add / length | round | if . < 1 then 1 else . end) else 0 end) as $j | {p: $p, j: $j} end
+      ' 2>/dev/null)
+      pg=$(printf '%s\n' "$pj" | jq -r '.p // empty' 2>/dev/null)
+      jt=$(printf '%s\n' "$pj" | jq -r '.j // 0' 2>/dev/null)
+      if [ -z "$pg" ]; then
+        printf "\r  ${C_BAD}✗ [1/3] PING & JITTER${C0}     ${C_BAD}No connection${C0}\033[K\n\n"
+        return 1
+      fi
+      printf "\r  ${C_GOOD}✓ [1/3] PING & JITTER${C0}     ${C_NEON}%s ms${C_MUTED} (jitter: ${C_ICE}%s ms${C_MUTED})\033[K\n\n" "$pg" "$jt"
+
+      printf "  ${C_BLUE}▸ [2/3] DOWNLOAD SPEED${C0}    "
+      bar 60
+      urls=""; ip="—"; isp="Network"; srv="Edge CDN"
+      if [ "$ENG" = "fast" ]; then
+        fmeta=$(curl -s -m 4 "https://api.fast.com/netflix/speedtest/v2?https=true&token=YXNkZmFzZGxmbnNkYWZoYXNkZmhrYWxm&urlCount=3" 2>/dev/null || true)
+        if [ -n "$fmeta" ] && printf '%s\n' "$fmeta" | jq -e '.targets[0].url' >/dev/null 2>&1; then
+          ip=$(printf '%s\n' "$fmeta" | jq -r '.client.ip // "—"')
+          city=$(printf '%s\n' "$fmeta" | jq -r '.client.location.city // ""')
+          cnt=$(printf '%s\n' "$fmeta" | jq -r '.client.location.country // ""')
+          asn=$(printf '%s\n' "$fmeta" | jq -r '.client.asn // ""')
+          srv=$(printf '%s\n' "$fmeta" | jq -r '.targets[0].location.city // "Netflix OCA"')
+          isp="AS${asn} · ${city}, ${cnt}"
+          urls=$(printf '%s\n' "$fmeta" | jq -r '.targets[].url')
+        fi
+      fi
+      if [ -z "$urls" ]; then
+        imeta=$(curl -s -m 3 "https://ipinfo.io/json" 2>/dev/null || true)
+        ip=$(printf '%s\n' "$imeta" | jq -r '.ip // "—"' 2>/dev/null || echo "—")
+        isp=$(printf '%s\n' "$imeta" | jq -r '.org // "Cloudflare"' 2>/dev/null || echo "Cloudflare")
+        srv=$(printf '%s\n' "$imeta" | jq -r '.city // "Cloudflare Edge"' 2>/dev/null || echo "Cloudflare Edge")
+        urls="https://speed.cloudflare.com/__down?bytes=25000000&s=1
+https://speed.cloudflare.com/__down?bytes=25000000&s=2
+https://speed.cloudflare.com/__down?bytes=25000000&s=3"
+      fi
+      tdir=$(mktemp -d)
+      cleanup() { [ -d "$tdir" ] && rm -f "$tdir"/* && rmdir "$tdir"; }
+      idx=0
+      for u in $urls; do
+        idx=$((idx + 1))
+        (curl -s -o /dev/null -m 3 -w "%{speed_download}\n" "$u" > "$tdir/d$idx" 2>/dev/null || true) &
+      done
+      wait
+      dn=$(cat "$tdir"/d* 2>/dev/null | jq -Rsc '[splits("\n") | select(length > 0) | tonumber? | select(. != null and . > 0)] | if length == 0 then 0 else ((add * 8 / 1000000 * 10) | round / 10) end')
+      if [ -z "$dn" ] || [ "$dn" = "0" ]; then
+        cleanup
+        printf "\r  ${C_BAD}✗ [2/3] DOWNLOAD SPEED${C0}    ${C_BAD}Download failed${C0}\033[K\n\n"
+        return 1
+      fi
+      printf "\r  ${C_GOOD}✓ [2/3] DOWNLOAD SPEED${C0}    ${C_NEON}%s Mbps${C_MUTED} (server: ${C_ICE}%s${C_MUTED})\033[K\n\n" "$dn" "$srv"
+
+      printf "  ${C_BLUE}▸ [3/3] UPLOAD SPEED${C0}      "
+      bar 88
+      for s in 1 2; do
+        (dd if=/dev/zero bs=100000 count=15 2>/dev/null | curl -s -o /dev/null -m 3 -w "%{speed_upload}\n" --data-binary @- "https://speed.cloudflare.com/__up?s=$s" > "$tdir/u$s" 2>/dev/null || true) &
+      done
+      wait
+      up=$(cat "$tdir"/u* 2>/dev/null | jq -Rsc '[splits("\n") | select(length > 0) | tonumber? | select(. != null and . > 0)] | if length == 0 then 0 else ((add * 8 / 1000000 * 10) | round / 10) end')
+      cleanup
+      [ -n "$up" ] || up=0
+      printf "\r  ${C_GOOD}✓ [3/3] UPLOAD SPEED${C0}      ${C_BLUE}%s Mbps${C0}                              \n\n" "$up"
+
+      prev=$(cat "$sf" 2>/dev/null || printf '{}')
+      printf '%s\n' "$prev" | jq -c \
+        --arg ph "DONE" --arg st "Completed in Neon CLI" \
+        --argjson dn "$dn" --argjson up "$up" --argjson pg "$pg" --argjson jt "$jt" \
+        --arg ip "$ip" --arg isp "$isp" --arg srv "$srv" --arg eg "$ENG" --argjson ts "$(date +%s)" \
+        '{running:false,phase:$ph,step:$st,progress:100,down:$dn,up:$up,ping:$pg,jitter:$jt,ip:$ip,isp:$isp,server:$srv,engine:$eg,ts:$ts,history:(((.history//[])+[$dn])|.[-20:])}' > "$sf.tmp" && mv "$sf.tmp" "$sf"
+
+      printf "${C_DEEP}┌────────────────────────┬────────────────────────┐${C0}\n"
+      printf "${C_DEEP}│ ${C_MUTED}↓ DOWNLOAD             ${C_DEEP}│ ${C_MUTED}↑ UPLOAD               ${C_DEEP}│${C0}\n"
+      printf "${C_DEEP}│ ${C_NEON}%-14s Mbps    ${C_DEEP}│ ${C_BLUE}%-14s Mbps    ${C_DEEP}│${C0}\n" "$dn" "$up"
+      printf "${C_DEEP}├────────────────────────┼────────────────────────┤${C0}\n"
+      printf "${C_DEEP}│ ${C_MUTED}◎ PING / JITTER        ${C_DEEP}│ ${C_MUTED}◈ SERVER / CLIENT IP   ${C_DEEP}│${C0}\n"
+      printf "${C_DEEP}│ ${C_ICE}%-22s ${C_DEEP}│ ${C_ICE}%-22s ${C_DEEP}│${C0}\n" "${pg} ms (${jt} ms)" "${srv} (${ip})"
+      printf "${C_DEEP}└────────────────────────┴────────────────────────┘${C0}\n"
+      printf "  ${C_MUTED}ISP:${C0} ${C_ICE}%s${C0}\n\n" "$isp"
+    }
+
+    while true; do
+      cli_run
+      printf "  ${C_NEON}[ENTER]${C_ICE} Re-run   ${C_NEON}[E]${C_ICE} Switch Engine (Fast/CF)   ${C_NEON}[Q]${C_ICE} Quit: ${C0}"
+      read -r ans
+      if [ "$ans" = "q" ] || [ "$ans" = "Q" ]; then
+        break
+      elif [ "$ans" = "e" ] || [ "$ans" = "E" ]; then
+        if [ "$ENG" = "fast" ]; then ENG="cloudflare"; else ENG="fast"; fi
+      fi
+    done
+  """
+
+  onTap: { haptic(); run(runTestCmd) }
+
+  component Gauge(dialSize) {
+    Canvas {
+      size: dialSize
+      let cx = width / 2
+      let cy = height / 2
+      let r = min(width, height) / 2 - 6
+      // Outer subtle glow ring
+      circle(cx, cy, r + 3, stroke: failed ? alpha(cBad, 0.55) : alpha(cCyan, running ? 0.35 : 0.14), width: 1.5)
+      // Background track arc (225 deg to 495 deg = 270 deg sweep)
+      arc(cx, cy, r, 225, 270, stroke: alpha(cMuted, 0.25), width: 7, cap: round)
+      // Scale ticks
+      for i in range(13) {
+        let ang = 225 + i * 22.5
+        rotate(ang, cx, cy) {
+          line(cx, cy - r + 6, cx, cy - r + 10, stroke: i <= gaugeRatio * 12 ? cCyan : alpha(cMuted, 0.4), width: 1.5, cap: round)
+        }
+      }
+      // Active neon gradient arc
+      if gaugeRatio > 0.01 {
+        arc(cx, cy, r, 225, 270 * gaugeRatio, stroke: linear(0, height, width, 0, [cDeep, cBlue, cCyan]), width: 7, cap: round)
+      }
+      // Center readout
+      let mainVal = running ? "${progress}%" : downText
+      text(running ? phase : failed ? "ERROR" : (engine == "fast" ? "FAST.COM" : "CLOUDFLARE"), cx, cy - r * 0.46, size: 8.5, color: failed ? cBad : cMuted, align: center, bold: true)
+      text(mainVal, cx, cy - 2, size: dialSize * 0.22, color: cIce, align: center, bold: true)
+      text(running ? "TESTING" : "Mbps", cx, cy + r * 0.34, size: 9.5, color: cCyan, align: center, bold: true)
+      text(running ? "● LIVE" : failed ? "● FAILED" : "● READY", cx, cy + r * 0.62, size: 7.5, color: running ? cGood : failed ? cBad : cBlue, align: center, bold: true)
+    }
+  }
+
+  component StatBox(label, val, unit, tint, vw = 54, vs = 15) {
+    Box {
+      weight: 1
+      padding: [8, 5]
+      radius: 5 * corners
+      background: cCard
+      border: 1
+      borderColor: alpha(tint, 0.32)
+      Column {
+        gap: 1
+        Text { text: label; fontSize: 9; font: mono; bold: true; color: cMuted; maxLines: 1 }
+        Row {
+          gap: 3
+          align: bottom
+          Text { text: val; fontSize: vs; font: mono; bold: true; color: tint; width: vw; maxLines: 1 }
+          Text { text: unit; fontSize: 9; font: mono; color: cMuted; weight: 1; maxLines: 1 }
+        }
+      }
+    }
+  }
+
+  Column {
+    gap: 6
+    fill: true
+
+    // Top Cyber Bar
+    Row {
+      gap: 6
+      align: center
+      Text {
+        text: running ? "◌ ${phase}" : failed ? "⚠ SPEEDTEST" : "⚡ SPEEDTEST"
+        fontSize: 12; font: mono; bold: true; color: failed ? cBad : cCyan; weight: 1; maxLines: 1
+      }
+      if !compactBar {
+        Box {
+          padding: [6, 2]
+          radius: 3 * corners
+          background: alpha(cDeep, 0.22)
+          border: 1
+          borderColor: alpha(cCyan, 0.45)
+          onTap: { haptic(); run(toggleEngineCmd) }
+          Text { text: engine == "fast" ? "FAST.COM" : "CLOUDFLARE"; fontSize: 9; font: mono; bold: true; color: cCyan; width: 72; align: center; maxLines: 1 }
+        }
+        Box {
+          padding: [6, 2]
+          radius: 3 * corners
+          background: cCardHi
+          border: 1
+          borderColor: alpha(cBlue, 0.4)
+          onTap: { haptic(); terminal(termCmd, "Neon Speedtest CLI") }
+          Text { text: ">_ CLI"; fontSize: 9; font: mono; bold: true; color: cIce; width: 48; align: center; maxLines: 1 }
+        }
+      }
+      Box {
+        padding: [6, 2]
+        radius: 3 * corners
+        background: cCardHi
+        border: 1
+        borderColor: alpha(cMuted, 0.35)
+        onTap: { haptic(); screen() }
+        Text { text: "INFO"; fontSize: 9; font: mono; bold: true; color: cBlue; width: 40; align: center; maxLines: 1 }
+      }
+    }
+
+    if wide {
+      Row {
+        gap: 10
+        weight: 1
+        align: center
+
+        Box {
+          align: center
+          onTap: { haptic(); run(runTestCmd) }
+          Gauge { dialSize: 112 }
+        }
+
+        Column {
+          gap: 5
+          weight: 1
+          fill: height
+          justify: spaceBetween
+
+          Row {
+            gap: 6
+            StatBox { label: "↓ DOWNLOAD"; val: downText; unit: "Mbps"; tint: cCyan; vw: statW; vs: statS }
+            StatBox { label: "↑ UPLOAD"; val: upText; unit: "Mbps"; tint: cBlue; vw: statW; vs: statS }
+          }
+
+          Row {
+            gap: 6
+            StatBox { label: "◎ PING"; val: pingText; unit: "ms"; tint: cIce; vw: statW; vs: statS }
+            StatBox { label: "≈ JITTER"; val: jitterText; unit: "ms"; tint: cGood; vw: statW; vs: statS }
+          }
+
+          if running {
+            Column {
+              gap: 2
+              Text { text: stepText; fontSize: 10; font: mono; color: cCyan; maxLines: 1 }
+              Progress { value: progress; max: 100; color: cCyan; track: cCard; animate value: spring() }
+            }
+          } else {
+            Row {
+              gap: 6
+              align: center
+              Text { text: failed ? stepText : snug ? shortGrade : "${server} · ${shortGrade}"; fontSize: 10; font: mono; color: failed ? cBad : cMuted; weight: 1; maxLines: 1 }
+              Text { text: failed ? (snug ? "RETRY ↻" : "TAP TO RETRY ↻") : "TAP TO TEST ↻"; fontSize: 10; font: mono; bold: true; color: cCyan; width: failed && snug ? 62 : 106; align: end; maxLines: 1 }
+            }
+          }
+        }
+      }
+    } else {
+      Column {
+        gap: 5
+        weight: 1
+        align: center
+        justify: spaceBetween
+        Box {
+          align: center
+          onTap: { haptic(); run(runTestCmd) }
+          Gauge { dialSize: 92 }
+        }
+        Row {
+          gap: 5
+          StatBox { label: "↓ DOWN"; val: downText; unit: tiny ? "" : "Mbps"; tint: cCyan }
+          StatBox { label: "↑ UP"; val: upText; unit: tiny ? "" : "Mbps"; tint: cBlue }
+        }
+        Text {
+          text: running ? stepText : failed ? "${stepText} · Retry" : "Ping ${pingText} ms · Tap to test"
+          fontSize: 10; font: mono; color: running ? cCyan : failed ? cBad : cMuted; align: center; fill: width; maxLines: 1
+        }
+      }
+    }
+  }
+
+  screen {
+    title: "speedtest"
+    Column {
+      gap: 12
+      padding: 14
+      scroll: true
+      background: cBg
+
+      // Header Banner
+      Box {
+        fill: width
+        padding: 12
+        radius: 8 * corners
+        background: cCard
+        border: 1
+        borderColor: alpha(cCyan, 0.45)
+        Column {
+          gap: 8
+          align: center
+          Row {
+            gap: 8
+            align: center
+            Text { text: "⚡ NEON SPEEDTEST"; fontSize: 14; font: mono; bold: true; color: cCyan; weight: 1; maxLines: 1 }
+            Text { text: grade; fontSize: 10; font: mono; bold: true; color: cGood; width: 138; align: end; maxLines: 1 }
+          }
+          Box {
+            align: center
+            onTap: { haptic(); run(runTestCmd) }
+            Gauge { dialSize: 170 }
+          }
+          if running {
+            Text { text: stepText; fontSize: 12; font: mono; color: cCyan; align: center; fill: width }
+            Progress { value: progress; max: 100; color: cCyan; track: cBg; animate value: spring() }
+          }
+          if failed {
+            Text { text: "⚠ ${stepText} · try again"; fontSize: 12; font: mono; color: cBad; align: center; fill: width }
+          }
+          Row {
+            gap: 8
+            Button {
+              text: running ? "Testing…" : "⚡ Run Speed Test"
+              color: running ? cMuted : cCyan
+              weight: 2
+              onTap: { haptic(); run(runTestCmd) }
+            }
+            Button {
+              text: ">_ CLI"
+              color: cBlue
+              weight: 1
+              onTap: { haptic(); terminal(termCmd, "Neon Speedtest CLI") }
+            }
+          }
+        }
+      }
+
+      // Live Metrics Grid
+      Row {
+        gap: 8
+        StatBox { label: "↓ DOWNLOAD SPEED"; val: downText; unit: "Mbps"; tint: cCyan }
+        StatBox { label: "↑ UPLOAD SPEED"; val: upText; unit: "Mbps"; tint: cBlue }
+      }
+      Row {
+        gap: 8
+        StatBox { label: "◎ LATENCY (PING)"; val: pingText; unit: "ms"; tint: cIce }
+        StatBox { label: "≈ JITTER"; val: jitterText; unit: "ms"; tint: cGood }
+      }
+
+      // Sparkline History
+      if len(hist) > 0 {
+        Box {
+          fill: width
+          padding: 12
+          radius: 8 * corners
+          background: cCard
+          border: 1
+          borderColor: alpha(cBlue, 0.3)
+          Column {
+            gap: 6
+            Row {
+              Text { text: "DOWNLOAD HISTORY (Mbps)"; fontSize: 10; font: mono; bold: true; color: cMuted; weight: 1 }
+              Text { text: "Peak: ${fixed(max(hist), 1)} Mbps"; fontSize: 10; font: mono; color: cCyan; width: 120; align: end }
+            }
+            Sparkline { values: hist; min: 0; color: cCyan; area: true; height: 56; fill: width }
+          }
+        }
+      }
+
+      // Engine & Theme Settings
+      Box {
+        fill: width
+        padding: 12
+        radius: 8 * corners
+        background: cCard
+        border: 1
+        borderColor: alpha(cBorder, 0.3)
+        Column {
+          gap: 8
+          Text { text: "TEST ENGINE & APPEARANCE"; fontSize: 10; font: mono; bold: true; color: cMuted }
+          Row {
+            gap: 8
+            Button {
+              text: engine == "fast" ? "✓ Fast.com CDN" : "Fast.com CDN"
+              color: engine == "fast" ? cCyan : cMuted
+              weight: 1
+              onTap: { haptic(); run(setFastCmd) }
+            }
+            Button {
+              text: engine == "cloudflare" ? "✓ Cloudflare" : "Cloudflare"
+              color: engine == "cloudflare" ? cCyan : cMuted
+              weight: 1
+              onTap: { haptic(); run(setCloudflareCmd) }
+            }
+          }
+          Row {
+            gap: 8
+            Button {
+              text: skin == "neon" ? "✓ Neon Blue" : "Neon Blue"
+              color: skin == "neon" ? cBlue : cMuted
+              weight: 1
+              onTap: { haptic(); skin = "neon" }
+            }
+            Button {
+              text: skin == "theme" ? "✓ Theme Colors" : "Theme Colors"
+              color: skin == "theme" ? accent : cMuted
+              weight: 1
+              onTap: { haptic(); skin = "theme" }
+            }
+          }
+        }
+      }
+
+      // Network & Server Details
+      Box {
+        fill: width
+        padding: 12
+        radius: 8 * corners
+        background: cCard
+        border: 1
+        borderColor: alpha(cBorder, 0.25)
+        Column {
+          gap: 6
+          Text { text: "CONNECTION DETAILS (TAP IP TO COPY)"; fontSize: 10; font: mono; bold: true; color: cMuted }
+          Row {
+            Text { text: "Provider / ASN"; fontSize: 12; font: mono; color: cMuted; width: 120 }
+            Text { text: isp; fontSize: 12; font: mono; color: cIce; weight: 1; maxLines: 1 }
+          }
+          Row {
+            Text { text: "Test Server"; fontSize: 12; font: mono; color: cMuted; width: 120 }
+            Text { text: "${server} (${upper(engine)})"; fontSize: 12; font: mono; color: cCyan; weight: 1; maxLines: 1 }
+          }
+          Row {
+            onTap: { haptic(); copy(ip) }
+            Text { text: "External IP"; fontSize: 12; font: mono; color: cMuted; width: 120 }
+            Text { text: "${ip} ⧉"; fontSize: 12; font: mono; color: cBlue; weight: 1; maxLines: 1 }
+          }
+        }
+      }
+
+      Row {
+        gap: 8
+        Button {
+          text: "Share Results"
+          color: cBlue
+          weight: 1
+          onTap: { haptic(); share("⚡ Speedtest (${upper(engine)}): ↓ ${fixed(down, 1)} Mbps · ↑ ${fixed(up, 1)} Mbps · Ping ${round(ping)} ms (Jitter ${round(jitter)} ms)") }
+        }
+        Button { text: "Close"; color: cMuted; weight: 1; onTap: close() }
+      }
+
+      // Author credit, kept subtle
+      Row {
+        Spacer { weight: 1 }
+        Box {
+          width: 160
+          padding: [0, 8]
+          onTap: { haptic(); url("https://github.com/nicomaure") }
+          Text { text: "by nicomaure ↗"; fontSize: 9; font: mono; color: alpha(cMuted, 0.8); align: center; fill: width; maxLines: 1 }
+        }
+        Spacer { weight: 1 }
+      }
+    }
+  }
+}

@@ -1,0 +1,398 @@
+// Breakout by rcrohmana, 2026. MIT License.
+app "breakout" {
+  title: ""
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 6h10v7H4zM19 6h10v7H19zM34 6h10v7H34zM4 19h10v7H4zM19 19h10v7H19z"/>
+    <circle cx="35" cy="31" r="3"/>
+    <path d="M13 42h22"/>
+  </svg>"""
+  meta { owl: 10; description: "Relaxed Breakout with themed bricks, drag controls, multiball, wide-paddle and piercing bonuses. Tap to serve, pause anytime, and keep playing with no lives."; version: "3.3.1"; license: "MIT"; author: "rcrohmana"; category: "games" }
+
+  // Use OWL's frame clock so the game needs no Linux process or access.
+  let ct = time
+  let pt = prev(ct)
+  let gap = pt == null || ct == 0 || pt == 0 ? 0 : ct - pt
+
+  state bricks = [] persist        // 48 cells, row by row: hits left (2 hard, 1, 0 broken)
+  state bonus = [] persist         // bonus bricks this level: {i, k}, k is "wide", "multi" or "pierce"
+  state score = 0 persist
+  state best = 0 persist
+  state level = 1 persist
+  state mode = "ready"             // ready (ball on the paddle), serve, play
+  state paddleX = 60
+  state balls = []                 // {x, y, vx, vy, fall}: where each flight starts
+  state segStart = 0               // the stream's time the current flights began
+  state serveAfter = 0
+  state serveDeg = 0               // the serve's angle, from where the tap was
+  state lastEv = 0
+  state rally = 0                  // paddle hits since the last serve; balls speed up with them
+  state wide = false               // the wide paddle, until the balls are lost or the level is cleared
+  state pierce = 0                 // paddle hits left during which balls go through bricks
+  state paused = false
+  state pausedTT = 0
+  state resumeReq = false
+  state banner = ""
+  state flash = ""                 // a bonus just taken, shown for a moment
+  state flashCt = 0
+  state brickImpacts = 0           // impacts committed by completed flights (not the score)
+  state brickFeedback = 0          // cumulative impact count that last gave feedback
+  state brickFeedbackAt = 0        // coalesce rapid hits into at most 7 pulses per second
+  state confirmNew = false         // "new" asks once before throwing a game away
+  state confirmAt = 0
+
+  // the Canvas takes the room between the score line and the slider strip
+  let hudH = 40
+  let stripH = 44
+  let cw = max((screenWidth ?? 360) - 16, 120)
+  let ch = max((screenHeight ?? 640) - 16 - hudH - stripH, 120)
+
+  // the world, in units: 120 wide, and as tall as the screen's shape allows
+  let W = 120
+  let H = round(clamp(W * ch / cw, 100, 280))
+  let R = 2
+  let PY = H - 12                  // the paddle's top
+  let LINE = PY - R                // a ball's centre when it reaches the paddle
+  let COLS = 8
+  let ROWS = 6
+  let N = COLS * ROWS
+  let BW = 14.25
+  let BH = 6
+  let BX = 3
+  let BY = round(H * 0.1)
+  let MAXB = 4                     // balls at most, after doubling
+  let PW = max(26 - (level - 1) * 2, 16) * (wide ? 1.6 : 1)
+  let pad = clamp(paddleX, PW / 2, W - PW / 2)   // the paddle's centre, kept inside when it widens
+  let ROWC = [red, magenta, yellow, green, cyan, blue]
+  let BONUSC = foreground          // bonus bricks: the one color no row has
+
+  // a brick pattern per level, six in turn: wall, pyramid, checkers, diamond, pillars, frame
+  let masks = range(6).map(p => range(N).map(i => [{c: i % COLS, r: floor(i / COLS)}].map(q =>
+      p == 0 ? 1
+      : p == 1 ? (abs(q.c - 3.5) < q.r + 1 ? 1 : 0)
+      : p == 2 ? ((q.c + q.r) % 2 == 0 ? 1 : 0)
+      : p == 3 ? (abs(q.c - 3.5) + abs(q.r - 2.5) <= 4 ? 1 : 0)
+      : p == 4 ? (q.c % 3 != 2 ? 1 : 0)
+      : (q.r == 0 || q.r == 5 || q.c == 0 || q.c == 7 || ((q.r == 2 || q.r == 3) && (q.c == 3 || q.c == 4)) ? 1 : 0))[0]))
+  // and colors per level: by row, by column or in diagonals, the palette turned on as levels go
+  let scheme = (level - 1) % 3
+  let rot = floor((level - 1) / 3)
+  let brickC = range(N).map(i => [{c: i % COLS, r: floor(i / COLS)}].map(q => ROWC[((scheme == 0 ? q.r : scheme == 1 ? q.c % 6 : floor((q.c + q.r) / 2) % 6) + rot) % 6])[0])
+  let isBonus = range(N).map(i => any(bonus, b => b.i == i))
+  let PIERCE = pierce > 0
+  let nLive = count(balls, b => !b.fall)
+  let sp = min(92 + 6 * (level - 1) + 1.2 * rally, 170)
+
+  // each ball's flight: up to 28 bounces, until it is back at the paddle's height;
+  // a missed ball just falls off the bottom
+  let sims = mode != "play" ? [] : balls.map(bl => bl.fall
+    ? [(H + 3 * R - bl.y) / max(bl.vy, 1)].map(ft => {
+        x: bl.x + bl.vx * ft, y: bl.y + bl.vy * ft, vx: bl.vx, vy: bl.vy, t: ft, done: true, fall: true,
+        hits: [], segs: [{x: bl.x, y: bl.y, vx: bl.vx, vy: bl.vy, t: 0}]
+      })[0]
+    : reduce(range(28), (s, step) => s.done ? s : [{
+      tx: s.vx < 0 ? (R - s.x) / s.vx : (W - R - s.x) / s.vx,
+      ty: s.vy < 0 ? (R - s.y) / s.vy : (LINE - s.y) / s.vy,
+      b: reduce(s.alive, (best, a, i) => a == 0 ? best : [{
+          x1: (BX + (i % COLS) * BW - R - s.x) / s.vx,
+          x2: (BX + (i % COLS + 1) * BW + R - s.x) / s.vx,
+          y1: (BY + floor(i / COLS) * BH - R - s.y) / s.vy,
+          y2: (BY + (floor(i / COLS) + 1) * BH + R - s.y) / s.vy
+        }].map(q => [{n: max(min(q.x1, q.x2), min(q.y1, q.y2)), f: min(max(q.x1, q.x2), max(q.y1, q.y2)), sx: min(q.x1, q.x2) > min(q.y1, q.y2)}]
+          .map(h => h.n < h.f && h.n > 0.0001 && h.n < best.t ? {t: h.n, i: i, sx: h.sx} : best)[0])[0],
+        {t: 1000000, i: -1, sx: false})
+    }].map(c => [{dt: min(c.b.t, min(c.tx, c.ty)), k: c.b.t <= c.tx && c.b.t <= c.ty ? 2 : c.tx <= c.ty ? 0 : 1}].map(m => {
+      x: s.x + s.vx * m.dt,
+      y: s.y + s.vy * m.dt,
+      t: s.t + m.dt,
+      vx: m.k == 0 || (m.k == 2 && c.b.sx && !PIERCE) ? -s.vx : s.vx,
+      vy: (m.k == 1 && s.vy < 0) || (m.k == 2 && !c.b.sx && !PIERCE) ? -s.vy : s.vy,
+      done: m.k == 1 && s.vy > 0,
+      fall: false,
+      alive: m.k == 2 ? set(s.alive, c.b.i, PIERCE ? 0 : s.alive[c.b.i] - 1) : s.alive,
+      hits: m.k == 2 ? flatten([s.hits, [{i: c.b.i, t: s.t + m.dt, d: PIERCE ? s.alive[c.b.i] : 1}]]) : s.hits,
+      segs: flatten([s.segs, [{x: s.x, y: s.y, vx: s.vx, vy: s.vy, t: s.t}]])
+    })[0])[0],
+    {x: bl.x, y: bl.y, vx: bl.vx, vy: bl.vy, t: 0, done: false, fall: false, alive: bricks, hits: [], segs: []}))
+  let segT = reduce(sims, (m, s) => min(m, s.t), 1000000)
+  let nextAt = segStart + segT
+  let allHits = flatten(sims.map(s => s.hits))
+  // per brick: its hits in order, and when the last one it can take lands
+  let hitsOf = range(N).map(i => allHits.filter(h => h.i == i).sortBy(h => h.t))
+  let hitAt = range(N).map(i => reduce(hitsOf[i], (acc, h) => acc.t < 1000000 ? acc
+    : acc.d + h.d >= bricks[i] ? {t: h.t, d: acc.d + h.d} : {t: 1000000, d: acc.d + h.d}, {t: 1000000, d: 0}).t)
+  let pts = range(N).map(i => (ROWS - floor(i / COLS)) * level)
+
+  // where things are now
+  let el = paused ? pausedTT : max(ct - segStart, 0)
+  let tt = mode == "play" ? min(el, segT) : 0
+  let trails = mode == "play" ? sims.map(s => range(5).map(j => [max(tt - j * 0.018, 0)].map(u => [last(s.segs.filter(q => q.t <= u))]
+      .map(g => {x: clamp(g.x + g.vx * (u - g.t), R, W - R), y: g.y + g.vy * (u - g.t)})[0])[0]))
+    : [[{x: pad, y: LINE}]]
+  let broken = count(allHits, h => h.t <= tt)
+  let shown = score + sum(range(N).map(i => hitAt[i] <= tt ? pts[i] : 0))
+
+  when len(bricks) != N || len(bonus) == 0 {
+    bricks = len(bricks) != N ? range(N).map(i => masks[(level - 1) % 6][i] * (level > 1 && hash(level, i, 7) < min(0.08 + 0.04 * level, 0.35) ? 2 : 1)) : bricks
+    bonus = [shuffle(range(N).filter(i => masks[(level - 1) % 6][i] == 1))].map(o => range(6).map(j => {i: o[j], k: ["wide", "multi", "pierce"][j % 3]}))[0]
+  }
+  // a mode from an older version (fall, over), or play with no ball: back to serving
+  when (mode != "ready" && mode != "serve" && mode != "play") || (mode == "play" && len(balls) == 0) {
+    mode = "ready"
+    paused = false
+  }
+  // `broken` counts this flight's impacts, not total destroyed bricks. It also drops
+  // back to zero at each new flight. An `on broken` spends the launcher's 10/s
+  // trigger budget on BOTH increases and resets, even when its handler does nothing.
+  // Only fire for a new impact, group rapid hits, and do not replay hits while paused.
+  // A cumulative count also stays unchanged when pause/resume shifts segStart.
+  let brickEvent = brickImpacts + broken
+  when mode == "play" && !paused && broken > 0 && brickEvent > brickFeedback && ct - brickFeedbackAt >= 0.15 {
+    brickFeedback = brickEvent
+    brickFeedbackAt = ct
+    haptic()
+  }
+
+  // a gap in the clock: the page was away; the flights wait for it
+  // a short stutter shifts the flights; a longer one (the page was away) pauses the game,
+  // at the moment the clock last ran
+  when mode == "play" && !paused && gap > 0.25 && gap <= 1 { segStart = segStart + gap }
+  when mode == "play" && !paused && gap > 1 {
+    pausedTT = min(max(pt - segStart, 0), segT)
+    paused = true
+  }
+
+  when mode == "serve" && ct > serveAfter {
+    let deg = serveDeg
+    let a = rad(abs(deg) < 8 ? (deg < 0 ? -8 : deg > 0 ? 8 : (random(2) == 0 ? -8 : 8)) : deg)
+    balls = [{x: pad, y: LINE, vx: sp * sin(a), vy: -sp * cos(a), fall: false}]
+    banner = ""
+    segStart = ct
+    mode = "play"
+  }
+
+  when mode == "play" && !paused && ct != lastEv && gap <= 0.25 && ct >= nextAt {
+    // take everything as it is before the writes below change it
+    let u = segT
+    let es = sims
+    let hof = hitsOf
+    let committedImpacts = count(flatten(es.map(s => s.hits)), h => h.t <= u + 0.0001)
+    let px = pad
+    let pw = PW
+    let rl = rally
+    lastEv = ct
+    let after = range(N).map(i => max(bricks[i] - sum(hof[i].filter(h => h.t <= u + 0.0001).map(h => h.d)), 0))
+    let gotI = range(N).filter(i => bricks[i] > 0 && after[i] == 0)
+    let got = bonus.filter(b => indexOf(gotI, b.i) >= 0)
+    score = score + sum(gotI.map(i => pts[i]))
+    bricks = after
+    brickImpacts = brickImpacts + committedImpacts
+    segStart = segStart + u
+
+    // every ball at this moment
+    let now = es.map(s => s.t <= u + 0.0001
+      ? {x: s.x, y: s.y, vx: s.vx, vy: s.vy, fall: s.fall, end: true, done: s.done}
+      : [last(s.segs.filter(q => q.t <= u))].map(g => {x: g.x + g.vx * (u - g.t), y: g.y + g.vy * (u - g.t), vx: g.vx, vy: g.vy, fall: s.fall, end: false, done: false})[0])
+    let atPad = now.filter(b => !b.fall && b.end && b.done).map(b => (b.x - px) / (pw / 2 + R + 1))
+    let caught = count(atPad, d => abs(d) <= 1)
+    let v = min(92 + 6 * (level - 1) + 1.2 * (rl + 1), 170)
+    let moved = now.filter(b => !(b.fall && b.end)).map(b => !(b.end && b.done) || b.fall ? {x: b.x, y: b.y, vx: b.vx, vy: b.vy, fall: b.fall}
+      : [(b.x - px) / (pw / 2 + R + 1)].map(d => abs(d) > 1 ? {x: b.x, y: b.y, vx: b.vx, vy: b.vy, fall: true}
+        : [rad(clamp(d * 62, -62, 62))].map(a => {x: b.x, y: b.y, vx: abs(d) < 0.08 ? (d < 0 ? -0.09 : 0.09) * v : v * sin(a), vy: -v * cos(a), fall: false})[0])[0])
+    let live = moved.filter(b => !b.fall)
+    // ×2: each ball in play gets a twin flying the mirrored way
+    let twins = !any(got, b => b.k == "multi") ? [] : live.take(max(MAXB - len(live), 0)).map(b => [sqrt(b.vx * b.vx + b.vy * b.vy)].map(s2 =>
+      [abs(b.vx) < s2 * 0.25 ? (b.vx < 0 ? 0.45 : -0.45) * s2 : -b.vx].map(nvx => {x: b.x, y: b.y, vx: nvx, vy: sign(b.vy) * sqrt(max(s2 * s2 - nvx * nvx, 1)), fall: false})[0])[0])
+    rally = rl + caught
+    pierce = max(pierce - caught, 0)
+    if caught > 0 { haptic() }
+    if any(got, b => b.k == "wide") { wide = true }
+    if any(got, b => b.k == "pierce") { pierce = 3 }
+    let msgs = flatten([any(got, b => b.k == "wide") ? ["wide paddle"] : [], any(got, b => b.k == "multi") ? ["double balls"] : [],
+      any(got, b => b.k == "pierce") ? ["piercing balls"] : []])
+    if len(msgs) > 0 {
+      flash = join(msgs, " · ")
+      flashCt = ct
+    }
+
+    if all(after, a => a == 0) {
+      let nl = level + 1
+      best = max(best, score)
+      bricks = range(N).map(i => masks[(nl - 1) % 6][i] * (nl > 1 && hash(nl, i, 7) < min(0.08 + 0.04 * nl, 0.35) ? 2 : 1))
+      bonus = [shuffle(range(N).filter(i => masks[(nl - 1) % 6][i] == 1))].map(o => range(6).map(j => {i: o[j], k: ["wide", "multi", "pierce"][j % 3]}))[0]
+      level = nl
+      rally = 0
+      wide = false
+      pierce = 0
+      balls = []
+      mode = "ready"
+      banner = "level ${level}"
+      haptic()
+    } else if len(live) == 0 && len(moved) == 0 {
+      // every ball is gone: no lives to lose, just serve again
+      best = max(best, score)
+      rally = 0
+      wide = false
+      pierce = 0
+      balls = []
+      mode = "ready"
+    } else {
+      balls = flatten([moved, twins])
+    }
+  }
+
+  when resumeReq && ct > 0 {
+    segStart = ct - pausedTT
+    paused = false
+    resumeReq = false
+  }
+
+  // "sure?" goes back to "new" if not tapped again soon
+  when confirmNew && ct > 0 && ct - confirmAt > 3 { confirmNew = false }
+
+  // the world is scaled into the Canvas, centred
+  let sc = min(cw / W, ch / H)
+  let ox = (cw - W * sc) / 2
+  let oy = (ch - H * sc) / 2
+
+  Column {
+    padding: 8
+    gap: 0
+    Row {
+      height: hudH
+      padding: [4, 0]
+      align: center
+      gap: 8
+      Column {
+        weight: 1
+        gap: 2
+        Text { text: "BREAKOUT"; fontSize: 10; bold: true; letterSpacing: 1.6; color: alpha(foreground, 0.7); maxLines: 1 }
+        Row {
+          align: center
+          gap: cw >= 340 ? 10 : 6
+          Text { spans: [{text: "SCORE ", fontSize: 10, color: alpha(foreground, 0.6)}, {text: "${shown}", bold: true}]; fontSize: cw >= 340 ? 17 : 14; maxLines: 1 }
+          Text { text: "LEVEL ${level}"; color: accent; bold: true; fontSize: cw >= 340 ? 12 : 10; maxLines: 1 }
+          if cw >= 340 {
+            Text { text: "BEST ${max(best, shown)}"; color: alpha(foreground, 0.6); fontSize: 11; maxLines: 1 }
+          }
+        }
+      }
+      if mode == "play" {
+        Button {
+          text: paused ? "resume" : "pause"
+          onTap: {
+            if paused {
+              resumeReq = true
+            } else {
+              pausedTT = tt
+              paused = true
+            }
+          }
+        }
+      }
+      Button {
+        text: confirmNew ? "sure?" : "new"
+        color: confirmNew ? red : accent
+        onTap: if !confirmNew && (score > 0 || level > 1) {
+          confirmNew = true
+          confirmAt = ct
+        } else {
+          confirmNew = false
+          best = max(best, score)
+          bricks = masks[0]
+          bonus = [shuffle(range(N).filter(i => masks[(1 - 1) % 6][i] == 1))].map(o => range(6).map(j => {i: o[j], k: ["wide", "multi", "pierce"][j % 3]}))[0]
+          score = 0
+          level = 1
+          rally = 0
+          wide = false
+          pierce = 0
+          balls = []
+          paused = false
+          resumeReq = false
+          banner = ""
+          mode = "ready"
+        }
+      }
+    }
+    Canvas {
+      width: cw
+      height: ch
+      onDrag: if !paused { paddleX = clamp(pad + dx / sc, PW / 2, W - PW / 2) }
+      onTap: {
+        if paused {
+          resumeReq = true
+        } else if mode == "ready" {
+          serveDeg = clamp(((x - ox) / sc - pad) / (W / 2) * 120, -60, 60)
+          serveAfter = ct
+          mode = "serve"
+        }
+      }
+
+      // bricks; bonus ones in their own color
+      for i in range(N) {
+        let ht = mode == "play" ? hitAt[i] : 1000000
+        if bricks[i] > 0 && tt < ht + 0.25 {
+          let f = tt < ht ? 0 : (tt - ht) / 0.25
+          let grow = 1 + f * 0.5
+          rect(ox + (BX + (i % COLS) * BW + 0.5 + (BW - 1) * (1 - grow) / 2) * sc, oy + (BY + floor(i / COLS) * BH + 0.5 + (BH - 1) * (1 - grow) / 2) * sc,
+            (BW - 1) * grow * sc, (BH - 1) * grow * sc, radius: 1.2 * sc * corners, fill: alpha(isBonus[i] ? BONUSC : brickC[i], 1 - f))
+          if bricks[i] - (mode == "play" ? sum(hitsOf[i].filter(h => h.t <= tt).map(h => h.d)) : 0) >= 2 {
+            rect(ox + (BX + (i % COLS) * BW + 1.5) * sc, oy + (BY + floor(i / COLS) * BH + 1.5) * sc, (BW - 3) * sc, (BH - 3) * sc,
+              radius: 0.6 * sc * corners, stroke: alpha(background, 0.55), width: 0.7 * sc)
+          }
+        }
+      }
+
+      // paddle, trails and balls (red while they pierce)
+      rect(ox + (pad - PW / 2) * sc, oy + PY * sc, PW * sc, 3 * sc, radius: 1.5 * sc * corners, fill: accent)
+      for tr in trails {
+        for p, j in tr {
+          if j > 0 && p.y < H + R {
+            circle(ox + p.x * sc, oy + p.y * sc, R * sc * (1 - j * 0.15), fill: alpha(foreground, 0.25 - j * 0.045))
+          }
+        }
+        if tr[0].y < H + R {
+          circle(ox + tr[0].x * sc, oy + tr[0].y * sc, R * (PIERCE ? 2.8 : 2.2) * sc, fill: alpha(PIERCE ? red : accent, PIERCE ? 0.3 : 0.15))
+          circle(ox + tr[0].x * sc, oy + tr[0].y * sc, R * sc, fill: PIERCE ? red : foreground)
+        }
+      }
+
+      // the bonuses running now, over the bricks
+      if mode == "play" && (wide || PIERCE || nLive > 1) {
+        text(flatten([wide ? [{text: "WIDE   ", color: accent}] : [], PIERCE ? [{text: "PIERCE ${pierce}   ", color: red}] : [],
+            nLive > 1 ? [{text: "BALLS ${nLive}", color: foreground}] : []]),
+          ox + W / 2 * sc, oy + BY * 0.45 * sc, size: 3.6 * sc, bold: true, align: center, letterSpacing: 1)
+      }
+      // the bonus just taken, fading out
+      if mode == "play" && !paused && flash != "" && ct - flashCt < 1.4 {
+        text(flash, ox + W / 2 * sc, oy + H * 0.5 * sc, size: 6 * sc, bold: true, align: center,
+          color: alpha(BONUSC, clamp(1.4 - (ct - flashCt), 0, 1)))
+      }
+
+      // messages
+      if mode == "ready" || mode == "serve" {
+        if banner != "" {
+          text(banner, ox + W / 2 * sc, oy + H * 0.5 * sc, size: 9 * sc, bold: true, align: center, color: accent)
+        }
+        text("tap where the ball should go", ox + W / 2 * sc, oy + H * 0.6 * sc, size: 5 * sc, align: center, color: alpha(foreground, 0.7))
+        text("slide along the bar below to move the paddle", ox + W / 2 * sc, oy + (H * 0.6 + 8) * sc, size: 3.6 * sc, align: center, color: alpha(foreground, 0.4))
+      }
+      if paused {
+        text("paused", ox + W / 2 * sc, oy + H * 0.55 * sc, size: 10 * sc, bold: true, align: center, color: accent)
+        text("tap to resume", ox + W / 2 * sc, oy + (H * 0.55 + 11) * sc, size: 4.5 * sc, align: center, color: alpha(foreground, 0.7))
+      }
+    }
+
+    // the slider strip: drag here so the finger doesn't hide the paddle
+    Canvas {
+      width: cw
+      height: stripH
+      onDrag: if !paused { paddleX = clamp((x - ox) / sc, PW / 2, W - PW / 2) }
+      onTap: if !paused { paddleX = clamp((x - ox) / sc, PW / 2, W - PW / 2) }
+      rect(ox, stripH / 2 - 3, W * sc, 6, radius: 3 * corners, fill: alpha(foreground, 0.08))
+      rect(ox + (pad - PW / 2) * sc, stripH / 2 - 12, PW * sc, 24, radius: 12 * corners, fill: alpha(accent, 0.35))
+      for k in range(3) {
+        line(ox + pad * sc + (k - 1) * 6, stripH / 2 - 6, ox + pad * sc + (k - 1) * 6, stripH / 2 + 6, stroke: alpha(foreground, 0.5), width: 1.5, cap: round)
+      }
+    }
+  }
+}

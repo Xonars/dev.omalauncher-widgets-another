@@ -1,0 +1,60 @@
+# TAGLINE
+
+allow printer queues to accept jobs
+
+# TLDR
+
+**Accept print jobs** for a printer
+
+```cupsaccept [printer_name]```
+
+**Accept with reason message**
+
+```cupsaccept -r "[reason]" [printer_name]```
+
+# SYNOPSIS
+
+**cupsaccept** [_options_] _destination(s)_
+
+# PARAMETERS
+
+**-E**
+> Encrypt connection to server.
+
+**-r** _reason_
+> Set reason message for accepting.
+
+**-h** _server[:port]_
+> Connect to specific server.
+
+# DESCRIPTION
+
+**cupsaccept** instructs the printing system to accept print jobs for the specified destinations. This reverses the effect of **cupsreject**.
+
+This command is an alias for **accept** and requires administrator privileges.
+
+# INSTALL
+
+```apt: sudo apt install cups-client```
+
+```dnf: sudo dnf install cups-client```
+
+```apk: sudo apk add cups-client```
+
+```zypper: sudo zypper install cups-client```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[cupsreject](/man/cupsreject)(1), [cupsenable](/man/cupsenable)(1), [cupsdisable](/man/cupsdisable)(1)
+
+# RESOURCES
+
+```[Source code](https://github.com/OpenPrinting/cups)```
+
+```[Homepage](https://www.cups.org)```
+
+```[Documentation](https://openprinting.github.io/cups/)```
+
+<!-- verified: 2026-06-26 -->

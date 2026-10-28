@@ -1,0 +1,2302 @@
+app "corsair" {
+  meta {
+    owl: 13
+    description: "A pirate survivors-like: upgrade your ship, sail five biomes, claim four relics and slay the Sea King."
+    version: "1.7"
+    license: "MIT"
+    category: "games"
+  }
+  title: ""
+  statusBar: false
+  back: phase == "play" || phase == "shop" || phase == "pause" || phase == "harbor"
+  onBack: {
+    if phase == "play" { phase = "pause"; confirm = "" } else if phase == "harbor" { phase = "title" } else { phase = "play"; joy = false; jx = 0; jy = 0 }
+  }
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 31h40l-7 11H11z"/>
+    <path d="M24 31V4l9 4-9 4"/>
+    <path d="M24 15c9 2 13 8 13 16M24 15c-7 2-11 8-11 16"/>
+  </svg>"""
+
+  requires { pacman: ["coreutils"] }
+
+  // The game's clock: a line every ~0.12 s while the app is open. Each tick moves the world one
+  // step; nodes tween their offset and rotation over a tick, so motion in between is smooth.
+  source tick = stream('while :; do date +%s%3N; sleep 0.11; done')
+
+  state phase = "title"        // title, play, level, shop, pause, over
+  state last = 0
+  state gt = 0                 // seconds sailed
+  state sx = 0
+  state sy = 0
+  state sh = 0                 // heading, degrees clockwise from north, unbounded so tweens never spin the long way
+  state sv = 0
+  state hp = 100
+  state lv = {cannon: 1, parrot: 0, fire: 0, mortar: 0, ram: 0, sails: 0, hull: 0, nest: 0, swivel: 0, harpoon: 0, lantern: 0, anchor: 0, bell: 0, kegs: 0, crew: 0, figure: 0, cat: 0, boats: 0, heavy: 0, oars: 0, stove: 0, nets: 0, chain: 0, mines: 0, rockets: 0, ward: 0, chart: 0, deck: 0, whirl: 0, board: 0, barnacle: 0, doubloon: 0, pumps: 0, drill: 0, flags: 0, copper: 0, lodestone: 0, grape: 0, dragon: 0, storm: 0, ghost: 0, gold: 0}
+  state level = 1
+  state xp = 0
+  state gold = 0
+  state kills = 0
+  state foes = []
+  state balls = []
+  state eballs = []
+  state shells = []
+  state fires = []
+  state coins = []
+  state fx = []
+  state nid = 1
+  state spawnAcc = 0
+  state cdCannon = 0
+  state cdFire = 0
+  state cdMortar = 0
+  state parA = 0
+  state cdSwivel = 0
+  state cdHarp = 0
+  state cdLant = 0
+  state cdBell = 0
+  state cdDragon = 0
+  state cdStorm = 0
+  state anchA = 0
+  state bellT = 0
+  state breathT = 0
+  state boatsUsed = 0
+  state legends = 0
+  state cdRocket = 0
+  state cdMine = 0
+  state cdWhirl = 0
+  state cdBoard = 0
+  state wardHp = 0
+  state wardT = 0
+  state wardBroke = false
+  state minefield = []
+  state whirls = []
+  state shipSlow = 0            // a siren's song slows the ship for a while
+  state curBiome = "sea"
+  state bossN = 0
+  state choices = []
+  state offers = []
+  state bought = 0
+  state used = []
+  state port = null
+  state joy = false
+  state jx = 0
+  state jy = 0
+  state jox = 0
+  state joy0 = 0
+  state hurt = 0
+  state bossAt = 180
+  state banner = ""
+  state bannerT = 0
+  state bestT = 0 persist
+  state bestK = 0 persist
+  // the goal: a relic from each of the four dangerous biomes, then Treasure Isle and the Sea King
+  state relics = []
+  state stir = {sea: 0, reef: 0, ice: 0, fog: 0, lava: 0}   // seconds spent in each biome since its boss last woke
+  state warned = ""
+  state isleX = null
+  state isleY = null
+  state kingUp = false
+  state won = false
+  state endless = false
+  state esc = 0                 // escalation: one more for every boss beaten
+  state swarmAt = 150
+  state rerolls = 0
+  state lastBank = 0
+  state confirm = ""            // the menu's restart and abandon ask for a second tap
+  // the harbor: gold banked between voyages, and what it has bought
+  state bank = 0 persist
+  state perm = {keel: 0, powder: 0, winds: 0, banker: 0, charm: 0, fortune: 0, crewp: 0} persist
+  state wins = 0 persist
+  state bestRelics = 0 persist
+
+  let VERSION = "1.7"           // bump with each change to the game (and meta's version with it); shown in the bottom corner
+  let W = screenWidth
+  let H = screenHeight
+  let nRel = len(relics)
+  let maxHp = 100 + 40 * lv.hull + 15 * (perm.keel ?? 0) + 15 * nRel
+  let spd0 = (82 + 22 * lv.sails) * (lv.ghost > 0 ? 1.25 : 1) * (1 + 0.08 * lv.oars) * (1 + 0.04 * lv.flags) * (1 + 0.05 * lv.copper) * (1 + 0.04 * (perm.winds ?? 0))
+  let rof = 1 - 0.1 * lv.crew          // the shanty crew speeds every reload
+  let dmgMul = 1 + 0.15 * lv.figure + 0.06 * lv.flags + 0.06 * (perm.powder ?? 0) + 0.08 * nRel   // the figurehead and the flags add to every hit
+  let pickR = 70 + 40 * lv.nest + 45 * lv.lodestone
+  let reach = 210 + 40 * lv.nest
+  let xpNeed = 5 + level * 4 + floor(level * level / 3)
+
+  // rarity decides how often a level-up offers an upgrade; legendary ones are only sold at outposts
+  let RARITY = {
+    common: {w: 60, color: #b8c4cf},
+    rare: {w: 28, color: #4fa3ff},
+    epic: {w: 12, color: #c77dff},
+    legendary: {w: 0, color: #ffb02e}
+  }
+  let RAR = {cannon: "common", parrot: "common", fire: "common", sails: "common", hull: "common", nest: "common", swivel: "common", heavy: "common", oars: "common", stove: "common", nets: "common", mortar: "rare", ram: "rare", harpoon: "rare", lantern: "rare", kegs: "rare", crew: "rare", figure: "rare", cat: "rare", anchor: "rare", chain: "rare", mines: "rare", rockets: "rare", ward: "rare", chart: "rare", barnacle: "common", doubloon: "common", pumps: "common", drill: "common", flags: "common", copper: "common", lodestone: "common", grape: "common", bell: "epic", boats: "epic", deck: "epic", whirl: "epic", board: "epic", dragon: "legendary", storm: "legendary", ghost: "legendary", gold: "legendary", rum: "common", chest: "common"}
+  let luckR = (1 + 0.5 * lv.chart) * (1 + 0.15 * (perm.charm ?? 0))     // the treasure map and the lucky charm tilt the odds
+  let luckE = (1 + 0.75 * lv.chart) * (1 + 0.2 * (perm.charm ?? 0))
+  let dmgS = 1 + gt / 360 + 0.15 * esc   // how much harder foes hit as the voyage goes on
+
+  let UP = {
+    cannon: {name: "Broadside cannons", max: 4, info: "Another gun each side. Fires at the nearest foes."},
+    parrot: {name: "Parrot squadron", max: 4, info: "A parrot circles the ship, pecking what it passes."},
+    fire: {name: "Greek fire", max: 4, info: "A barrel of burning oil, dropped in your wake."},
+    mortar: {name: "Deck mortar", max: 3, info: "Lobs shells that burst among foes."},
+    ram: {name: "Iron ram", max: 3, info: "Bumps whatever touches the ship back out, hurting it."},
+    sails: {name: "More sail", max: 3, info: "Another mast: faster, and turns sharper."},
+    hull: {name: "Plated hull", max: 3, info: "Iron plates: more hull, less damage, repairs at sea."},
+    nest: {name: "Crow's nest", max: 3, info: "A lookout: longer range, wider loot pull, more XP."},
+    swivel: {name: "Swivel guns", max: 3, info: "Little rail guns pepper anything close."},
+    harpoon: {name: "Harpoon ballista", max: 3, info: "Spears the toughest foe in reach, and all behind it."},
+    lantern: {name: "Ghost lanterns", max: 3, info: "Cursed lanterns zap the nearest foes."},
+    anchor: {name: "Anchor flail", max: 3, info: "An anchor on a chain swings wide around the ship."},
+    bell: {name: "Storm bell", max: 3, info: "Each toll blasts nearby foes back."},
+    kegs: {name: "Powder kegs", max: 3, info: "Cannonballs burst where they hit."},
+    crew: {name: "Shanty crew", max: 3, info: "Sailors sing: every weapon reloads faster."},
+    figure: {name: "Golden figurehead", max: 3, info: "A lucky prow: every weapon hits harder."},
+    cat: {name: "Ship's cat", max: 3, info: "Lucky hits deal double damage."},
+    boats: {name: "Lifeboats", max: 2, info: "When the ship sinks, a lifeboat brings her back."},
+    heavy: {name: "Heavy shot", max: 3, info: "Bigger cannonballs hit harder."},
+    oars: {name: "Galley oars", max: 3, info: "Rowers: faster, quicker to turn and get going."},
+    stove: {name: "Galley stove", max: 3, info: "Each sinking feeds the crew and mends the hull."},
+    nets: {name: "Fishing nets", max: 3, info: "Trailing nets slow every foe near the ship."},
+    chain: {name: "Chain shot", max: 3, info: "Cannonballs chained in pairs slow what they hit."},
+    mines: {name: "Sea mines", max: 3, info: "Mines dropped astern burst when foes touch them."},
+    rockets: {name: "Congreve rockets", max: 3, info: "Rockets that seek out foes and burst."},
+    ward: {name: "Coral ward", max: 3, info: "A bubble that soaks up damage, then regrows."},
+    chart: {name: "Treasure map", max: 2, info: "Better odds of rare and epic finds, more gold."},
+    deck: {name: "Second gun deck", max: 2, info: "A lower deck of guns: more balls every volley."},
+    whirl: {name: "Neptune's trident", max: 3, info: "Calls whirlpools that drag foes in and drown them."},
+    board: {name: "Boarding party", max: 2, info: "Boarders grapple a foe and take it outright."},
+    barnacle: {name: "Barnacle hull", max: 3, info: "A crusted hull cuts whatever rubs against it."},
+    doubloon: {name: "Lucky doubloon", max: 3, info: "A coin nailed to the stern: more XP and gold."},
+    pumps: {name: "Bilge pumps", max: 3, info: "When the hull is low, the pumps keep her afloat."},
+    drill: {name: "Gunnery drill", max: 3, info: "Practised gunners: cannons and swivels reload faster."},
+    flags: {name: "Signal flags", max: 3, info: "Bunting lifts the crew: a little faster, harder hits."},
+    copper: {name: "Copper sheathing", max: 3, info: "A copper bottom: faster, and shot glances off."},
+    lodestone: {name: "Lodestone", max: 3, info: "A magnet stone draws loot from farther, faster."},
+    grape: {name: "Grapeshot", max: 3, info: "Each volley sprays pellets at whatever is close."},
+    dragon: {name: "Dragon prow", max: 1, leg: true, info: "A dragon's head on the bow breathes fire ahead."},
+    storm: {name: "Storm mast", max: 1, leg: true, info: "A lightning rod that chains bolts through foes."},
+    ghost: {name: "Ghost sails", max: 1, leg: true, info: "Sails of the drowned: swift, and hard to sink."},
+    gold: {name: "Golden broadside", max: 1, leg: true, info: "Gilded guns: double damage, balls fly through."},
+    rum: {name: "Barrel of rum", max: 99, info: "Repairs half the hull."},
+    chest: {name: "Buried chest", max: 99, info: "25 gold."}
+  }
+  // what the next level of each upgrade gives, in numbers (the same formulas as the tick uses)
+  let NEXT = {
+    cannon: "${lv.cannon + 1} guns · ${round((8 + 3 * (lv.cannon + 1)) * (1 + 0.25 * lv.heavy))} dmg · reload ${fixed((1.15 - 0.1 * (lv.cannon + 1)) * rof, 2)}s",
+    parrot: "${lv.parrot + 1} parrot${lv.parrot > 0 ? "s" : ""} · ${20 + 6 * (lv.parrot + 1)} dmg/s each",
+    fire: "a fire every ${fixed(1.5 - 0.17 * (lv.fire + 1), 1)}s · ${12 + 8 * (lv.fire + 1)} dmg/s",
+    mortar: "${lv.mortar + 1 >= 3 ? 2 : 1} shell${lv.mortar + 1 >= 3 ? "s" : ""} every ${fixed(3.2 - 0.5 * (lv.mortar + 1), 1)}s · ${24 + 14 * (lv.mortar + 1)} dmg",
+    ram: "${6 + 8 * (lv.ram + 1)} per bump · −${10 * (lv.ram + 1)}% hull damage",
+    sails: "speed ${82 + 22 * lv.sails} → ${82 + 22 * (lv.sails + 1)}",
+    hull: "${100 + 40 * (lv.hull + 1)} hull · −${12 * (lv.hull + 1)}% damage · +${fixed(0.6 * (lv.hull + 1), 1)}/s",
+    nest: "range ${210 + 40 * (lv.nest + 1)} · pull ${70 + 40 * (lv.nest + 1)} · +${10 * (lv.nest + 1)}% XP",
+    swivel: "${lv.swivel + 1} swivel${lv.swivel > 0 ? "s" : ""} · ${5 + 2 * (lv.swivel + 1)} dmg · every ${fixed(0.5 * rof, 2)}s",
+    harpoon: "${30 + 15 * (lv.harpoon + 1)} dmg · pierces · every ${fixed((2.4 - 0.3 * (lv.harpoon + 1)) * rof, 1)}s",
+    lantern: "zaps ${lv.lantern + 2} · ${12 + 8 * (lv.lantern + 1)} dmg · every ${fixed((2.2 - 0.3 * (lv.lantern + 1)) * rof, 1)}s",
+    anchor: "${30 + 15 * (lv.anchor + 1)} dmg/s · ${90 + 15 * (lv.anchor + 1)}°/s",
+    bell: "${14 + 10 * (lv.bell + 1)} dmg within ${80 + 20 * (lv.bell + 1)} · every ${fixed((5.5 - 0.9 * (lv.bell + 1)) * rof, 1)}s",
+    kegs: "bursts of ${6 + 6 * (lv.kegs + 1)} dmg within ${26 + 8 * (lv.kegs + 1)}",
+    crew: "every reload ${10 * (lv.crew + 1)}% faster",
+    figure: "+${15 * (lv.figure + 1)}% damage, every weapon",
+    cat: "${10 * (lv.cat + 1)}% chance of double damage",
+    boats: "${lv.boats + 1} lifeboat${lv.boats > 0 ? "s" : ""} · back at half hull",
+    heavy: "+${25 * (lv.heavy + 1)}% cannon damage",
+    oars: "+${8 * (lv.oars + 1)}% speed · quicker turns and starts",
+    stove: "+${fixed(0.6 * (lv.stove + 1), 1)} hull for each foe sunk",
+    nets: "foes within ${70 + 15 * (lv.nets + 1)} slowed ${15 * (lv.nets + 1)}%",
+    chain: "hits slow foes by half for ${fixed(1.2 + 0.6 * (lv.chain + 1), 1)}s",
+    mines: "up to ${6 + 2 * (lv.mines + 1)} · ${30 + 15 * (lv.mines + 1)} dmg · one every ${fixed((2.4 - 0.4 * (lv.mines + 1)) * rof, 1)}s",
+    rockets: "${lv.rockets + 1} rocket${lv.rockets > 0 ? "s" : ""} · ${18 + 10 * (lv.rockets + 1)} dmg + burst · every ${fixed((2.8 - 0.4 * (lv.rockets + 1)) * rof, 1)}s",
+    ward: "soaks ${20 + 15 * (lv.ward + 1)} · regrows ${fixed(9 - 1.5 * (lv.ward + 1), 1)}s after breaking",
+    chart: "rare odds ×${fixed(1 + 0.5 * (lv.chart + 1), 1)} · epic ×${fixed(1 + 0.75 * (lv.chart + 1), 2)} · +${20 * (lv.chart + 1)}% gold",
+    deck: "+${2 * (lv.deck + 1)} cannonballs each volley",
+    whirl: "${15 + 10 * (lv.whirl + 1)} dmg/s, pulling foes in · every ${fixed((9 - 1.5 * (lv.whirl + 1)) * rof, 1)}s",
+    board: "takes the toughest foe near (not the kraken) · every ${fixed((8 - 2.5 * (lv.board + 1)) * rof, 1)}s",
+    barnacle: "${6 + 6 * (lv.barnacle + 1)} dmg/s to foes touching the hull",
+    doubloon: "+${12 * (lv.doubloon + 1)}% XP · +${10 * (lv.doubloon + 1)}% gold",
+    pumps: "below 40% hull: +${2 + 2 * (lv.pumps + 1)} hull/s",
+    drill: "cannons and swivels reload ${8 * (lv.drill + 1)}% faster",
+    flags: "+${6 * (lv.flags + 1)}% damage · +${4 * (lv.flags + 1)}% speed",
+    copper: "+${5 * (lv.copper + 1)}% speed · −${12 * (lv.copper + 1)}% damage from shot",
+    lodestone: "loot pull +${45 * (lv.lodestone + 1)} · loot flies ${30 * (lv.lodestone + 1)}% faster",
+    grape: "${3 + lv.grape} pellets a volley · ${4 + 2 * (lv.grape + 1)} dmg each",
+    dragon: "70 dmg in a cone ahead · every ${fixed(2.4 * rof, 1)}s",
+    storm: "45 dmg through 6 foes · every ${fixed(1.4 * rof, 1)}s",
+    ghost: "+25% speed · −30% damage · +2 hull/s",
+    gold: "double cannon damage · balls pierce",
+    rum: "+${round(maxHp / 2)} hull",
+    chest: "+25 gold"
+  }
+  let KEYS = ["cannon", "parrot", "fire", "mortar", "ram", "sails", "hull", "nest", "swivel", "harpoon", "lantern", "anchor", "bell", "kegs", "crew", "figure", "cat", "boats", "heavy", "oars", "stove", "nets", "chain", "mines", "rockets", "ward", "chart", "deck", "whirl", "board", "barnacle", "doubloon", "pumps", "drill", "flags", "copper", "lodestone", "grape"]
+  let LEG = ["dragon", "storm", "ghost", "gold"]      // sold only at outposts
+  let LV0 = {cannon: 1, parrot: 0, fire: 0, mortar: 0, ram: 0, sails: 0, hull: 0, nest: 0, swivel: 0, harpoon: 0, lantern: 0, anchor: 0, bell: 0, kegs: 0, crew: 0, figure: 0, cat: 0, boats: 0, heavy: 0, oars: 0, stove: 0, nets: 0, chain: 0, mines: 0, rockets: 0, ward: 0, chart: 0, deck: 0, whirl: 0, board: 0, barnacle: 0, doubloon: 0, pumps: 0, drill: 0, flags: 0, copper: 0, lodestone: 0, grape: 0, dragon: 0, storm: 0, ghost: 0, gold: 0}
+  // foes' top speeds, reached after 7 minutes at sea; they start at 60% of it (see pace)
+  let KSPD = {shark: 82, sloop: 60, serp: 54, barracuda: 115, jelly: 32, puffer: 62, narwhal: 48, raider: 64, wraith: 60, skiff: 92, crab: 38, drake: 72, siren: 30, kraken: 30, dutchman: 34, leviathan: 56, wyrm: 52, king: 40}
+  let KHP = {shark: 10, sloop: 28, serp: 75, barracuda: 7, jelly: 30, puffer: 14, narwhal: 40, raider: 32, wraith: 36, skiff: 6, crab: 70, drake: 24, siren: 40, kraken: 800, dutchman: 900, leviathan: 1000, wyrm: 950, king: 4200}
+  let KR = {shark: 12, sloop: 14, serp: 16, barracuda: 10, jelly: 14, puffer: 12, narwhal: 14, raider: 14, wraith: 15, skiff: 10, crab: 16, drake: 13, siren: 14, kraken: 46, dutchman: 52, leviathan: 40, wyrm: 40, king: 64}
+  let KDPS = {shark: 10, sloop: 8, serp: 20, barracuda: 8, jelly: 18, puffer: 6, narwhal: 20, raider: 9, wraith: 10, skiff: 7, crab: 22, drake: 8, siren: 4, kraken: 40, dutchman: 40, leviathan: 45, wyrm: 40, king: 55}
+  let KXP = {shark: 1, sloop: 3, serp: 5, barracuda: 1, jelly: 3, puffer: 2, narwhal: 4, raider: 3, wraith: 4, skiff: 1, crab: 5, drake: 3, siren: 5, kraken: 0, dutchman: 0, leviathan: 0, wyrm: 0, king: 0}
+  let KS = {shark: 48, sloop: 72, serp: 110, barracuda: 48, jelly: 56, puffer: 64, narwhal: 60, raider: 72, wraith: 72, skiff: 44, crab: 64, drake: 64, siren: 60, kraken: 200, dutchman: 240, leviathan: 260, wyrm: 260, king: 330}
+  let NOROT = ["kraken", "jelly", "puffer", "siren", "king"]       // drawn upright, never turned
+  // those that keep their distance and circle at it
+  let KEEP = {sloop: 190, raider: 200, wraith: 210, drake: 170, siren: 240, dutchman: 230}
+  // those that shoot: range, reload, how many shots in a fan and how far apart, and what they throw
+  let SHOT = {sloop: {r: 300, cd: 2.6, n: 1, sp: 0, k: "ball"}, raider: {r: 260, cd: 2.0, n: 1, sp: 0, k: "spear"}, wraith: {r: 320, cd: 2.4, n: 1, sp: 0, k: "ghost"}, drake: {r: 280, cd: 2.2, n: 1, sp: 0, k: "fire"}, siren: {r: 340, cd: 2.8, n: 1, sp: 0, k: "note"}, kraken: {r: 420, cd: 3.2, n: 10, sp: 36, k: "ink"}, dutchman: {r: 420, cd: 2.6, n: 7, sp: 14, k: "ghost"}, leviathan: {r: 400, cd: 3.0, n: 5, sp: 18, k: "fire"}, wyrm: {r: 400, cd: 3.2, n: 5, sp: 18, k: "frost"}, king: {r: 520, cd: 2.0, n: 12, sp: 30, k: "ghost"}}
+  let EBS = {ball: 170, ink: 110, spear: 260, ghost: 150, fire: 190, note: 140, frost: 170}
+  let EBD = {ball: 9, ink: 12, spear: 7, ghost: 10, fire: 11, note: 4, frost: 8}
+  let BOSSES = ["kraken", "dutchman", "leviathan"]
+  let BOSSNAME = {kraken: "The kraken", dutchman: "The Flying Dutchman", leviathan: "The Leviathan", wyrm: "The Frost Wyrm", king: "The Sea King"}
+  let RELIC = {reef: {name: "Siren's Pearl", col: #ffd0e0}, ice: {name: "Frost Heart", col: #9fe8ff}, fog: {name: "Drowned Lantern", col: #7fffb0}, lava: {name: "Ember Crown", col: #ffb03a}}
+  let RELICKEYS = ["reef", "ice", "fog", "lava"]
+  let STIRT = {sea: 150, reef: 70, ice: 70, fog: 70, lava: 70}     // seconds in a biome before its boss wakes
+  // a swarm every couple of minutes, of whatever the biome breeds
+  let SWARMK = {sea: "shark", reef: "jelly", ice: "narwhal", fog: "skiff", lava: "drake"}
+  let SWARMN = {sea: 12, reef: 10, ice: 8, fog: 12, lava: 8}
+  let SWARMTXT = {sea: "Shark frenzy!", reef: "The jellies bloom!", ice: "Narwhal stampede!", fog: "A ghost fleet gathers!", lava: "Drakes on the wind!"}
+  // the harbor's permanent upgrades: each level costs cost × the level it buys
+  let PERMS = [
+    {k: "keel", name: "Sturdier keel", max: 5, cost: 60, info: "+15 hull"},
+    {k: "powder", name: "Fine powder", max: 5, cost: 80, info: "+6% damage"},
+    {k: "winds", name: "Fair winds", max: 3, cost: 70, info: "+4% speed"},
+    {k: "banker", name: "Moneylender", max: 3, cost: 70, info: "+10% gold"},
+    {k: "charm", name: "Lucky charm", max: 3, cost: 100, info: "better rare and epic odds"},
+    {k: "fortune", name: "Fortune teller", max: 3, cost: 120, info: "+1 reroll on level-ups"},
+    {k: "crewp", name: "Seasoned crew", max: 2, cost: 160, info: "start with a common upgrade"}
+  ]
+
+  // ---- biomes: the sea is cut into 5760 dp regions, each with its own waters, the start always open sea.
+  // Each one changes the voyage: spd (yours), fspd and fhp (foes'), xp and gold, hull mended or burned
+  // a second, how often its islands hold outposts, and the boss that rises there.
+  let BIO = {
+    sea: {name: "the Open Sea", col: #1b4f7a, wave: #9fd8ff, spd: 1, fspd: 1, fhp: 1, xp: 1, gold: 1, mend: 0, burn: 0, fire: 1, out: 0.22, boss: "kraken", trait: "steady winds"},
+    reef: {name: "the Coral Shallows", col: #16808f, wave: #c8fff4, spd: 0.9, fspd: 1, fhp: 1, xp: 1, gold: 1.3, mend: 1.5, burn: 0, fire: 1, out: 0.35, boss: "kraken", trait: "warm water mends the hull · reefs drag the keel · gold ×1.3"},
+    ice: {name: "the Frozen Reach", col: #3f6f8f, wave: #ffffff, spd: 0.88, fspd: 0.78, fhp: 1.1, xp: 1.3, gold: 1.1, mend: 0, burn: 0, fire: 0.8, out: 0.2, boss: "wyrm", trait: "the cold slows everything · XP ×1.3"},
+    fog: {name: "the Haunted Fog", col: #2a2440, wave: #8a7ab0, spd: 1, fspd: 1.05, fhp: 1.35, xp: 1.5, gold: 1.5, mend: 0, burn: 0, fire: 1, out: 0.12, boss: "dutchman", trait: "the dead are hardier · XP and gold ×1.5"},
+    lava: {name: "the Burning Sea", col: #3a1a16, wave: #ff8a3a, spd: 1.05, fspd: 1.1, fhp: 1.2, xp: 1.25, gold: 1.7, mend: 0, burn: 1.2, fire: 1.6, out: 0.18, boss: "leviathan", trait: "heat scorches the hull · fire burns hotter · gold ×1.7"}
+  }
+
+  let BIONAMES = ["reef", "ice", "fog", "lava", "sea"]
+  let ISLEPAL = {
+    sea: {S: #5fc4c9, s: #f0e2b6, g: #4caf50, G: #2e7d32, r: #8d8d8d},
+    reef: {S: #7fe8e0, s: #fff1cc, g: #5cc96a, G: #2e9e55, r: #ff7aa8},
+    ice: {S: #cfefff, s: #ffffff, g: #e4eef6, G: #b8cad8, r: #8d9aa8},
+    fog: {S: #4a4060, s: #6a6070, g: #3a4a3a, G: #2a352a, r: #5a5a5a},
+    lava: {S: #ff6a2a, s: #3a3030, g: #4a3a35, G: #2a2020, r: #ff8a3a}
+  }
+  // what each biome sends at you: a kind, when it starts showing up, and how often
+  let POOL = {
+    sea: [{k: "shark", t: 0, w: 5}, {k: "barracuda", t: 25, w: 2}, {k: "sloop", t: 45, w: 3}, {k: "serp", t: 120, w: 1}],
+    reef: [{k: "jelly", t: 0, w: 3}, {k: "puffer", t: 0, w: 3}, {k: "barracuda", t: 0, w: 2}, {k: "siren", t: 60, w: 1}, {k: "serp", t: 120, w: 1}],
+    ice: [{k: "narwhal", t: 0, w: 3}, {k: "shark", t: 0, w: 2}, {k: "raider", t: 30, w: 3}, {k: "serp", t: 120, w: 1}],
+    fog: [{k: "skiff", t: 0, w: 3}, {k: "wraith", t: 30, w: 3}, {k: "siren", t: 60, w: 1}, {k: "shark", t: 0, w: 1}],
+    lava: [{k: "crab", t: 0, w: 3}, {k: "drake", t: 20, w: 3}, {k: "barracuda", t: 0, w: 1}, {k: "serp", t: 90, w: 1}]
+  }
+  let PORTS = ["Tortuga", "Port Royal", "Nassau", "Skull Cove", "Rum Key", "Gull Rock", "Black Reef", "Saltmarsh"]
+
+  let brx = floor((sx + 2880) / 5760)
+  let bry = floor((sy + 2880) / 5760)
+  let shipBiome = brx == 0 && bry == 0 ? "sea" : BIONAMES[floor(hash(brx, bry, 77) * 5)]
+  let here = get(BIO, shipBiome)
+  let bag = flatten(map(filter(get(POOL, shipBiome), q => gt >= q.t), q => map(range(q.w), i => q.k)))
+  let bossE = find(foes, e => e.boss ?? false)
+  let shake = hurt > 0 ? (hash(gt, 3) - 0.5) * 8 : 0
+  let spd = spd0 * here.spd
+
+  // islands: one may sit in each 700 dp square of sea, the same every voyage
+  let ccx = floor(sx / 700)
+  let ccy = floor(sy / 700)
+  let isles0 = map(filter(map(range(9), k => [ccx + k % 3 - 1, ccy + floor(k / 3) - 1]), c => (c[0] != 0 || c[1] != 0) && hash(c[0], c[1], 11) < 0.55), c => {id: "${c[0]}_${c[1]}", v: floor(hash(c[0], c[1], 14) * 4), r: 36 + 12 * floor(hash(c[0], c[1], 14) * 4), x: c[0] * 700 + 180 + floor(hash(c[0], c[1], 12) * 340), y: c[1] * 700 + 180 + floor(hash(c[0], c[1], 13) * 340), cx: c[0], cy: c[1], name: PORTS[floor(hash(c[0], c[1], 16) * 8)]})
+  let isles1 = map(isles0, i => merge(i, {b: floor((i.x + 2880) / 5760) == 0 && floor((i.y + 2880) / 5760) == 0 ? "sea" : BIONAMES[floor(hash(floor((i.x + 2880) / 5760), floor((i.y + 2880) / 5760), 77) * 5)]}))
+  let isles = map(isles1, i => merge(i, {out: hash(i.cx, i.cy, 15) < get(BIO, i.b).out}))
+  let dock = find(isles, i => i.out && (i.x - sx) * (i.x - sx) + (i.y - sy) * (i.y - sy) < (i.r + 85) * (i.r + 85) && !(any(used, u => u == i.id + "r") && any(used, u => u == i.id + "u")))
+
+  let inHunt = any(RELICKEYS, r => r == shipBiome) && !any(relics, q => q == shipBiome)
+  let hunt = isleX != null || inHunt || nRel >= 4 ? null : first(sortBy(filter(map(range(49), k => {rx: brx + k % 7 - 3, ry: bry + floor(k / 7) - 3}), c => !(c.rx == 0 && c.ry == 0) && any(RELICKEYS, r => r == BIONAMES[floor(hash(c.rx, c.ry, 77) * 5)] && !any(relics, q => q == r))), c => (c.rx * 5760 - sx) * (c.rx * 5760 - sx) + (c.ry * 5760 - sy) * (c.ry * 5760 - sy)))
+  let goal = isleX != null ? {x: isleX, y: isleY, label: "Treasure Isle", col: #e0a0ff} : hunt != null ? {x: clamp(sx, hunt.rx * 5760 - 2600, hunt.rx * 5760 + 2600), y: clamp(sy, hunt.ry * 5760 - 2600, hunt.ry * 5760 + 2600), label: get(BIO, BIONAMES[floor(hash(hunt.rx, hunt.ry, 77) * 5)]).name, col: get(RELIC, BIONAMES[floor(hash(hunt.rx, hunt.ry, 77) * 5)]).col} : null
+  let goalOff = goal != null && (abs(goal.x - sx) > W / 2 - 30 || abs(goal.y - sy) > H / 2 - 30)
+  let ga = goal == null ? 0 : atan2(goal.x - sx, sy - goal.y)
+  let gk = min((W / 2 - 36) / max(0.01, abs(sin(ga))), (H / 2 - 170) / max(0.01, abs(cos(ga))))
+  let stirT = any(relics, r => r == shipBiome) ? 200 : get(STIRT, shipBiome)
+  let seaPort = first(sortBy(filter(isles, i => i.out && !any(used, u => u == i.id + "u")), i => (i.x - sx) * (i.x - sx) + (i.y - sy) * (i.y - sy)))
+  let portOff = seaPort != null && (abs(seaPort.x - sx) > W / 2 - 30 || abs(seaPort.y - sy) > H / 2 - 30)
+  let pa = seaPort == null ? 0 : atan2(seaPort.x - sx, sy - seaPort.y)
+  let pk = min((W / 2 - 36) / max(0.01, abs(sin(pa))), (H / 2 - 130) / max(0.01, abs(cos(pa))))
+
+  // the sea and what lies on it are drawn on one big sheet, moved in whole steps of G
+  let G = 96
+  let gx0 = floor((sx - W / 2) / G) * G - 2 * G
+  let gy0 = floor((sy - H / 2) / G) * G - 2 * G
+
+  // ---- pixel art: one letter per pixel, "." is empty; each sprite call colours the letters
+  let HULL = [
+    "......o......",
+    ".....owo.....",
+    ".....owo.....",
+    "....owlwo....",
+    "....owlwo....",
+    "...owplpwo...",
+    "...owplpwo...",
+    "..owlhhhlwo..",
+    "..owlhhhlwo..",
+    ".owplplplpwo.",
+    ".obplplplpbo.",
+    ".owplplplpwo.",
+    ".owplplplpwo.",
+    ".owplplplpwo.",
+    ".obplplplpbo.",
+    ".owplplplpwo.",
+    ".owplplplpwo.",
+    ".owplplplpwo.",
+    ".obplplplpbo.",
+    ".owplplplpwo.",
+    ".owplplplpwo.",
+    ".owCCCCCCCwo.",
+    ".obCcccccCbo.",
+    ".owCcccccCwo.",
+    ".owCcccccCwo.",
+    ".owplplplpwo.",
+    ".obplplplpbo.",
+    ".ooooooooooo."
+  ]
+  let SAIL = [
+    "...sssssssss...",
+    ".sssssssssssss.",
+    "sssssssssssssss",
+    "xsssssssssssssx",
+    "yyyyyyyyyyyyyyy"
+  ]
+  let SAILBIG = [
+    "...ssttssttsst...",
+    ".ttssttssttsstts.",
+    "sttssttssttssttss",
+    "xttssttssttssttsx",
+    "yyyyyyyyyyyyyyyyy"
+  ]
+  let SAILFORE = [".sssssssss.", "sssssssssss", "xsssssssssx", "yyyyyyyyyyy"]
+  let SAILFOREBIG = [".ttssttsstts.", "sttssttssttss", "xttssttssttsx", "yyyyyyyyyyyyy"]
+  let SAILMIZ = [".sssssssssss.", "sssssssssssss", "xsssssssssssx", "yyyyyyyyyyyyy"]
+  let SAILMIZBIG = [".ttssttssttsst.", "sttssttssttsstt", "xttssttssttsstx", "yyyyyyyyyyyyyyy"]
+  let NEST = ["nnn", "nNn", "nnn"]
+  let FLAG0 = ["KKK", "KWK", "KKK", ".K."]
+  let FLAG1 = ["KKK", "KWK", "KKK", "K.K"]
+  let FLAGB0 = ["KKKK", "KWWK", "KWWK", "KKKK", ".KK.", "K..K"]
+  let FLAGB1 = ["KKKK", "KWWK", "KWWK", "KKKK", "K..K", ".KK."]
+  let RAM1 = [".i.", ".i."]
+  let RAM2 = [".g.", ".i.", "iii"]
+  let RAM3 = ["..g..", "..i..", ".iii.", "i.i.i"]
+  let MORTAR = ["gkg", "kkk"]
+  let FLAME0 = [".f", "fF"]
+  let FLAME1 = ["f.", "Ff"]
+  let PARROT0 = ["..r..", "grrrg", "g.y.g", "..b.."]
+  let PARROT1 = ["..r..", ".grg.", "gGyGg", "..b.."]
+  let SHARK = [
+    "...g...",
+    "..ggg..",
+    "..geg..",
+    ".ggggg.",
+    ".ggfgg.",
+    "gggfggg",
+    "g.gfg.g",
+    "..ggg..",
+    "..ggg..",
+    "...g...",
+    "...g...",
+    "..g.g..",
+    ".g...g."
+  ]
+  let SLOOP = [
+    "....o....",
+    "...odo...",
+    "...odo...",
+    "..ordro..",
+    "..ordro..",
+    ".orDdDro.",
+    ".orDdDro.",
+    ".orDdDro.",
+    ".orDdDro.",
+    ".orDdDro.",
+    ".orDdDro.",
+    ".orDdDro.",
+    ".orDdDro.",
+    ".orDdDro.",
+    "..ordro..",
+    "..ooooo.."
+  ]
+  let BLACKSAIL = ["...nnnnn...", ".nnnnWnnnn.", "nnnnWWWnnnn", "nnnnnWnnnnn", "yyyyyyyyyyy"]
+  let REDFLAG = ["rr", "rW"]
+  let SERPHEAD = [
+    ".vv.vv.",
+    ".vvvvv.",
+    "vvVvVvv",
+    "vEvvvEv",
+    "vvvvvvv",
+    ".vvvvv.",
+    "..vvv.."
+  ]
+  let SERPSEG = [
+    "..vvv..",
+    ".vvVvv.",
+    "vvVvVvv",
+    "vVvvvVv",
+    "vvVvVvv",
+    ".vvVvv.",
+    "..vvv.."
+  ]
+  let KRAKEN = [
+    "....qqqqqqqq....",
+    "..qqqqqqqqqqqq..",
+    ".qqqQqqqqqqQqqq.",
+    "qqqqqqqqqqqqqqqq",
+    "qqQqqqqqqqqqqQqq",
+    "qqqqqqqqqqqqqqqq",
+    "qqqYYqqqqqqYYqqq",
+    "qqYKKYqqqqYKKYqq",
+    "qqqYYqqqqqqYYqqq",
+    "qqqqqqqqqqqqqqqq",
+    ".qqqqqqQQqqqqqq.",
+    "..qqqqqqqqqqqq..",
+    "...qqqqqqqqqq..."
+  ]
+  let BALL = [".k.", "kKk", ".k."]
+  let COIN = [".gg.", "gGGg", "gGgg", ".gg."]
+  let CHEST = ["oooooo", "oGGGGo", "oooooo", "oddddo", "oddddo", "oooooo"]
+  let WAVE = [".aaa...", "a...aa."]
+  let WAVE2 = ["..aa.", "aa..a"]
+  let HUT = ["..RR..", ".RRRR.", "RRRRRR", "dddddd", "dhddhd", "dddDdd"]
+  let PIER = ["dDd", "dDd", "dDd", "dDd", "dDd"]
+  let PFLAG = ["m.", "mtt", "mtt", "m..", "m.."]
+  let PALM = ["G...G", ".GmG.", "GGmGG", "..m..", "..m.."]
+  let SKULL = [".www.", "wkwkw", "wwwww", ".w.w."]
+  let ISLE0 = [
+    "......SSSSSSSSSSSSSS....",
+    "....SSSSSSSSSSSSSSSSSS..",
+    "...SSSSSSSSSsSSSSSSSSS..",
+    "..SSSSSSSssssssssSSSSSS.",
+    "..SSSSSsssssssssssSSSSS.",
+    ".SSSSSsssgggggggsssSSSSS",
+    "SSSSSsssgggggggggsssSSSS",
+    "SSSSsssgggggggggggssSSSS",
+    "SSSSssggggggggggggssSSSS",
+    "SSSsssggggggggggGgssSSSS",
+    "SSSssgggggGGGGgGGGssSSSS",
+    "SSSssGggggGGGGGGGGssSSS.",
+    "SSSssGggggGGGGGGGGssSSS.",
+    "SSSssGGggggGGGGGGGssSSSS",
+    "SSSSssGggggggGGGGGssSSSS",
+    "SSSSssgggggggGGGGGssSSSS",
+    "SSSSSssgggggggGGGGssSSSS",
+    ".SSSSSssgggggggGGGssSSSS",
+    "..SSSSSssgggggggsssSSSSS",
+    "...SSSSSsssgggsssssSSSSS",
+    "....SSSSSssssssssSSSSSS.",
+    "....SSSSSSSssssSSSSSSSS.",
+    ".....SSSSSSSSSSSSSSSSS..",
+    "......SSSSSSSSSSSSSSS..."
+  ]
+  let ISLE1 = [
+    "..............................",
+    "...........SSSSSSSSSS.........",
+    ".......SSSSSSSSSSSSSSSSS......",
+    ".....SSSSSSSSSSSSSSSSSSSSS....",
+    "....SSSSSSSSSSSSSSSSSSSSSSS...",
+    "...SSSSSSsssssssssssssSSSSSS..",
+    "..SSSSSSssssssssssssssssSSSS..",
+    ".SSSSSsssssgggggggggssssSSSSS.",
+    ".SSSSssssgggggggggggggsssSSSS.",
+    "SSSSSsssggggggggggggggsssSSSS.",
+    "SSSSsssggggggggggggggggsssSSSS",
+    "SSSSssggggggggggGGGggggsssSSSS",
+    "SSSsssggggggggGGGGGGggggssSSSS",
+    "SSSsssGggggggrGGGGGGGgggssSSSS",
+    "SSSsssGgggggGGGGGGGGGgggssSSSS",
+    "SSSsssGgggggGGGGGGGGGgggssSSSS",
+    "SSSsssGggggggGGGGGGGGgggssSSSS",
+    "SSSSssGgggggggGGGGGGGggsssSSSS",
+    "SSSSsssggggggggGGGGGgggssSSSS.",
+    "SSSSSsssgggggggggGggggsssSSSS.",
+    ".SSSSSsssggggggggggggsssSSSS..",
+    "..SSSSSsssggggggggggsssSSSSS..",
+    "...SSSSSsssggggggggsssSSSSS...",
+    "....SSSSSsssggggggssssSSSS....",
+    ".....SSSSsssssggsssssSSSS.....",
+    "......SSSSSsssssssssSSSSS.....",
+    ".......SSSSSssssssSSSSSS......",
+    "........SSSSSSssSSSSSSS.......",
+    ".........SSSSSSSSSSSSS........",
+    "..........SSSSSSSSSSS........."
+  ]
+  let ISLE2 = [
+    "....................................",
+    "....................SSSSSSSSS.......",
+    "...............SSSSSSSSSSSSSSSSS....",
+    "............SSSSSSSSSSSSSSSSSSSSS...",
+    "..........SSSSSSSSSSSSSSSSSSSSSSSS..",
+    "........SSSSSSSSSSsssssssssssSSSSS..",
+    ".......SSSSSSsssssssssssssssssSSSSS.",
+    ".....SSSSSSssssssssssggssssssssSSSS.",
+    "....SSSSSSssssssGGgggggggGGssssSSSS.",
+    "...SSSSSsssssGGGGGgggggggGGGsssSSSSS",
+    "..SSSSSsssssGGGGGGgggggggGGGssssSSSS",
+    ".SSSSSssssgGGGGGGGgggggggGGGGsssSSSS",
+    "SSSSSssssgggGGrGGgggggggggGGGsssSSSS",
+    "SSSSssssgggggGGGgggggggggggGGsssSSSS",
+    "SSSSsssggggggggggggggggggggggsssSSSS",
+    "SSSssssgggggggggGGGGGggggggggsssSSSS",
+    "SSSsssgggggggggGGGGGGGgggggggsssSSSS",
+    "SSssssggggggggGGGGGGGGgggggggsssSSS.",
+    "SSssssggggggggGGGGGGGggggggggsssSSS.",
+    "SSssssggggggggGGGGGGGggggggggsssSSS.",
+    "SSSsssgggggggggGGGGGGggggggggsssSSS.",
+    "SSSsssgggggggGGGgGGggggggggGGsssSSS.",
+    "SSSssssgggggGGGGGgggggggggGGssssSSS.",
+    "SSSssssggggGGGGGGGgggggggGGGsssSSSS.",
+    "SSSSssssgggGGGGGGGgggggggGGGsssSSSS.",
+    "SSSSssssgggGGGGGGGgggggggGGssssSSSS.",
+    "SSSSSssssggGGGGGGGgggggggGssssSSSS..",
+    ".SSSSSsssssGGGGGGGgggggggsssssSSSS..",
+    ".SSSSSSssssssGGGGggggggssssssSSSSS..",
+    "..SSSSSSssssssssssssssssssssSSSSS...",
+    "...SSSSSSsssssssssssssssssSSSSSS....",
+    "....SSSSSSSsssssssssssssSSSSSSSS....",
+    ".....SSSSSSSSSSSSSSSSSSSSSSSSSS.....",
+    "......SSSSSSSSSSSSSSSSSSSSSSS.......",
+    "........SSSSSSSSSSSSSSSSSSS.........",
+    "...........SSSSSSSSSSSSS............"
+  ]
+  let ISLE3 = [
+    "..........................................",
+    ".............SSSSSSSSSSSSSSS..............",
+    "..........SSSSSSSSSSSSSSSSSSSSS...........",
+    ".......SSSSSSSSSSSSSSSSSSSSSSSSSSS........",
+    "......SSSSSSSSSSSSSSSSSSSSSSSSSSSSS.......",
+    "....SSSSSSSSSsssssssssssssssSSSSSSSSS.....",
+    "....SSSSSSsssssssssssssssssssssSSSSSSS....",
+    "...SSSSSsssssssssssssssssssssssssSSSSS....",
+    "..SSSSSsssssssssgggggggggsssssssssSSSSS...",
+    "..SSSSSssssssgggggggggggggggsssssssSSSSS..",
+    ".SSSSSsssssgggggggggggggggggggssssssSSSS..",
+    ".SSSSsssssgggggggggggggGgggggggsssssSSSSS.",
+    "SSSSSssssGGGgggggggggGGGGGggggggsssssSSSS.",
+    "SSSSsssssGGGGggggggggGGGGGGggggggssssSSSSS",
+    "SSSSssssGGGGGgggggggGGGGGGGggggggsssssSSSS",
+    "SSSSssssGGGGGgggggggGGGGGGGgggggggssssSSSS",
+    "SSSssssGGGGGGgggggggGGGGGGGgggggggssssSSSS",
+    "SSSssssGGGGGGgggggGGGGGGGGGgggggggssssSSSS",
+    "SSSssssGGGGGgggggGGGGGGGGGgggggggggssssSSS",
+    "SSSssssgGGGggggggGGGGGGGGgggrggggggssssSSS",
+    "SSSssssgggggggggGGGGGGGGGggggggggggssssSSS",
+    "SSSssssggggggggggGGGGGGGGggggggggggssssSSS",
+    "SSSssssggggggggggGGGGGGGGggggggggggssssSSS",
+    "SSSssssggggggggggGGGGGGGGggggggggggssssSSS",
+    "SSSssssgggggggggggGGGGGGgggggggggggssssSSS",
+    "SSSSssssgggggggggggGGGGgggggggggggssssSSSS",
+    "SSSSssssggggggggggggggggggggggggggssssSSSS",
+    "SSSSsssssGGgggggggggggGGGgggggggggssssSSSS",
+    "SSSSSssssGGGgggggggggGGGGGgggggggssssSSSSS",
+    ".SSSSsssssGGGgggggggGGGGGGGgggggsssssSSSS.",
+    ".SSSSSsssssGGgggggggGGGGGGGgggggssssSSSSS.",
+    "..SSSSSsssssGgggggggGGGGGGGggggsssssSSSSS.",
+    "..SSSSSsssssGgggggggGGGGGGGgggsssssSSSSS..",
+    "...SSSSSsssssgggggggGGGGGGGggsssssSSSSS...",
+    "....SSSSSssssssggggggGGGGGggssssssSSSSS...",
+    ".....SSSSSssssssggggggGGGgsssssssSSSSS....",
+    "......SSSSSsssssssggggggssssssssSSSSS.....",
+    "......SSSSSSsssssssssssssssssssSSSSS......",
+    ".......SSSSSSssssssssssssssssSSSSSSS......",
+    "........SSSSSSSsssssssssssssSSSSSSS.......",
+    ".........SSSSSSSSsssssssssSSSSSSSS........",
+    "..........SSSSSSSSSSssSSSSSSSSSS.........."
+  ]
+  let ISLES = [ISLE0, ISLE1, ISLE2, ISLE3]
+  let BALLISTA = [".I.", "yIy", "ysy"]
+  let ANCHOR = [
+    "i..i..i",
+    "ii.i.ii",
+    ".iiiii.",
+    "...i...",
+    "...i...",
+    ".iiiii.",
+    "..iIi..",
+    "..i.i..",
+    "..iii.."
+  ]
+  let BELL = ["gGg", "ggg", ".k."]
+  let CAT = ["o.o", "ooo", "oko", "o.."]
+  let DRAGON = [".g.g.", "gGGGg", "GyGyG", "GGGGG", ".GwG.", "..G.."]
+  let FIG = [".G.", "gGg", ".g."]
+  let BOAT = ["yy", "yY", "yY", "yy"]
+  let HULLPAL = [
+    {o: #3b2412, w: #8a5a2b, b: #8a5a2b},
+    {o: #3b2412, w: #8a5a2b, b: #9aa4ae},
+    {o: #2a2f36, w: #6f7a86, b: #9aa4ae},
+    {o: #d9a72b, w: #5d6670, b: #c0c8d0}
+  ]
+  let PCOL = [#e53935, #1e88e5, #fdd835, #8e24aa]
+  let CROWS = [14, 8, 21, 24]                       // the rows the guns sit at, as they are added
+  let BARRELS = [[3, 25], [8, 25], [5, 25], [2, 22]]   // where the fire barrels stand
+  let LANTS = [[1, 26], [11, 26], [4, 3], [8, 3], [0, 11], [12, 11]]   // ghost lanterns, two per level
+  let CREW = [[3, 20], [9, 20], [2, 15], [10, 15], [2, 13], [10, 13]]  // sailors, two per level
+  let KEGS = [[3, 7], [8, 7], [5, 15]]
+  let SWIV = [6, 16, 20]                              // rows of the swivel guns on the rails
+  let TRIDENT = ["..g..", "..g..", "ggggg", "g.g.g"]
+  let OARROWS = [[], [13, 15], [13, 15, 22], [13, 15, 22, 23]]   // rows the oars row from, by level
+  let DECKROWS = [12, 26]                          // the second gun deck's ports
+  let MINEP = [[3, 28], [9, 28], [1, 28]]          // mines racked on the stern
+  let ROCKP = [[4, 4], [8, 4], [3, 5], [9, 5]]     // rocket tubes on the bow
+  let BARRACUDA = [
+    "..s..",
+    "..s..",
+    ".sSs.",
+    ".sSs.",
+    ".sss.",
+    ".sSs.",
+    ".sSs.",
+    "s.s.s",
+    "..s..",
+    "..s..",
+    ".s.s.",
+    "s...s"
+  ]
+  let PUFFER = [
+    "..y.y..",
+    ".yyyyy.",
+    "yykyky.",
+    "yyyyyyy",
+    "yyYYYyy",
+    ".yyyyy.",
+    "..y.y.."
+  ]
+  let NARWHAL = [
+    "...w...",
+    "...w...",
+    "...w...",
+    "..nnn..",
+    ".nenen.",
+    ".nnnnn.",
+    "nnNNNnn",
+    "nnNNNnn",
+    ".nnnnn.",
+    "..nnn..",
+    "...n...",
+    "..n.n..",
+    ".n...n."
+  ]
+  let RAIDER = [
+    "...o...",
+    "..oyo..",
+    "..oyo..",
+    ".SoyoS.",
+    ".SoyoS.",
+    ".RoyoR.",
+    ".SoyoS.",
+    ".RoyoR.",
+    ".SoyoS.",
+    "..oyo..",
+    "...o..."
+  ]
+  let RSAIL = ["rwrwrwr", "wrwrwrw", "yyyyyyy"]
+  let SKIFF = [".ooo.", "oyyyo", "oyWyo", "oyyyo", "oyyyo", ".ooo."]
+  let CRAB = [
+    "cc.....cc",
+    "c.c...c.c",
+    "...rrr...",
+    ".rrRrRrr.",
+    "crrrYrrrc",
+    ".rrRrRrr.",
+    "r..rrr..r",
+    "r.......r"
+  ]
+  let DRAKE0 = [
+    "....h....",
+    "...hhh...",
+    "w..hbh..w",
+    "ww.hbh.ww",
+    "wwwbbbwww",
+    ".wwbbbww.",
+    "....b....",
+    "....t....",
+    "...t....."
+  ]
+  let DRAKE1 = [
+    "....h....",
+    "...hhh...",
+    "...hbh...",
+    ".w.hbh.w.",
+    ".wwbbbww.",
+    "..wbbbw..",
+    "....b....",
+    "....t....",
+    ".....t..."
+  ]
+  let SIREN = [
+    "..hhh..",
+    ".hfffh.",
+    ".hfkfh.",
+    "..fff..",
+    ".sfffs.",
+    "..ggg..",
+    "..ggg..",
+    "...gg..",
+    "....gg.",
+    "...g.g."
+  ]
+  let CORAL = [".p.o", "ppoo", ".po.", "..o."]
+  let FLOE = ["..www..", ".wwwww.", "wwwWwww", ".wwWww.", "...ww.."]
+  let LAVAROCK = [".rr.", "rRyr", "ryrr", ".rr."]
+  let PINE = ["..g..", ".gwg.", "gwgwg", "..m.."]
+  let DEADTREE = ["m.m.m", ".mmm.", "..m..", "..m.."]
+  let VENT = ["..y..", ".yRy.", "RRRRR"]
+  let BARN = [10, 17, 23, 13, 19, 25, 7, 15, 26]         // barnacle crust along the hull, three spots a level
+  let DRILLP = [[2, 14], [10, 14], [2, 21], [10, 21]]   // stacks of shot by the guns
+  let FLAGCOL = [#e53935, #fdd835, #1e88e5, #f2f2f2]
+  let HEART = [".rr.rr.", "rRrrrrr", "rrrrrrr", ".rrrrr.", "..rrr..", "...r..."]
+  let STAR = ["...y...", "..yyy..", "yyyyyyy", ".yyyyy.", ".yy.yy."]
+  let GEM = [".g.", "gWg", ".g."]
+  let CROWN = ["g...g...g.", "gg.ggg.gg.", "ggggggggg.", "grgGgGgrg.", "ggggggggg."]
+  let SKULLROCK = [
+    "..wwww..",
+    ".wWWWWw.",
+    "wWkkWkkw",
+    "wWkkWkkw",
+    "wWWWkWWw",
+    ".wWWWWw.",
+    "..wkwk..",
+    "..wwww.."
+  ]
+  let MASTS = [[11], [11, 5], [11, 5, 18], [11, 5, 18]]
+
+  when phase == "start" {
+    gt = 0; sx = 0; sy = 0; sh = 0; sv = 0
+    relics = []
+    lv = reduce(take(shuffle(filter(KEYS, k => get(RAR, k) == "common" && k != "cannon")), perm.crewp ?? 0), (m, k) => set(m, k, 1), LV0)
+    hp = maxHp; level = 1; xp = 0; gold = 0; kills = 0
+    stir = {sea: 0, reef: 0, ice: 0, fog: 0, lava: 0}; warned = ""; isleX = null; isleY = null
+    kingUp = false; won = false; endless = false; esc = 0; swarmAt = 150; rerolls = perm.fortune ?? 0
+    foes = []; balls = []; eballs = []; shells = []; fires = []; coins = []; fx = []
+    spawnAcc = 0; cdCannon = 0; cdFire = 0; cdMortar = 0; parA = 0
+    cdSwivel = 0; cdHarp = 0; cdLant = 0; cdBell = 0; cdDragon = 0; cdStorm = 0
+    anchA = 0; bellT = 0; breathT = 0; boatsUsed = 0; legends = 0
+    cdRocket = 0; cdMine = 0; cdWhirl = 0; cdBoard = 0; wardHp = 0; wardT = 0; wardBroke = false
+    minefield = []; whirls = []
+    shipSlow = 0; curBiome = "sea"; bossN = 0
+    bought = 0; used = []; port = null; hurt = 0; bossAt = 180
+    joy = false; jx = 0; jy = 0
+    banner = "Survive the cursed sea"; bannerT = 3
+    phase = "play"
+  }
+
+  when lv.grape == null { lv = merge(LV0, lv) }
+
+  on tick {
+    let now = num(tick)
+    let dt0 = (now - last) / 1000
+    last = now
+    if phase == "play" && dt0 > 0 && dt0 < 1 {
+      let dt = min(dt0, 0.25)
+      let base = nid
+      nid = nid + 1000
+      gt = gt + dt
+      hurt = max(0, hurt - dt)
+      bannerT = max(0, bannerT - dt)
+
+      if shipBiome != curBiome { curBiome = shipBiome; banner = "Entering ${get(BIO, shipBiome).name}"; bannerT = 3 }
+
+      // ---- the ship: turns toward the stick like a ship, not a cursor
+      let jl = sqrt(jx * jx + jy * jy)
+      let want = jl > 10 ? deg(atan2(jx, -jy)) : sh
+      let turn = clamp(((want - sh) % 360 + 540) % 360 - 180, -(220 + 40 * lv.sails + 30 * lv.oars) * dt, (220 + 40 * lv.sails + 30 * lv.oars) * dt)
+      sh = sh + turn
+      let tv = jl > 10 ? spd * min(1, jl / 45) * (shipSlow > 0 ? 0.6 : 1) : 0
+      sv = sv < tv ? min(tv, sv + spd * 1.5 * (1 + 0.4 * lv.oars) * dt) : max(tv, sv - spd * 1.1 * dt)
+      let nx = sx + sin(rad(sh)) * sv * dt
+      let ny = sy - cos(rad(sh)) * sv * dt
+      let rock = find(isles, i => (nx - i.x) * (nx - i.x) + (ny - i.y) * (ny - i.y) < (i.r + 14) * (i.r + 14))
+      if rock == null {
+        sx = nx
+        sy = ny
+      } else {
+        let rd = max(1, sqrt((nx - rock.x) * (nx - rock.x) + (ny - rock.y) * (ny - rock.y)))
+        sx = rock.x + (nx - rock.x) / rd * (rock.r + 14)
+        sy = rock.y + (ny - rock.y) / rd * (rock.r + 14)
+        sv = sv * 0.6
+      }
+
+      // ---- parrots circle at 46 dp, inside where foes stop against the hull
+      let np = lv.parrot
+      parA = parA + (160 + 25 * np) * dt
+      let parrots = map(range(np), i => {x: sx + sin(rad(parA + i * 360 / max(1, np))) * 46, y: sy - cos(rad(parA + i * 360 / max(1, np))) * 46})
+
+      // ---- the anchor swings wide on its chain
+      anchA = anchA + (90 + 15 * lv.anchor) * dt
+      let anchor = lv.anchor > 0 ? [{x: sx + sin(rad(anchA)) * 88, y: sy - cos(rad(anchA)) * 88}] : []
+
+      // ---- the storm bell tolls: damage and a shove for everything near
+      cdBell = cdBell - dt
+      bellT = max(0, bellT - dt)
+      let ring = lv.bell > 0 && cdBell <= 0
+      let bellR = 80 + 20 * lv.bell
+      if ring { cdBell = (5.5 - 0.9 * lv.bell) * rof; bellT = 0.5 }
+
+      // ---- whirlpools age; the trident calls a new one under a foe now and then
+      let wh1 = filter(map(whirls, w => merge(w, {life: w.life - dt})), w => w.life > 0)
+      let netR = 70 + 15 * lv.nets
+
+      // ---- foes steer: sharks and serpents close in, sloops circle at gun range
+      let m1 = map(foes, e => merge(e, {dx: sx - e.x, dy: sy - e.y}))
+      let m2 = map(m1, e => merge(e, {d: max(1, sqrt(e.dx * e.dx + e.dy * e.dy))}))
+      let m3 = map(m2, e => merge(e, (e.chg ?? 0) > 0 ? {ux: e.cvx, uy: e.cvy} : get(KEEP, e.k, 0) > 0 && e.d < get(KEEP, e.k, 0) ? {ux: -e.dy / e.d * e.side - (e.d < get(KEEP, e.k, 0) - 50 ? e.dx / e.d * 0.6 : 0), uy: e.dx / e.d * e.side - (e.d < get(KEEP, e.k, 0) - 50 ? e.dy / e.d * 0.6 : 0)} : e.k == "serp" || e.k == "leviathan" || e.k == "wyrm" || e.k == "jelly" ? {ux: e.dx / e.d - e.dy / e.d * sin(gt * 2.4 + e.id) * 0.8, uy: e.dy / e.d + e.dx / e.d * sin(gt * 2.4 + e.id) * 0.8} : e.k == "crab" ? {ux: e.dx / e.d * 0.6 - e.dy / e.d * e.side * 0.8, uy: e.dy / e.d * 0.6 + e.dx / e.d * e.side * 0.8} : {ux: e.dx / e.d, uy: e.dy / e.d}))
+      let pace = 0.6 + 0.4 * min(1, gt / 420)
+      let m4 = map(m3, e => merge(e, {sp: (e.d < e.r + 18 && get(KEEP, e.k, 0) == 0 && (e.chg ?? 0) <= 0) || e.fuse != null ? 0 : ((e.chg ?? 0) > 0 ? 240 : get(KSPD, e.k) * ((e.boss ?? false) ? 1 : pace * here.fspd) * ((e.elite ?? "") == "swift" ? 1.6 : 1)) * ((e.slowT ?? 0) > 0 ? 0.5 : 1) * (lv.nets > 0 && e.d < netR ? 1 - 0.15 * lv.nets : 1) * dt / max(1, sqrt(e.ux * e.ux + e.uy * e.uy)), bump: lv.ram > 0 && e.d < e.r + 22}))
+      // the ram knocks what touches the ship back out (all but the kraken)
+      let mv0 = map(m4, e => merge(e, {x: e.x + e.ux * e.sp - ((e.boss ?? false) ? 0 : e.dx / e.d * ((e.bump ? 18 + 8 * lv.ram : 0) + (ring && e.d < bellR ? 45 : 0))), y: e.y + e.uy * e.sp - ((e.boss ?? false) ? 0 : e.dy / e.d * ((e.bump ? 18 + 8 * lv.ram : 0) + (ring && e.d < bellR ? 45 : 0))), h: any(NOROT, k => k == e.k) ? 0 : e.h + clamp(((deg(atan2(e.ux, -e.uy)) - e.h) % 360 + 540) % 360 - 180, -300 * dt, 300 * dt), cd: e.cd - dt, chg: max(0, (e.chg ?? 0) - dt), fuse: e.k != "puffer" ? null : e.fuse != null ? e.fuse - dt : e.d < 70 ? 0.8 : null, sumT: e.k == "dutchman" || e.k == "king" ? ((e.sumT ?? 7) <= 0 ? 7 : (e.sumT ?? 7) - dt) : null}, e.k == "narwhal" && (e.chg ?? 0) <= 0 && e.cd <= 0 && e.d < 280 ? {chg: 0.9, cvx: e.dx / e.d, cvy: e.dy / e.d, cd: 3.5} : {}))
+
+      // whirlpools drag what's in them toward the middle
+      let mvW = len(wh1) == 0 ? mv0 : map(mv0, e => (e.boss ?? false) ? e : merge(e, {x: e.x + sum(map(filter(wh1, w => abs(w.x - e.x) < w.r && abs(w.y - e.y) < w.r), w => (w.x - e.x) * 1.3 * dt)), y: e.y + sum(map(filter(wh1, w => abs(w.x - e.x) < w.r && abs(w.y - e.y) < w.r), w => (w.y - e.y) * 1.3 * dt))}))
+      let onIsle = map(mvW, e => {e: e, i: (e.boss ?? false) || e.k == "drake" ? null : find(isles, i => (e.x - i.x) * (e.x - i.x) + (e.y - i.y) * (e.y - i.y) < (i.r + e.r) * (i.r + e.r))})
+      let mv = map(onIsle, o => o.i == null ? o.e : merge(o.e, {x: o.i.x + (o.e.x - o.i.x) / max(1, sqrt((o.e.x - o.i.x) * (o.e.x - o.i.x) + (o.e.y - o.i.y) * (o.e.y - o.i.y))) * (o.i.r + o.e.r), y: o.i.y + (o.e.y - o.i.y) / max(1, sqrt((o.e.x - o.i.x) * (o.e.x - o.i.x) + (o.e.y - o.i.y) * (o.e.y - o.i.y))) * (o.i.r + o.e.r)}))
+
+      // ---- foes fire: sloops aim at the ship, the kraken spits a ring of ink
+      let shooters = filter(mv, e => e.cd <= 0 && get(SHOT, e.k, null) != null && e.d < get(SHOT, e.k).r)
+      let aims = flatten(map(range(len(shooters)), i => map(range(get(SHOT, shooters[i].k).n), j => {id: base + i * 12 + j, k: get(SHOT, shooters[i].k).k, x: shooters[i].x, y: shooters[i].y, a: shooters[i].k == "kraken" || shooters[i].k == "king" ? j * 360 / get(SHOT, shooters[i].k).n + gt * 50 : deg(atan2(shooters[i].dx, -shooters[i].dy)) + (j - (get(SHOT, shooters[i].k).n - 1) / 2) * get(SHOT, shooters[i].k).sp})))
+      let newE = map(aims, o => {id: o.id, k: o.k, x: o.x, y: o.y, vx: sin(rad(o.a)) * get(EBS, o.k), vy: -cos(rad(o.a)) * get(EBS, o.k), life: o.k == "ink" ? 3.5 : 2.6, d: get(EBD, o.k) * dmgS})
+      let reloaded = map(mv, e => e.cd <= 0 && get(SHOT, e.k, null) != null && e.d < get(SHOT, e.k).r ? merge(e, {cd: get(SHOT, e.k).cd + e.side * 0.3}) : e)
+
+      // ---- broadside: one ball per gun at the nearest foes, from the side they're on
+      cdCannon = cdCannon - dt
+      let near = sortBy(filter(reloaded, e => e.d < reach), e => e.d)
+      let volley = cdCannon <= 0 && len(near) > 0
+      let shots = volley ? map(range(lv.cannon + 2 * lv.deck), i => near[i % len(near)]) : []
+      let newB = map(range(len(shots)), i => {id: base + 20 + i, side: (shots[i].x - sx) * cos(rad(sh)) + (shots[i].y - sy) * sin(rad(sh)) >= 0 ? 1 : -1, tx: shots[i].x + shots[i].ux * shots[i].sp / dt * shots[i].d / 380, ty: shots[i].y + shots[i].uy * shots[i].sp / dt * shots[i].d / 380})
+      let newB2 = map(newB, b => merge(b, {x: sx + cos(rad(sh)) * 16 * b.side - sin(rad(sh)) * (8 - (b.id - base - 20) % 4 * 7), y: sy + sin(rad(sh)) * 16 * b.side + cos(rad(sh)) * (8 - (b.id - base - 20) % 4 * 7)}))
+      let newB3 = map(newB2, b => merge(b, {vx: (b.tx - b.x) / max(1, sqrt((b.tx - b.x) * (b.tx - b.x) + (b.ty - b.y) * (b.ty - b.y))) * 380, vy: (b.ty - b.y) / max(1, sqrt((b.tx - b.x) * (b.tx - b.x) + (b.ty - b.y) * (b.ty - b.y))) * 380, life: reach / 380 + 0.15, d: (8 + 3 * lv.cannon) * (lv.gold > 0 ? 2 : 1) * (1 + 0.25 * lv.heavy), k: lv.gold > 0 ? "g" : "b", pierce: lv.gold > 0, hits: []}))
+      if volley { cdCannon = (1.15 - 0.1 * lv.cannon) * rof * (1 - 0.08 * lv.drill) }
+      let grapeT = volley && lv.grape > 0 ? filter(reloaded, e => e.d < 170) : []
+      let newG = len(grapeT) == 0 ? [] : map(range(3 + lv.grape - 1), i => {id: base + 60 + i, k: "s", pierce: false, x: sx, y: sy, vx: (grapeT[i % len(grapeT)].x - sx) / max(1, grapeT[i % len(grapeT)].d) * 400 + (random() - 0.5) * 80, vy: (grapeT[i % len(grapeT)].y - sy) / max(1, grapeT[i % len(grapeT)].d) * 400 + (random() - 0.5) * 80, life: 0.45, d: 4 + 2 * lv.grape, hits: []})
+
+      // ---- swivel guns: quick small shots at whatever is close
+      cdSwivel = cdSwivel - dt
+      let close = filter(reloaded, e => e.d < 160)
+      let swivNow = lv.swivel > 0 && cdSwivel <= 0 && len(close) > 0
+      let swivT = swivNow ? map(range(lv.swivel), i => close[random(len(close))]) : []
+      let newSw = map(range(len(swivT)), i => {id: base + 30 + i, k: "s", pierce: false, x: sx, y: sy, vx: (swivT[i].x - sx) / max(1, swivT[i].d) * 420, vy: (swivT[i].y - sy) / max(1, swivT[i].d) * 420, life: 0.5, d: 5 + 2 * lv.swivel, hits: []})
+      if swivNow { cdSwivel = 0.5 * rof * (1 - 0.08 * lv.drill) }
+
+      // ---- the harpoon spears the toughest foe in reach, and flies on through
+      cdHarp = cdHarp - dt
+      let tough = sortBy(filter(reloaded, e => e.d < reach + 80), e => -e.hp)
+      let harpNow = lv.harpoon > 0 && cdHarp <= 0 && len(tough) > 0
+      let newH = harpNow ? [{id: base + 35, k: "h", pierce: true, x: sx, y: sy, vx: (tough[0].x - sx) / max(1, tough[0].d) * 500, vy: (tough[0].y - sy) / max(1, tough[0].d) * 500, life: (reach + 140) / 500, d: 30 + 15 * lv.harpoon, hits: []}] : []
+      if harpNow { cdHarp = (2.4 - 0.3 * lv.harpoon) * rof }
+
+      // ---- lightning: ghost lanterns zap the nearest few, the storm mast chains through six
+      cdLant = cdLant - dt
+      cdStorm = cdStorm - dt
+      let byNear = sortBy(filter(reloaded, e => e.d < 330), e => e.d)
+      let lantNow = lv.lantern > 0 && cdLant <= 0 && any(byNear, e => e.d < 260)
+      let stormNow = lv.storm > 0 && cdStorm <= 0 && len(byNear) > 0
+      let lantHits = lantNow ? map(take(filter(byNear, e => e.d < 260), lv.lantern + 1), e => {id: e.id, x: e.x, y: e.y, d: 12 + 8 * lv.lantern}) : []
+      let stormHits = stormNow ? map(take(byNear, 6), e => {id: e.id, x: e.x, y: e.y, d: 45}) : []
+      if lantNow { cdLant = (2.2 - 0.3 * lv.lantern) * rof }
+      if stormNow { cdStorm = 1.4 * rof }
+      let zaps = flatten([lantHits, stormHits])
+
+      // ---- the dragon breathes on what's in a cone ahead of the bow
+      cdDragon = cdDragon - dt
+      breathT = max(0, breathT - dt)
+      let breathe = lv.dragon > 0 && cdDragon <= 0 && any(reloaded, e => e.d < 210 && abs(((deg(atan2(-e.dx, e.dy)) - sh) % 360 + 540) % 360 - 180) < 35)
+      if breathe { cdDragon = 2.4 * rof; breathT = 0.5 }
+
+      // ---- rockets: launched fanned out, then they seek their mark
+      cdRocket = cdRocket - dt
+      let rockT = filter(reloaded, e => e.d < 420)
+      let rockNow = lv.rockets > 0 && cdRocket <= 0 && len(rockT) > 0
+      let rockPick = rockNow ? map(range(lv.rockets), i => rockT[random(len(rockT))]) : []
+      let newR = map(range(len(rockPick)), i => {id: base + 36 + i, k: "r", pierce: false, tgt: rockPick[i].id, x: sx, y: sy, vx: sin(rad(sh + (i - 1) * 60 + 90 * (i % 2 == 0 ? 1 : -1))) * 220, vy: -cos(rad(sh + (i - 1) * 60 + 90 * (i % 2 == 0 ? 1 : -1))) * 220, life: 2.6, d: 18 + 10 * lv.rockets, hits: []})
+      if rockNow { cdRocket = (2.8 - 0.4 * lv.rockets) * rof }
+
+      // ---- sea mines astern: they wait, then burst when something touches them
+      cdMine = cdMine - dt
+      let dropMine = lv.mines > 0 && cdMine <= 0 && len(minefield) < 6 + 2 * lv.mines
+      if dropMine { cdMine = (2.4 - 0.4 * lv.mines) * rof }
+      let mf1 = map(minefield, m => merge(m, {life: m.life - dt, boom: any(reloaded, e => abs(e.x - m.x) < e.r + 14 && abs(e.y - m.y) < e.r + 14)}))
+      let mineBooms = map(filter(mf1, m => m.boom), m => {x: m.x, y: m.y, r: 50, d: 30 + 15 * lv.mines})
+      minefield = flatten([filter(mf1, m => !m.boom && m.life > 0), dropMine ? [{id: base + 52, x: sx - sin(rad(sh)) * 52, y: sy + cos(rad(sh)) * 52, life: 16}] : []])
+
+      // ---- Neptune's trident opens a whirlpool under a foe
+      cdWhirl = cdWhirl - dt
+      let wT = filter(reloaded, e => e.d < 320 && !(e.boss ?? false))
+      let whirlNow = lv.whirl > 0 && cdWhirl <= 0 && len(wT) > 0
+      let wPick = whirlNow ? wT[random(len(wT))] : null
+      if whirlNow { cdWhirl = (9 - 1.5 * lv.whirl) * rof }
+      whirls = flatten([wh1, whirlNow ? [{id: base + 54, x: wPick.x, y: wPick.y, r: 60 + 10 * lv.whirl, life: 3 + 0.5 * lv.whirl}] : []])
+
+      // ---- the boarding party grapples the toughest foe near and takes it
+      cdBoard = cdBoard - dt
+      let bT = sortBy(filter(reloaded, e => !(e.boss ?? false) && e.d < 260), e => -e.hp)
+      let boardNow = lv.board > 0 && cdBoard <= 0 && len(bT) > 0
+      let boardId = boardNow ? bT[0].id : -1
+      if boardNow { cdBoard = (8 - 2.5 * lv.board) * rof }
+
+      // ---- greek fire in the wake
+      cdFire = cdFire - dt
+      let dropFire = lv.fire > 0 && cdFire <= 0 && sv > 5
+      let newF = dropFire ? [{id: base + 50, x: sx - sin(rad(sh)) * 44, y: sy + cos(rad(sh)) * 44, r: 22 + 5 * lv.fire, life: 2.4 + 0.4 * lv.fire, t0: gt}] : []
+      if dropFire { cdFire = (1.5 - 0.17 * lv.fire) * rof }
+
+      // ---- mortar shells take 0.9 s to land
+      cdMortar = cdMortar - dt
+      let mt = filter(reloaded, e => e.d < 340)
+      let lob = lv.mortar > 0 && cdMortar <= 0 && len(mt) > 0
+      let picks = lob ? map(range(lv.mortar >= 3 ? 2 : 1), i => mt[random(len(mt))]) : []
+      let newS = map(range(len(picks)), i => {id: base + 40 + i, x0: sx, y0: sy, tx: picks[i].x + picks[i].ux * picks[i].sp / dt * 0.9, ty: picks[i].y + picks[i].uy * picks[i].sp / dt * 0.9, t: 0, x: sx, y: sy})
+      if lob { cdMortar = (3.2 - 0.5 * lv.mortar) * rof }
+      let sh1 = map(shells, s => merge(s, {t: s.t + dt}))
+      let shellBooms = map(filter(sh1, s => s.t >= 0.9), s => {x: s.tx, y: s.ty, r: 46 + 8 * lv.mortar, d: 24 + 14 * lv.mortar})
+
+      // ---- what's in flight moves
+      let bt = map(balls, b => b.k == "r" ? {b: b, t: find(reloaded, e => e.id == b.tgt)} : {b: b, t: null})
+      let bs = map(bt, o => o.t == null ? o.b : merge(o.b, {vx: lerp(o.b.vx, (o.t.x - o.b.x) / max(1, sqrt((o.t.x - o.b.x) * (o.t.x - o.b.x) + (o.t.y - o.b.y) * (o.t.y - o.b.y))) * 340, 0.45), vy: lerp(o.b.vy, (o.t.y - o.b.y) / max(1, sqrt((o.t.x - o.b.x) * (o.t.x - o.b.x) + (o.t.y - o.b.y) * (o.t.y - o.b.y))) * 340, 0.45)}))
+      let b1 = map(bs, b => merge(b, {x: b.x + b.vx * dt, y: b.y + b.vy * dt, life: b.life - dt}))
+      let e1 = map(eballs, b => merge(b, {x: b.x + b.vx * dt, y: b.y + b.vy * dt, life: b.life - dt}))
+      let f1 = filter(map(fires, f => merge(f, {life: f.life - dt})), f => f.life > 0)
+      let b1h = map(b1, b => merge(b, {ids: map(filter(reloaded, e => (abs(b.x - e.x) < e.r + 6 && abs(b.y - e.y) < e.r + 6) || (abs(b.x - b.vx * dt / 2 - e.x) < e.r + 6 && abs(b.y - b.vy * dt / 2 - e.y) < e.r + 6)), e => e.id)}))
+      let b1n = map(b1h, b => merge(b, {fresh: filter(b.ids, i => !any(b.hits ?? [], h => h == i))}))
+      let kegBooms = lv.kegs > 0 ? map(filter(b1n, b => len(b.fresh) > 0 && (b.k == "b" || b.k == "g")), b => {x: b.x, y: b.y, r: 26 + 8 * lv.kegs, d: 6 + 6 * lv.kegs}) : []
+      let rockBooms = map(filter(b1n, b => len(b.fresh) > 0 && b.k == "r"), b => {x: b.x, y: b.y, r: 34 + 6 * lv.rockets, d: 10 + 8 * lv.rockets})
+      let booms = flatten([shellBooms, kegBooms, rockBooms, mineBooms])
+
+      // ---- damage to each foe (balls are checked at both ends of their step, so none tunnel through)
+      let dm0 = map(reloaded, e => merge(e, {chained: lv.chain > 0 && any(b1n, b => (b.k == "b" || b.k == "g") && any(b.fresh, i => i == e.id)), dmg: (e.id == boardId ? e.hp + 1 : 0) + count(wh1, w => abs(w.x - e.x) < w.r && abs(w.y - e.y) < w.r) * (15 + 10 * lv.whirl) * dt + sum(map(filter(b1n, b => any(b.fresh, i => i == e.id)), b => b.d)) + count(parrots, p => abs(p.x - e.x) < e.r + 12 && abs(p.y - e.y) < e.r + 12) * (20 + 6 * lv.parrot) * dt + count(f1, f => (f.x - e.x) * (f.x - e.x) + (f.y - e.y) * (f.y - e.y) < (f.r + e.r * 0.5) * (f.r + e.r * 0.5)) * (12 + 8 * lv.fire) * here.fire * dt + (e.bump ? ((e.boss ?? false) ? (6 + 8 * lv.ram) * 2 * dt : 6 + 8 * lv.ram) : 0) + (lv.barnacle > 0 && e.d < e.r + 22 ? (6 + 6 * lv.barnacle) * dt : 0) + sum(map(filter(booms, o => (o.x - e.x) * (o.x - e.x) + (o.y - e.y) * (o.y - e.y) < (o.r + e.r) * (o.r + e.r)), o => o.d)) + count(anchor, a => abs(a.x - e.x) < e.r + 16 && abs(a.y - e.y) < e.r + 16) * (30 + 15 * lv.anchor) * dt + (ring && e.d < bellR ? 14 + 10 * lv.bell : 0) + sum(map(filter(zaps, z => z.id == e.id), z => z.d)) + (breathe && e.d < 210 && abs(((deg(atan2(-e.dx, e.dy)) - sh) % 360 + 540) % 360 - 180) < 35 ? 70 * here.fire : 0)}))
+      let dm = map(dm0, e => merge(e, {dmg: e.dmg * dmgMul * (lv.cat > 0 && e.dmg > 0 && random() < 0.1 * lv.cat ? 2 : 1)}))
+      let popped = filter(dm, e => e.fuse != null && e.fuse <= 0 && e.hp - e.dmg > 0)
+      let dead = filter(dm, e => e.hp - e.dmg <= 0)
+      let fled = find(dm, e => (e.boss ?? false) && e.k != "king" && (e.home ?? shipBiome) != shipBiome && e.hp - e.dmg > 0)
+      let alive = map(filter(dm, e => e.hp - e.dmg > 0 && !(e.fuse != null && e.fuse <= 0) && (e.d < 1000 || (e.boss ?? false)) && !((e.boss ?? false) && e.k != "king" && (e.home ?? shipBiome) != shipBiome)), e => merge(e, {hp: e.hp - e.dmg, hit: e.dmg > 0.6 ? 0.18 : max(0, e.hit - dt), slowT: e.chained ? 1.2 + 0.6 * lv.chain : max(0, (e.slowT ?? 0) - dt)}))
+      let b2 = map(filter(b1n, b => b.life > 0 && (b.pierce || len(b.ids) == 0)), b => merge(b, {hits: flatten([b.hits ?? [], b.fresh])}))
+      let fallen = find(dead, e => e.boss ?? false)
+      if fled != null { banner = "${(fled.coral ?? false) ? "The Coral Kraken" : get(BOSSNAME, fled.k)} sinks back into the deep"; bannerT = 3 }
+      if fallen != null {
+        esc = esc + 1
+        if fallen.k == "king" {
+          gold = gold + 250
+          won = true
+          wins = wins + 1
+          bestRelics = max(bestRelics, nRel)
+          kingUp = false
+          isleX = null
+          isleY = null
+          phase = "won"
+          joy = false; jx = 0; jy = 0
+          haptic()
+        } else if any(RELICKEYS, r => r == (fallen.home ?? "")) && !any(relics, r => r == fallen.home) {
+          relics = flatten([relics, [fallen.home]])
+          banner = "You claim the ${get(RELIC, fallen.home).name}!"; bannerT = 4
+          haptic()
+          if len(relics) >= 4 {
+            let ia = random(360)
+            isleX = sx + sin(rad(ia)) * 2600
+            isleY = sy - cos(rad(ia)) * 2600
+            banner = "The four relics point to Treasure Isle!"; bannerT = 5
+          }
+        } else {
+          banner = "${(fallen.coral ?? false) ? "The Coral Kraken" : get(BOSSNAME, fallen.k)} is beaten!"; bannerT = 3
+        }
+      }
+
+      // ---- the ship takes damage from what touches it and what hits it
+      let touching = filter(alive, e => e.d < e.r + 20)
+      let hitMe = filter(e1, b => abs(b.x - sx) < 15 && abs(b.y - sy) < 15)
+      shipSlow = any(hitMe, b => b.k == "note" || b.k == "frost") ? 2 : max(0, shipSlow - dt)
+      let raw = (sum(map(touching, e => get(KDPS, e.k) * ((e.elite ?? "") != "" ? 1.5 : 1))) * dmgS * dt * (1 - 0.1 * lv.ram) + sum(map(hitMe, b => b.d)) * (1 - 0.12 * lv.copper) + count(popped, e => e.d < 80) * 22 * dmgS) * (1 - 0.12 * lv.hull) * (lv.ghost > 0 ? 0.7 : 1)
+      let soak = min(wardHp, raw)
+      wardHp = wardHp - soak
+      let dmgIn = raw - soak
+      let wardMax = lv.ward > 0 ? 20 + 15 * lv.ward : 0
+      wardT = max(0, wardT - dt)
+      if wardMax > 0 && wardHp <= 0 && wardT <= 0 {
+        if wardBroke { wardHp = wardMax; wardBroke = false } else { wardBroke = true; wardT = 9 - 1.5 * lv.ward }
+      }
+      hp = min(maxHp, hp - dmgIn + (0.6 * lv.hull + (lv.ghost > 0 ? 2 : 0)) * dt + len(dead) * 0.6 * lv.stove + (lv.pumps > 0 && hp < maxHp * 0.4 ? (2 + 2 * lv.pumps) * dt : 0) + here.mend * dt - (hp > 15 ? here.burn * dt : 0))
+      if dmgIn > 2.5 { hurt = 0.2 }
+
+      // ---- loot: dead foes drop doubloons, the kraken a ring of chests
+      let drops = flatten(map(dead, e => (e.elite ?? "") != "" ? [{x: e.x, y: e.y, v: 4 + get(KXP, e.k) * 4, c: true}] : (e.boss ?? false) ? map(range(10), j => {x: e.x + sin(rad(j * 36)) * 34, y: e.y - cos(rad(j * 36)) * 34, v: 6, c: true}) : [{x: e.x, y: e.y, v: get(KXP, e.k), c: false}]))
+      let cm = map(flatten([coins, drops]), c => merge(c, {cd: sqrt((sx - c.x) * (sx - c.x) + (sy - c.y) * (sy - c.y))}))
+      let gain = sum(map(filter(cm, c => c.cd < 22), c => c.v))
+      coins = take(map(filter(cm, c => c.cd >= 22 && c.cd < 1100), c => c.cd < pickR ? merge(c, {x: c.x + (sx - c.x) / c.cd * min(c.cd, 430 * (1 + 0.3 * lv.lodestone) * dt), y: c.y + (sy - c.y) / c.cd * min(c.cd, 430 * (1 + 0.3 * lv.lodestone) * dt)}) : c), 120)
+      xp = xp + gain * (1 + 0.1 * lv.nest + 0.12 * lv.doubloon) * here.xp
+      gold = gold + round(gain * (1 + 0.2 * lv.chart + 0.1 * lv.doubloon) * here.gold * (1 + 0.1 * (perm.banker ?? 0)))
+      kills = kills + len(dead)
+
+      // ---- new foes come from beyond sight, more of them as time goes on
+      let kingAlive = any(alive, e => e.k == "king")
+      spawnAcc = spawnAcc + dt * (0.45 + gt / 50) * (1 + 0.12 * esc) * (kingAlive ? 0.35 : 1)
+      let room = max(0, min(60, 10 + floor(gt / 8) + 3 * esc) - len(alive))
+      let ns = min(floor(spawnAcc), room, 4)
+      spawnAcc = spawnAcc - floor(spawnAcc)
+      let hm = (1 + gt / 110) * (1 + 0.25 * esc)
+      let eliteP = gt < 90 ? 0 : min(0.22, gt / 3000 + 0.03 * esc)
+      let rolls = map(range(ns), i => {i: i, a: random(360), r: random(), q: random(), el: random() < eliteP ? (random() < 0.5 ? "swift" : "armored") : ""})
+      let kinds = map(rolls, o => merge(o, {k: len(bag) > 0 ? bag[floor(o.r * len(bag))] : "shark"}))
+      let spawned = flatten(map(kinds, o => map(range(o.k == "skiff" ? 3 : 1), j => {id: base + 200 + o.i * 4 + j, k: o.k, x: sx + sin(rad(o.a + j * 6)) * (520 + j * 30), y: sy - cos(rad(o.a + j * 6)) * (520 + j * 30), h: o.a + 180, hp: get(KHP, o.k) * hm * here.fhp * (o.el == "armored" ? 6 : o.el == "swift" ? 3 : 1), mhp: get(KHP, o.k) * hm * here.fhp * (o.el == "armored" ? 6 : o.el == "swift" ? 3 : 1), r: get(KR, o.k) * (o.el != "" ? 1.3 : 1), s: get(KS, o.k), cd: 1.5 + o.q * 2, side: o.q < 0.5 ? 1 : -1, hit: 0, boss: false, elite: o.el})))
+      let callers = filter(reloaded, e => (e.k == "dutchman" || e.k == "king") && (e.sumT ?? 7) <= 0)
+      let summoned = flatten(map(range(len(callers)), i => map(range(3), j => {id: base + 320 + i * 3 + j, k: callers[i].k == "king" ? "shark" : "skiff", x: callers[i].x + sin(rad(j * 120)) * 70, y: callers[i].y - cos(rad(j * 120)) * 70, h: j * 120, hp: get(KHP, "skiff") * hm, mhp: get(KHP, "skiff") * hm, r: get(KR, "skiff"), s: get(KS, "skiff"), cd: 2, side: j % 2 == 0 ? 1 : -1, hit: 0, boss: false})))
+      // something stirs: time spent in a biome, with no boss about, wakes the biome's boss
+      let stirNow = get(stir, shipBiome) + (any(alive, e => e.boss ?? false) || kingUp ? 0 : dt)
+      let bossNow = stirNow >= stirT
+      stir = set(stir, shipBiome, bossNow ? 0 : stirNow)
+      if !bossNow && stirNow >= stirT - 15 && warned != shipBiome { warned = shipBiome; banner = "Something stirs beneath the waves..."; bannerT = 3 }
+      let bk = here.boss
+      let bossHp = get(KHP, bk) * (1 + gt / 110) * (1 + 0.4 * esc) * here.fhp
+      let boss = bossNow ? [{id: base + 300, k: bk, x: sx, y: sy - 540, h: 0, hp: bossHp, mhp: bossHp, r: get(KR, bk), s: get(KS, bk), cd: 4, side: 1, hit: 0, boss: true, home: shipBiome, coral: shipBiome == "reef"}] : []
+      if bossNow { warned = ""; banner = bk == "kraken" ? (shipBiome == "reef" ? "The Coral Kraken rises!" : "The kraken rises!") : bk == "dutchman" ? "The Flying Dutchman appears!" : bk == "wyrm" ? "The Frost Wyrm stirs!" : "The Leviathan wakes!"; bannerT = 3; haptic() }
+
+      // Treasure Isle: sail onto it with the four relics and the Sea King rises
+      let atIsle = isleX != null && !kingUp && abs(sx - isleX) < 170 && abs(sy - isleY) < 170
+      if atIsle { kingUp = true; banner = "THE SEA KING RISES"; bannerT = 4; haptic() }
+      let kingHp = get(KHP, "king") * (1 + gt / 300) * (1 + 0.3 * esc)
+      let king = atIsle ? [{id: base + 350, k: "king", x: sx, y: sy - 400, h: 0, hp: kingHp, mhp: kingHp, r: get(KR, "king"), s: get(KS, "king"), cd: 3, side: 1, hit: 0, boss: true, home: "isle"}] : []
+
+      // a swarm of whatever the biome breeds, ringing the ship
+      let swarmNow = gt >= swarmAt && !kingAlive
+      if swarmNow { swarmAt = swarmAt + 140; banner = get(SWARMTXT, shipBiome); bannerT = 3; haptic() }
+      let swk = get(SWARMK, shipBiome)
+      let swarm = swarmNow ? map(range(get(SWARMN, shipBiome)), j => {id: base + 400 + j, k: j % 4 == 3 && shipBiome == "fog" ? "wraith" : swk, x: sx + sin(rad(j * 360 / get(SWARMN, shipBiome))) * 470, y: sy - cos(rad(j * 360 / get(SWARMN, shipBiome))) * 470, h: j * 360 / get(SWARMN, shipBiome) + 180, hp: get(KHP, swk) * hm * here.fhp, mhp: get(KHP, swk) * hm * here.fhp, r: get(KR, swk), s: get(KS, swk), cd: 2 + j * 0.1, side: j % 2 == 0 ? 1 : -1, hit: 0, boss: false, elite: ""}) : []
+
+      foes = flatten([alive, spawned, summoned, boss, king, swarm])
+      balls = flatten([b2, newB3, newSw, newH, newR, newG])
+      eballs = flatten([filter(e1, b => b.life > 0 && !(abs(b.x - sx) < 15 && abs(b.y - sy) < 15)), newE])
+      shells = flatten([filter(sh1, s => s.t < 0.9), newS])
+      fires = flatten([f1, newF])
+      let newFx = flatten([map(range(len(popped)), i => {id: base + 700 + i, k: "boom", x: popped[i].x, y: popped[i].y, life: 0.5}), map(range(len(dead)), i => {id: base + 80 + i, k: (dead[i].boss ?? false) ? "big" : "boom", x: dead[i].x, y: dead[i].y, life: (dead[i].boss ?? false) ? 0.9 : 0.5}), map(range(len(booms)), i => {id: base + 95 + i, k: "boom", x: booms[i].x, y: booms[i].y, life: 0.5}), map(range(min(len(hitMe), 3)), i => {id: base + 90 + i, k: "splash", x: hitMe[i].x, y: hitMe[i].y, life: 0.4}), map(range(len(lantHits)), i => {id: base + 600 + i, k: "zap", c: "lant", x0: sx, y0: sy, x: lantHits[i].x, y: lantHits[i].y, life: 0.25}), map(range(len(stormHits)), i => {id: base + 610 + i, k: "zap", c: "storm", x0: i == 0 ? sx : stormHits[i - 1].x, y0: i == 0 ? sy : stormHits[i - 1].y, x: stormHits[i].x, y: stormHits[i].y, life: 0.3}), ring ? [{id: base + 620, k: "ring", x: sx, y: sy, r: bellR, life: 0.4}] : [], boardNow ? [{id: base + 621, k: "zap", c: "rope", x0: sx, y0: sy, x: bT[0].x, y: bT[0].y, life: 0.4}] : []])
+      fx = take(flatten([filter(map(fx, f => merge(f, {life: f.life - dt})), f => f.life > 0), newFx]), 40)
+
+      if xp >= xpNeed && phase == "play" {
+        xp = xp - xpNeed
+        level = level + 1
+        let open = filter(KEYS, k => get(lv, k) < get(UP, k).max)
+        let drawn = map(open, k => {k: k, s: pow(random(), 1 / (get(RAR, k) == "epic" ? 12 * luckE : get(RAR, k) == "rare" ? 28 * luckR : 60))})
+        choices = len(open) > 0 ? map(take(sortBy(drawn, o => -o.s), 3), o => o.k) : ["rum", "chest"]
+        phase = "level"
+        joy = false; jx = 0; jy = 0
+        haptic()
+      }
+      if hp <= 0 && boatsUsed < lv.boats && phase == "play" {
+        boatsUsed = boatsUsed + 1
+        hp = maxHp / 2
+        eballs = []
+        foes = map(foes, e => !(e.boss ?? false) && (e.x - sx) * (e.x - sx) + (e.y - sy) * (e.y - sy) < 220 * 220 ? merge(e, {x: sx + (e.x - sx) / max(1, sqrt((e.x - sx) * (e.x - sx) + (e.y - sy) * (e.y - sy))) * 240, y: sy + (e.y - sy) / max(1, sqrt((e.x - sx) * (e.x - sx) + (e.y - sy) * (e.y - sy))) * 240}) : e)
+        banner = "Saved by a lifeboat!"; bannerT = 3
+        haptic()
+      }
+      if hp <= 0 && phase == "play" {
+        hp = 0
+        lastBank = won ? gold : floor(gold / 2)
+        bank = bank + lastBank
+        bestRelics = max(bestRelics, nRel)
+        phase = "over"
+        joy = false; jx = 0; jy = 0
+        bestT = max(bestT, gt)
+        bestK = max(bestK, kills)
+        haptic()
+      }
+    }
+  }
+
+  // an upgrade's picture, for the cards
+  component Icon(k) {
+    Canvas {
+      width: 48; height: 48
+      if k == "cannon" {
+        sprite([".....kkkkkkkg", "...kkkkKKkkkg", "..kkkkkkkkkkg", "...kkkkkkkk..", "..yyyy..yyyy.", ".yYyyYy.yYyyY", "..yyyy..yyyy."], 1, 14, 3.6, palette: {k: #2a2a32, K: #6a6a78, g: #d9a72b, y: #6b4426, Y: #3b2412})
+      } else if k == "parrot" {
+        sprite(["...rrr...", "..rrWkr..", "..rrrryy.", ".rrrrr.y.", ".rrbbr...", "..rbbbr..", "...rbbbr.", "....gggr.", ".....ggg.", "......gg."], 8, 4, 4, palette: {r: #e53935, W: #ffffff, k: #111111, y: #f4d03f, b: #1e88e5, g: #43a047})
+      } else if k == "fire" {
+        sprite(["...f.f..", "..fFfFf.", ".fFYYFf.", "..fYYf..", ".oooooo.", "oRRRRRRo", "oiiiiiio", "oRRRRRRo", "oRRRRRRo", "oiiiiiio", "oRRRRRRo", ".oooooo."], 8, 0, 4, palette: {f: #ff7a1a, F: #ffb03a, Y: #ffe066, o: #3b2412, R: #a8452c, i: #6f7a86})
+      } else if k == "mortar" {
+        sprite(["..gkkkkg..", ".gkKKKKkg.", ".gkkkkkkg.", "..kkkkkk..", "..kkkkkk..", ".dddddddd.", "dDddddddDd", "dddddddddd"], 4, 8, 4, palette: {g: #d9a72b, k: #2a2a32, K: #000000, d: #6b4426, D: #3b2412})
+      } else if k == "ram" {
+        sprite(["....g....", "....i....", "...iIi...", "...iIi...", "..iiIii..", "..iiIii..", ".iiiIiii.", "oooooooo.", "owwwwwwo."], 6, 4, 4, palette: {g: #ffd54a, i: #9aa4ae, I: #dfe6ec, o: #3b2412, w: #8a5a2b})
+      } else if k == "sails" {
+        sprite(["....m.....", "..ssmsss..", ".sssmssss.", "sssxmxsssx", "sssxmxsssx", ".sssmssss.", "..ssmsss..", "....m.....", "wwwwmwwwww", ".owwwwwwo."], 4, 4, 4, palette: {m: #3b2412, s: #efe4c8, x: #cbbd9a, w: #8a5a2b, o: #3b2412})
+      } else if k == "hull" {
+        sprite(["oooooooooo", "obbbbbbbbo", "obiibbiibo", "obbbbbbbbo", "obiibbiibo", ".obbbbbbo.", "..obbbbo..", "...obbo...", "....oo...."], 4, 6, 4, palette: {o: #2a2f36, b: #9aa4ae, i: #dfe6ec})
+      } else if k == "nest" {
+        sprite(["m.KKKKK", "m.KKWKK", "m.KWWWK", "m.KKKKK", "m......", "nnnnn..", "nNNNn..", "nnnnn..", ".m.....", ".m.....", ".m....."], 10, 2, 4, palette: {m: #3b2412, K: #15151c, W: #f2f2f2, n: #8a5a2b, N: #5a3b22})
+      } else if k == "swivel" {
+        sprite(["..........", ".kkkkkkkg.", "kKKkkkkkg.", ".kkkkkkkg.", "....gg....", "....yy....", "....yy....", "...yyyy..."], 4, 8, 4, palette: {k: #2a2a32, K: #6a6a78, g: #d9a72b, y: #6b4426})
+      } else if k == "harpoon" {
+        sprite(["...........i.", "..........iI.", "rriiiiiiiiIIi", "..........iI.", "...........i."], 0.5, 15, 3.6, palette: {i: #9aa4ae, I: #dfe6ec, r: #c8975a})
+      } else if k == "lantern" {
+        circle(24, 24, 20, fill: alpha(#7fe3ff, 0.18))
+        sprite(["...kk...", "..k..k..", ".kkkkkk.", ".kcCCck.", ".kCWWCk.", ".kCWWCk.", ".kcCCck.", ".kkkkkk.", "..kkkk.."], 8, 6, 4, palette: {k: #2a2f36, c: #3fb6d8, C: #7fe3ff, W: #ffffff})
+      } else if k == "anchor" {
+        sprite(["...ii...", "..i..i..", "...ii...", "iiiiiiii", "...ii...", "...ii...", "i..ii..i", "ii.ii.ii", ".iiiiii.", "..iiii.."], 8, 4, 4, palette: {i: #9aa4ae})
+      } else if k == "bell" {
+        sprite(["....yy....", "...gggg...", "..gGgggg..", "..gGgggg..", ".gGgggggg.", ".gGgggggg.", "gggggggggg", "....kk...."], 4, 8, 4, palette: {y: #6b4426, g: #d9a72b, G: #ffe066, k: #3b2412})
+      } else if k == "kegs" {
+        sprite([".....fF.", "....r...", ".dddrdd.", "diiiiiid", "dddkkddd", "ddkddkdd", "dddkkddd", "diiiiiid", ".dddddd."], 8, 6, 4, palette: {d: #4a3a2a, i: #6f7a86, k: #15151c, r: #c8975a, f: #ff7a1a, F: #ffe066})
+      } else if k == "crew" {
+        sprite(["..rrrr..", ".rrrrrr.", ".hhhhhh.", ".hkhhkh.", ".hhhhhh.", "..hhhh..", "wbwbwbwb", "bwbwbwbw"], 8, 8, 4, palette: {r: #e53935, h: #f1c27d, k: #2a2a32, w: #f2f2f2, b: #1e5aa8})
+      } else if k == "figure" {
+        sprite(["..GGG...", ".GgggG..", ".gkggg..", ".ggggg..", "..ggg...", ".gGGGg..", "gGgggGg.", "gggggggg", ".gggggg."], 8, 6, 4, palette: {g: #d9a72b, G: #ffe066, k: #6b4426})
+      } else if k == "cat" {
+        sprite(["o...o...", "oo.oo...", "ooooo...", "okoko...", "ooooo..o", ".oooo..o", ".ooooo.o", ".oooooo.", "..o..o.."], 8, 6, 4, palette: {o: #ff9f43, k: #2a2a32})
+      } else if k == "boats" {
+        sprite(["....m.....", "....mw....", "....mww...", "....mwww..", "....m.....", "y........y", "yyyyyyyyyy", ".yYyYyYyy.", "..yyyyyy.."], 4, 6, 4, palette: {m: #3b2412, w: #efe4c8, y: #8a5a2b, Y: #c8975a})
+      } else if k == "dragon" {
+        sprite(["..gg......", ".gGGg.....", "gGGGGggg..", "gGyGGGGGg.", "gGGGGGGGGg", "gGGGGGwgwg", ".gGGGGGGG.", "..gg.ffff.", "......fFf."], 4, 6, 4, palette: {g: #1f6e3a, G: #2f9e55, y: #ffe066, w: #ffffff, f: #ff7a1a, F: #ffe066})
+      } else if k == "storm" {
+        circle(24, 24, 20, fill: alpha(#5a7cff, 0.25))
+        sprite(["....yyy.", "...yyy..", "..yyy...", ".yyyyyy.", "...yyy..", "..yyy...", ".yy.....", "y......."], 8, 8, 4, palette: {y: #fff27a})
+      } else if k == "ghost" {
+        sprite(["...m.....", ".gggggg..", "ggGgGggg.", "gggggggg.", "ggkggkgg.", "gggggggg.", "gggkkggg.", ".gggggg..", "...m....."], 6, 6, 4, palette: {m: #2f4f3f, g: alpha(#c8ffe0, 0.85), G: #ffffff, k: #1f3a2f})
+      } else if k == "gold" {
+        sprite([".....kkkkkkkg", "...kkkkKKkkkg", "..kkkkkkkkkkg", "...kkkkkkkk..", "..yyyy..yyyy.", ".yYyyYy.yYyyY", "..yyyy..yyyy."], 1, 14, 3.6, palette: {k: #d9a72b, K: #fff1a8, g: #fff1a8, y: #6b4426, Y: #3b2412})
+      } else if k == "heavy" {
+        sprite([".kk.....", "kKkk....", "kkkk.kk.", ".kk.kKkk", "....kkkk", "..kk.kk.", ".kKkk...", ".kkkk...", "..kk...."], 8, 6, 4, palette: {k: #5a5a66, K: #c8c8d4})
+      } else if k == "oars" {
+        sprite(["y.......y", ".y.....y.", "..y...y..", "...y.y...", "....y....", "...y.y...", "..Y...Y..", ".YY...YY.", "YYY...YYY"], 6, 6, 4, palette: {y: #8a5a2b, Y: #c8975a})
+      } else if k == "stove" {
+        sprite(["..w.w...", ".w.w....", "..w.w...", "kkkkkkkk", ".kKkkkk.", ".kkkkkk.", ".kkkkkk.", "..kkkk..", "..ffff.."], 8, 6, 4, palette: {w: #d8d8d8, k: #2a2a32, K: #6a6a78, f: #ff7a1a})
+      } else if k == "nets" {
+        sprite(["c...c...c", ".c.c.c.c.", "..c...c..", ".c.c.c.c.", "c...c...c", ".c.c.c.c.", "..c...c..", ".c.c.c.c.", "c...c...r"], 6, 6, 4, palette: {c: #e8d8a8, r: #e53935})
+      } else if k == "chain" {
+        sprite(["kk......kk", "kKk....kKk", "kkkcccckkk", ".kk....kk."], 4, 16, 4, palette: {k: #3a4a5e, K: #9aa4ae, c: #9aa4ae})
+      } else if k == "mines" {
+        sprite(["...k...", ".k.k.k.", "..kkk..", "kkkRkkk", "..kkk..", ".k.k.k.", "...k..."], 6.5, 6.5, 5, palette: {k: #2a2a32, R: #ff3b30})
+      } else if k == "rockets" {
+        sprite(["......rW", ".....rrr", "....rrr.", "...rrr..", "..yrr...", ".ff.y...", "fFf.....", ".f......"], 8, 8, 4, palette: {r: #c62828, W: #f2f2f2, y: #8a5a2b, f: #ff7a1a, F: #ffe066})
+      } else if k == "ward" {
+        circle(24, 22, 18, fill: alpha(#7fe3ff, 0.18))
+        circle(24, 22, 18, stroke: #bff4ff, width: 2)
+        sprite(["..p.p..", ".p.pp.p", "..ppp..", "...p..."], 10, 22, 4, palette: {p: #ff7aa8})
+      } else if k == "chart" {
+        sprite(["pppppppppp", "pqqqpppppp", "ppppqppxpp", "ppppqpxppp", "pppppqppxp", "ppppppqqpp", "pppppppppp"], 4, 10, 4, palette: {p: #f0e2b6, q: #8a5a2b, x: #c62828})
+      } else if k == "deck" {
+        sprite(["oooooooooo", "okokokokoo", "oooooooooo", "okokokokoo", ".oooooooo."], 4, 14, 4, palette: {o: #8a5a2b, k: #1a1a1f})
+      } else if k == "whirl" {
+        arc(24, 24, 20, 0, 270, stroke: alpha(#9fd8ff, 0.8), width: 3, cap: round)
+        arc(24, 24, 13, 120, 240, stroke: alpha(#9fd8ff, 0.6), width: 3, cap: round)
+        sprite(["g.g.g", "g.g.g", "ggggg", "..g..", "..g..", "..g..", "..g.."], 14, 10, 4, palette: {g: #ffd54a})
+      } else if k == "board" {
+        sprite(["i......i", ".i....i.", "..i..i..", "...ii...", "...ii...", "..y..y..", ".y....y.", "y......y"], 8, 8, 4, palette: {i: #dfe6ec, y: #8a5a2b})
+      } else if k == "barnacle" {
+        sprite(["..w.w...", ".wWw.ww.", "wWWw.wWw", ".ww..ww.", "...wWw..", "..wWWw..", "..wwww.."], 8, 10, 4, palette: {w: #c8b8a8, W: #f2ece0})
+      } else if k == "doubloon" {
+        sprite(["..gggg..", ".gGGGGg.", "gGgkkgGg", "gGkGGkGg", "gGgkkgGg", "gGGkkGGg", ".gGGGGg.", "..gggg.."], 8, 8, 4, palette: {g: #b8860b, G: #ffd54a, k: #8a5a0b})
+      } else if k == "pumps" {
+        sprite(["iiiii...", "..i.....", "..i..b..", ".iii.bb.", ".iii..b.", ".iii.b..", "yyyyyyyy"], 8, 10, 4, palette: {i: #9aa4ae, b: #7fc8ff, y: #8a5a2b})
+      } else if k == "drill" {
+        sprite(["...kk...", "..kKkk..", "..kkkk..", ".kk..kk.", "kKkkKkkk", "kkkkkkkk"], 8, 12, 4, palette: {k: #3a3a44, K: #9a9aa8})
+      } else if k == "flags" {
+        sprite(["kkkkkkkkkk", "rr.yy.bb.w", ".r..y..b..", "..........", "kkkkkkkkkk", ".ww.rr.yy.", "..w..r..y."], 4, 10, 4, palette: {k: #8a5a2b, r: #e53935, y: #fdd835, b: #1e88e5, w: #f2f2f2})
+      } else if k == "copper" {
+        sprite(["cccccccc", "cCccccCc", "cccccccc", "cCccccCc", ".cccccc.", "..cccc.."], 8, 12, 4, palette: {c: #b87333, C: #e0a060})
+      } else if k == "lodestone" {
+        sprite(["...b....", ".kkkk.b.", "kKkkkk..", "kkkKkk..", ".kkkk..b", "b......."], 8, 12, 4, palette: {k: #3a3a44, K: #6a6a78, b: #7fc8ff})
+      } else if k == "grape" {
+        sprite(["k.k.k...", ".k.k.k..", "k.k.k.k.", ".k.k.k..", "k.k.k...", "........", "gkkkkkk.", "gkkkkkk."], 8, 8, 4, palette: {k: #3a3a44, g: #d9a72b})
+      } else if k == "rum" {
+        sprite(["...cc...", "...gg...", "...gg...", "..gggg..", ".gggggg.", ".gYYYYg.", ".gYkkYg.", ".gYYYYg.", ".gggggg.", "..gggg.."], 8, 4, 4, palette: {c: #8a5a2b, g: #2e7d32, Y: #f0e2b6, k: #a8452c})
+      } else {
+        sprite(["oooooooooo", "odddGGdddo", "oooooooooo", "oddddddddo", "oddddkdddo", "oddddddddo", "oooooooooo"], 4, 10, 4, palette: {o: #4a2f1a, d: #8a5a2b, G: #ffd54a, k: #ffd54a})
+      }
+    }
+  }
+
+  component Card(k) {
+    Row {
+      gap: 12
+      padding: 12
+      background: get(RAR, k) == "legendary" ? alpha(#2a1a06, 0.94) : get(RAR, k) == "epic" ? alpha(#1e0d2a, 0.94) : get(RAR, k) == "rare" ? alpha(#0a1a30, 0.94) : alpha(#0d1b2a, 0.92)
+      border: get(RAR, k) == "common" ? 2 : 3
+      borderColor: get(RARITY, get(RAR, k)).color
+      radius: 8
+      align: center
+      Icon { k: k }
+      Column {
+        weight: 1
+        gap: 2
+        Text { text: get(UP, k).name; color: #ffe8b0; bold: true; font: mono }
+        Text { text: k == "rum" || k == "chest" ? "a find" : "${get(RAR, k) == "legendary" ? "★ LEGENDARY" : upper(get(RAR, k))} · ${get(UP, k).leg ? "outposts only" : get(lv, k) == 0 ? "new" : "level ${get(lv, k)} → ${get(lv, k) + 1}"}"; color: get(RARITY, get(RAR, k)).color; fontSize: 12; font: mono; bold: true }
+        Text { text: get(UP, k).info; color: #c9d6e3; fontSize: 13 }
+        Text { text: get(NEXT, k); color: #8fd18f; fontSize: 12; font: mono }
+      }
+    }
+  }
+
+  component Btn(label, on = true) {
+    Box {
+      padding: [16, 12]
+      background: on ? #d9a72b : alpha(#d9a72b, 0.25)
+      radius: 6
+      align: center
+      Text { text: label; color: on ? #1a1206 : #8a7a5a; bold: true; font: mono; align: center }
+    }
+  }
+
+  Box {
+    fill: true
+    clip: true
+    align: topStart
+    background: get(BIO, shipBiome).col
+    animate background: tween(1500ms, "ease")
+
+    // ---- the world, moved so the ship stays in the middle
+    Box {
+      width: W
+      height: H
+      align: topStart
+      offset: [W / 2 - sx + shake, H / 2 - sy + shake * 0.7]
+      animate offset: tween(120ms, "linear")
+
+      // the water: a Shader is cut to the screen's size, so it's screen-sized, kept on the 4 dp pixel grid in
+      // world space and drawn 1.3 times larger, which covers the edges while the world glides between ticks;
+      // it works out each pixel's place in the world itself, so the ripples stay put on the sea
+      Shader {
+        width: W
+        height: H
+        offset: [floor(sx / 4) * 4 - W / 2, floor(sy / 4) * 4 - H / 2]
+        scale: 1.3
+        fallback: here.col
+        uniforms: {origin: [floor(sx / 4) * 4 - W / 2, floor(sy / 4) * 4 - H / 2], wdp: W, sc: 1.3, deep: here.col, light: here.wave}
+        code: """
+          uniform float2 origin;
+          uniform float wdp;
+          uniform float sc;
+          uniform half4 deep;
+          uniform half4 light;
+          half4 main(float2 p) {
+            float k = wdp / size.x;
+            float2 c = size * k * 0.5;
+            float2 w = floor((origin + c + (p * k - c) * sc) / 4.0) * 4.0;
+            float t = time * 0.5;
+            float2 q = w * 0.021;
+            float v = sin(q.x + t) + sin(q.y * 1.37 - t * 0.83) + sin((q.x + q.y) * 0.71 + t * 1.13) + sin((q.x - q.y) * 0.53 - t * 0.61);
+            float glint = pow(0.5 + 0.5 * sin(v * 2.1), 10.0);
+            float swell = 0.5 + 0.5 * sin(q.x * 0.23 + q.y * 0.19 + t * 0.25);
+            half3 base = mix(deep.rgb * 0.82, deep.rgb * 1.1, half(swell));
+            return half4(mix(base, light.rgb, half(glint * 0.4)), 1.0);
+          }
+        """
+      }
+
+      Canvas {
+        width: W + 5 * G
+        height: H + 5 * G
+        offset: [gx0, gy0]
+        for k in range(floor((W + 5 * G) / 48) * floor((H + 5 * G) / 48)) {
+          let cols = floor((W + 5 * G) / 48)
+          let wx = gx0 + (k % cols) * 48
+          let wy = gy0 + floor(k / cols) * 48
+          let tbx = floor((wx + 2880) / 5760)
+          let tby = floor((wy + 2880) / 5760)
+          let tb = tbx == 0 && tby == 0 ? "sea" : BIONAMES[floor(hash(tbx, tby, 77) * 5)]
+          if tb != shipBiome { rect((k % cols) * 48, floor(k / cols) * 48, 48, 48, fill: alpha(get(BIO, tb).col, 0.88)) }
+          if hash(wx, wy) < 0.2 {
+            let dx0 = (k % cols) * 48 + floor(hash(wx, 3) * 24)
+            let dy0 = floor(k / cols) * 48 + floor(hash(wy, 5) * 30)
+            if tb == "reef" && hash(wy, wx) < 0.5 {
+              sprite(CORAL, dx0, dy0, 4, palette: {p: #ff7aa8, o: #ff9f43})
+            } else if tb == "ice" && hash(wy, wx) < 0.6 {
+              sprite(FLOE, dx0, dy0, 4, palette: {w: #eef8ff, W: #b8d8ee})
+            } else if tb == "lava" && hash(wy, wx) < 0.6 {
+              sprite(LAVAROCK, dx0, dy0, 5, palette: {r: #2a1a18, R: #1a0e0c, y: #ff8a3a})
+            } else if tb == "fog" {
+              circle(dx0 + 12, dy0 + 8, 20, fill: alpha(#b8a8d8, 0.07))
+              if hash(wy, wx) < 0.15 { sprite(SKULL, dx0, dy0, 2.5, palette: {w: alpha(#d8d0e8, 0.45), k: alpha(#2a2440, 0.6)}) }
+            } else {
+              sprite(hash(wy, wx) < 0.5 ? WAVE : WAVE2, dx0, dy0, 3, palette: {a: alpha(get(BIO, tb).wave, 0.55)})
+            }
+          }
+        }
+      }
+
+      // each island on a canvas of its own, and only those near the screen (every run of one
+      // colour in a sprite is a drawing call, and a canvas gets 2000 a frame)
+      for i in filter(isles, i => abs(i.x - sx) < W / 2 + 220 && abs(i.y - sy) < H / 2 + 220) key i.id {
+        Canvas {
+          width: 200
+          height: 200
+          offset: [i.x - 100, i.y - 100]
+          let half = (24 + 6 * i.v) * 2
+          circle(100, 100, i.r + 22 + sin(time * 1.2 + i.x) * 2, fill: alpha(#000000, 0.12))
+          circle(100, 100, i.r + 17 + sin(time * 1.6 + i.y) * 2, stroke: alpha(#ffffff, 0.3), width: 2)
+          sprite(ISLES[i.v], 100 - half, 100 - half, 4, palette: get(ISLEPAL, i.b))
+          if i.out {
+            sprite(PIER, 94, 100 + i.r * 0.5, 4, palette: {d: #8a5a2b, D: #5a3b22})
+            sprite(HUT, 88, 82, 4, palette: {R: #a8452c, d: #8a5a2b, D: #3b2412, h: #ffd54a})
+            sprite(PFLAG, 110, 66, 4, palette: {m: #3b2412, t: any(used, u => u == i.id + "u") ? #8d8d8d : #e53935})
+          } else {
+            for j in range(2 + i.v) {
+              let px0 = 100 - i.r * 0.5 + hash(i.x, j) * i.r - 10
+              let py0 = 100 - i.r * 0.5 + hash(i.y, j) * i.r - 10
+              if i.b == "ice" {
+                sprite(PINE, px0, py0, 4, palette: {g: #2e6e4a, w: #ffffff, m: #5a3b22})
+              } else if i.b == "fog" {
+                sprite(DEADTREE, px0, py0, 4, palette: {m: #1e161c})
+              } else if i.b == "lava" {
+                sprite(VENT, px0, py0, 4, palette: {y: #ffe066, R: #ff5a1a})
+              } else {
+                sprite(PALM, px0, py0, 4, palette: {G: #2e9e44, m: #7a5230})
+              }
+            }
+          }
+        }
+      }
+
+      if isleX != null && abs(isleX - sx) < W + 300 && abs(isleY - sy) < H + 300 {
+        Canvas {
+          width: 280
+          height: 280
+          offset: [isleX - 140, isleY - 140]
+          circle(140, 140, 120 + sin(time * 2) * 6, fill: alpha(#ffd54a, 0.1))
+          circle(140, 140, 96 + sin(time * 1.4) * 2, stroke: alpha(#ffffff, 0.35), width: 2)
+          sprite(ISLE3, 140 - 84, 140 - 84, 4, palette: {S: #7fe8e0, s: #ffe9a8, g: #f0d070, G: #d9a72b, r: #8d8d8d})
+          sprite(SKULLROCK, 140 - 30, 140 - 46, 6, palette: {w: #d8d0c0, W: #f2ece0, k: #1a1a1f})
+          for j in range(6) { sprite(COIN, 140 - 50 + j * 16 + sin(j) * 6, 140 + 22 + (j % 2) * 10, 3, palette: {g: #b8860b, G: #ffd54a}) }
+          sprite(["x.x", ".x.", "x.x"], 140 + 34, 140 + 30, 5, palette: {x: #c62828})
+        }
+      }
+
+      Canvas {
+        width: W + 5 * G
+        height: H + 5 * G
+        offset: [gx0, gy0]
+        for c in coins {
+          if c.c {
+            sprite(CHEST, c.x - gx0 - 9, c.y - gy0 - 9, 3, palette: {o: #4a2f1a, d: #8a5a2b, G: #ffd54a})
+          } else {
+            sprite(COIN, c.x - gx0 - 6, c.y - gy0 - 6, 3, palette: {g: #b8860b, G: #ffd54a})
+            if floor(time * 4 + c.x * 0.37) % 7 == 0 { rect(c.x - gx0 + 3, c.y - gy0 - 7, 2, 2, fill: #ffffff) }
+          }
+        }
+      }
+
+      for f in fires key f.id {
+        Canvas {
+          width: f.r * 2
+          height: f.r * 2
+          offset: [f.x - f.r, f.y - f.r]
+          circle(f.r, f.r, f.r * min(1, f.life), fill: alpha(#ff5a1a, 0.3))
+          circle(f.r, f.r, f.r * 0.6 * min(1, f.life), fill: alpha(#ffb03a, 0.25))
+          for j in range(6) {
+            sprite(floor(time * 8 + j) % 2 == 0 ? FLAME0 : FLAME1, f.r + sin(rad(j * 60 + f.id * 17)) * f.r * 0.55 - 6, f.r - cos(rad(j * 60 + f.id * 17)) * f.r * 0.55 - 6, 3 * min(1, f.life + 0.3), palette: {f: #ff7a1a, F: #ffd34d})
+          }
+        }
+      }
+
+      for m in minefield key m.id {
+        Canvas {
+          width: 24
+          height: 24
+          offset: [m.x - 12, m.y - 12]
+          for j in range(4) { rect(12 + sin(rad(j * 90 + 45)) * 7 - 1.5, 12 - cos(rad(j * 90 + 45)) * 7 - 1.5, 3, 3, fill: #3a3a44) }
+          circle(12, 12, 6 + sin(time * 3 + m.id) * 0.5, fill: #22222a)
+          circle(10, 10, 1.8, fill: #6a6a78)
+          circle(12, 12, 1.6, fill: floor(time * 3 + m.id) % 2 == 0 ? #ff3b30 : #5a1a1a)
+        }
+      }
+      for w in whirls key w.id {
+        Canvas {
+          width: w.r * 2
+          height: w.r * 2
+          offset: [w.x - w.r, w.y - w.r]
+          circle(w.r, w.r, w.r * min(1, w.life), fill: alpha(#0d3050, 0.35))
+          for j in range(3) {
+            arc(w.r, w.r, w.r * (0.9 - j * 0.28) * min(1, w.life), time * (220 + j * 80) + j * 120, 220, stroke: alpha(#9fd8ff, 0.7 - j * 0.15), width: 3, cap: round)
+          }
+        }
+      }
+
+      for e in foes key e.id {
+        Box {
+          width: e.s
+          height: e.s
+          offset: [e.x - e.s / 2, e.y - e.s / 2]
+          animate offset: tween(120ms, "linear")
+          if (e.elite ?? "") != "" {
+            Canvas {
+              width: e.s
+              height: e.s
+              circle(e.s / 2, e.s / 2, e.r * 1.6 + 6 + sin(time * 5 + e.id) * 2, fill: alpha(e.elite == "swift" ? #7fe3ff : #ffd54a, 0.22))
+              circle(e.s / 2, e.s / 2, e.r * 1.6 + 6 + sin(time * 5 + e.id) * 2, stroke: alpha(e.elite == "swift" ? #bff4ff : #ffe066, 0.7), width: 2)
+            }
+          }
+          Canvas {
+            width: e.s
+            height: e.s
+            rotation: e.h
+            animate rotation: tween(120ms, "linear")
+            scale: (e.elite ?? "") != "" ? 1.35 : 1
+            let c = e.s / 2
+            let hit = e.hit > 0
+            if e.k != "drake" && !(e.boss ?? false) {
+              circle(c, c, e.r + 4, fill: alpha(#000000, 0.15))
+              circle(c, c, e.r + 6 + sin(time * 3 + e.id) * 1.5, stroke: alpha(#ffffff, 0.16), width: 1.5)
+            }
+            if (e.slowT ?? 0) > 0 { circle(c, c, e.r + 8, stroke: alpha(#bfe8ff, 0.6), width: 2) }
+            if e.k == "shark" {
+              layer(0.8) { sprite(SHARK, 13.5, 4.5, 3, palette: {g: e.hit > 0 ? #ffffff : #4f6b80, e: #111111, f: #d6dee5}) }
+              sprite(["f", "F"], 22.5, 13.5 + sin(time * 6 + e.id) * 1.5, 3, palette: {f: #e8eef2, F: #9aa8b4})
+            } else if e.k == "sloop" {
+              sprite(SLOOP, 22.5, 12, 3, palette: {o: e.hit > 0 ? #ffffff : #1f150d, r: #8a2e1e, d: #6b4a2e, D: #57391f})
+              sprite(BLACKSAIL, 19.5, 24 + sin(time * 3 + e.id) * 0.8, 3, palette: {n: #15151c, W: #e8e8e8, y: #3b2412})
+              sprite(REDFLAG, 36, 48, 3, palette: {r: #c62828, W: #f2f2f2})
+            } else if e.k == "serp" {
+              for j in range(5) {
+                sprite(SERPSEG, 44.5 + sin(time * 4 - j * 0.9 + e.id) * 7, 52 + (4 - j) * 12, 3, palette: {v: e.hit > 0 ? #ffffff : #2f9e7a, V: #1f6e55})
+              }
+              sprite(SERPHEAD, 44.5 + sin(time * 4 + 0.9 + e.id) * 4, 36, 3, palette: {v: e.hit > 0 ? #ffffff : #2f9e7a, V: #1f6e55, E: #ffe066})
+            } else if e.k == "barracuda" {
+              sprite(BARRACUDA, c - 7.5, c - 18, 3, palette: {s: hit ? #ffffff : #b8c4cf, S: #5a6a78})
+            } else if e.k == "jelly" {
+              for j in range(5) { line(c - 8 + j * 4, c + 2, c - 8 + j * 4 + sin(time * 4 + j + e.id) * 4, c + 20, stroke: alpha(#ff9ae0, 0.7), width: 2) }
+              circle(c, c - 4 + sin(time * 3 + e.id) * 1.5, 13, fill: alpha(hit ? #ffffff : #ff8ad8, 0.6))
+              circle(c - 3, c - 8 + sin(time * 3 + e.id) * 1.5, 4, fill: alpha(#ffffff, 0.5))
+            } else if e.k == "puffer" {
+              let inf = e.fuse != null
+              scale(inf ? 1.6 : 1, inf ? 1.6 : 1, c, c) {
+                if inf { for j in range(8) { rect(c + sin(rad(j * 45)) * 12 - 1.5, c - cos(rad(j * 45)) * 12 - 1.5, 3, 3, fill: #b8860b) } }
+                sprite(PUFFER, c - 10.5, c - 10.5, 3, palette: {y: hit || (inf && floor(time * 12) % 2 == 0) ? #ff5a3a : #f4d03f, Y: #fff1a8, k: #2a2a32})
+              }
+            } else if e.k == "narwhal" {
+              if (e.chg ?? 0) > 0 { for j in range(3) { rect(c - 6 + j * 6, c + 18, 2, 10 + j * 3, fill: alpha(#ffffff, 0.6)) } }
+              sprite(NARWHAL, c - 10.5, c - 19.5, 3, palette: {w: #f2f2f2, n: hit ? #ffffff : #5f7f9f, N: #a8c0d8, e: #111111})
+            } else if e.k == "raider" {
+              sprite(RAIDER, c - 10.5, c - 16.5, 3, palette: {o: hit ? #ffffff : #3b2412, y: #8a5a2b, S: #c62828, R: #1e5aa8})
+              sprite(RSAIL, c - 10.5, c - 4.5, 3, palette: {r: #c62828, w: #f2f2f2, y: #3b2412})
+            } else if e.k == "wraith" {
+              circle(c, c, 26, fill: alpha(#7fffb0, 0.12))
+              layer(0.5 + 0.25 * sin(time * 3 + e.id)) {
+                sprite(SLOOP, c - 13.5, c - 24, 3, palette: {o: hit ? #ffffff : #2a5a4a, r: #3a7a62, d: #4a8a72, D: #3a7a62})
+                sprite(BLACKSAIL, c - 16.5, c - 12, 3, palette: {n: #b8ffd8, W: #2a5a4a, y: #2a5a4a})
+              }
+            } else if e.k == "skiff" {
+              line(c - 6, c, c - 6 - cos(sin(time * 8 + e.id) * 0.5) * 9, c + sin(sin(time * 8 + e.id) * 0.5) * 9, stroke: #6b4a2e, width: 2)
+              line(c + 6, c, c + 6 + cos(sin(time * 8 + e.id) * 0.5) * 9, c + sin(sin(time * 8 + e.id) * 0.5) * 9, stroke: #6b4a2e, width: 2)
+              sprite(SKIFF, c - 7.5, c - 9, 3, palette: {o: hit ? #ffffff : #4a2f1a, y: #6b4a2e, W: #f2f2f2})
+            } else if e.k == "crab" {
+              circle(c, c, 18, fill: alpha(#ff5a1a, 0.18 + 0.08 * sin(time * 4 + e.id)))
+              sprite(CRAB, c - 13.5, c - 12, 3, palette: {c: #a8281e, r: hit ? #ffffff : #4a2a22, R: #2a1612, Y: #ffb03a})
+            } else if e.k == "drake" {
+              circle(c + 8, c + 10, 10, fill: alpha(#000000, 0.25))
+              sprite(floor(time * 8 + e.id) % 2 == 0 ? DRAKE0 : DRAKE1, c - 13.5, c - 13.5, 3, palette: {h: hit ? #ffffff : #c62828, b: #e04a2a, w: #ff8a3a, t: #c62828})
+            } else if e.k == "siren" {
+              circle(c, c + 6, 16, fill: #5a5a66)
+              circle(c - 4, c + 2, 6, fill: #6a6a78)
+              sprite(SIREN, c - 10.5, c - 15, 3, palette: {h: #b03aa8, f: #f1c27d, k: #2a2a32, s: #ffd0e0, g: hit ? #ffffff : #2f9e7a})
+              text("♪", c + 14, c - 14 + sin(time * 2 + e.id) * 4, size: 12, color: alpha(#ff9ae0, 0.6))
+            } else if e.k == "dutchman" {
+              circle(c, c, 90, fill: alpha(#7fffb0, 0.1 + 0.05 * sin(time * 2)))
+              layer(0.65 + 0.2 * sin(time * 2 + 1)) {
+                sprite(HULL, c - 32.5, c - 70, 5, palette: {o: hit ? #ffffff : #1f3a2f, w: #3a6a55, b: #4a7a62, l: #5a8a70, p: #4a7a62, c: #2a4a3a, C: #1f3a2f, h: #0f2018})
+                for m in [11, 5, 18] {
+                  let sp = m == 11 ? SAIL : m == 5 ? SAILFORE : SAILMIZ
+                  sprite(sp, c - len(sp[0]) * 2.5, c - 70 + (m + 2 - len(sp)) * 5, 5, palette: {s: alpha(#c8ffe0, 0.55), x: alpha(#7fe0a0, 0.45), y: #1f3a2f})
+                }
+              }
+            } else if e.k == "leviathan" || e.k == "wyrm" {
+              let cold = e.k == "wyrm"
+              circle(c, c, 70, fill: alpha(cold ? #bff4ff : #ff5a1a, 0.1 + 0.05 * sin(time * 2)))
+              for j in range(8) {
+                sprite(SERPSEG, c - 17.5 + sin(time * 3 - j * 0.8 + e.id) * 14, c - 20 + (8 - j) * 16, 5, palette: {v: hit ? #ffffff : cold ? (j % 2 == 0 ? #7fb8e0 : #5a98c8) : (j % 2 == 0 ? #c83a12 : #a82a0a), V: cold ? #eef8ff : #ffb03a})
+              }
+              sprite(SERPHEAD, c - 21 + sin(time * 3 + 0.8 + e.id) * 6, c - 72, 6, palette: {v: hit ? #ffffff : cold ? #7fb8e0 : #c83a12, V: cold ? #2a4a6a : #3a1010, E: cold ? #ffffff : #ffe066})
+            } else if e.k == "king" {
+              circle(c, c, 140, fill: alpha(#ffd54a, 0.07 + 0.04 * sin(time * 2)))
+              for j in range(10) {
+                for q in range(7) {
+                  rect(c + sin(rad(j * 36 + sin(time * 2 + j) * 14 + q * sin(time * 1.5 + j) * 6)) * (66 + q * 12) - 7 + q * 0.6, c - cos(rad(j * 36 + sin(time * 2 + j) * 14 + q * sin(time * 1.5 + j) * 6)) * (66 + q * 12) - 7 + q * 0.6, 14 - q, 14 - q, fill: q % 2 == 0 ? #1f8a9a : #145560)
+                }
+              }
+              sprite(KRAKEN, c - 64, c - 52, 8, palette: {q: hit ? #e0f8ff : #1f8a9a, Q: #145560, Y: #ffd54a, K: #111111})
+              sprite(CROWN, c - 30, c - 96, 6, palette: {g: #ffd54a, G: #fff1a8, r: #e53935})
+            } else {
+              let cor = e.coral ?? false
+              for j in range(8) {
+                for q in range(6) {
+                  rect(100 + sin(rad(j * 45 + sin(time * 2 + j) * 14 + q * sin(time * 1.5 + j) * 6)) * (40 + q * 9) - 5 + q * 0.5, 100 - cos(rad(j * 45 + sin(time * 2 + j) * 14 + q * sin(time * 1.5 + j) * 6)) * (40 + q * 9) - 5 + q * 0.5, 10 - q, 10 - q, fill: q % 2 == 0 ? (cor ? #ff7aa8 : #7a3fa0) : (cor ? #c8406a : #5b2a7c))
+                }
+              }
+              sprite(KRAKEN, 52, 61, 6, palette: {q: e.hit > 0 ? #ffffff : cor ? #ff7aa8 : #7a3fa0, Q: cor ? #c8406a : #5b2a7c, Y: #f4e04d, K: #111111})
+            }
+          }
+          if e.mhp >= 25 && e.hp < e.mhp && !(e.boss ?? false) {
+            Canvas {
+              width: e.s
+              height: 6
+              rect(e.s / 2 - 18, 0, 36, 4, fill: alpha(#000000, 0.5))
+              rect(e.s / 2 - 18, 0, 36 * e.hp / e.mhp, 4, fill: #e53935)
+            }
+          }
+        }
+      }
+
+      for b in balls key b.id {
+        Canvas {
+          width: 30
+          height: 30
+          offset: [b.x - 15, b.y - 15]
+          animate offset: tween(120ms, "linear")
+          if b.k == "r" {
+            line(15 - b.vx / 340 * 10, 15 - b.vy / 340 * 10, 15 + b.vx / 340 * 6, 15 + b.vy / 340 * 6, stroke: #c62828, width: 3.5)
+            circle(15 - b.vx / 340 * 11, 15 - b.vy / 340 * 11, 3 + sin(time * 30) * 1, fill: #ffb03a)
+            circle(15 + b.vx / 340 * 7, 15 + b.vy / 340 * 7, 2, fill: #f2f2f2)
+          } else if lv.chain > 0 && (b.k == "b" || b.k == "g") {
+            line(15 + cos(time * 900) * 6, 15 + sin(time * 900) * 6, 15 - cos(time * 900) * 6, 15 - sin(time * 900) * 6, stroke: #9aa4ae, width: 1.5)
+            circle(15 + cos(time * 900) * 6, 15 + sin(time * 900) * 6, 3 + lv.heavy * 0.5, fill: b.k == "g" ? #d9a72b : #1a1a1f)
+            circle(15 - cos(time * 900) * 6, 15 - sin(time * 900) * 6, 3 + lv.heavy * 0.5, fill: b.k == "g" ? #d9a72b : #1a1a1f)
+          } else if b.k == "h" {
+            line(15 - b.vx / 500 * 13, 15 - b.vy / 500 * 13, 15 + b.vx / 500 * 11, 15 + b.vy / 500 * 11, stroke: #8a5a2b, width: 2.5)
+            circle(15 + b.vx / 500 * 12, 15 + b.vy / 500 * 12, 2.5, fill: #dfe6ec)
+          } else if b.k == "s" {
+            circle(15, 15, 2.5, fill: #2a2a32)
+          } else {
+            sprite(BALL, 15 - (3 + lv.heavy * 0.6) * 1.5, 15 - (3 + lv.heavy * 0.6) * 1.5, 3 + lv.heavy * 0.6, palette: {k: b.k == "g" ? #d9a72b : #1a1a1f, K: b.k == "g" ? #fff1a8 : #8a8a96})
+          }
+        }
+      }
+      for b in eballs key b.id {
+        Canvas {
+          width: 24
+          height: 24
+          offset: [b.x - 12, b.y - 12]
+          animate offset: tween(120ms, "linear")
+          let ek = b.k ?? ((b.ink ?? false) ? "ink" : "ball")
+          if ek == "spear" {
+            line(12 - b.vx / 260 * 10, 12 - b.vy / 260 * 10, 12 + b.vx / 260 * 8, 12 + b.vy / 260 * 8, stroke: #8a5a2b, width: 2)
+            circle(12 + b.vx / 260 * 9, 12 + b.vy / 260 * 9, 2, fill: #c0c8d0)
+          } else if ek == "note" {
+            circle(12, 12, 8, fill: alpha(#ff9ae0, 0.3))
+            text("♪", 12, 12, size: 14, bold: true, align: center, color: #ffd0f0)
+          } else if ek == "fire" {
+            circle(12, 12, 8, fill: alpha(#ff5a1a, 0.4))
+            circle(12, 12, 4.5 + sin(time * 20) * 0.8, fill: #ffb03a)
+            circle(12, 12, 2, fill: #fff3a0)
+          } else if ek == "frost" {
+            circle(12, 12, 8, fill: alpha(#bff4ff, 0.35))
+            rect(9, 9, 6, 6, fill: #e8f8ff)
+            rect(11, 6, 2, 12, fill: alpha(#ffffff, 0.8))
+            rect(6, 11, 12, 2, fill: alpha(#ffffff, 0.8))
+          } else if ek == "ghost" {
+            circle(12, 12, 8, fill: alpha(#7fffb0, 0.3))
+            circle(12, 12, 4, fill: alpha(#d8ffe8, 0.85))
+          } else {
+            circle(12, 12, 6, fill: alpha(ek == "ink" ? #7a3fa0 : #ff5a3a, 0.35))
+            sprite(BALL, 7.5, 7.5, 3, palette: {k: ek == "ink" ? #2b1038 : #1a1a1f, K: ek == "ink" ? #b07ad0 : #ff7a5a})
+          }
+        }
+      }
+      for s in shells key s.id {
+        Canvas {
+          width: 16
+          height: 70
+          offset: [lerp(s.x0, s.tx, min(1, s.t / 0.9)) - 8, lerp(s.y0, s.ty, min(1, s.t / 0.9)) - 62]
+          animate offset: tween(120ms, "linear")
+          circle(8, 62, 4, fill: alpha(#000000, 0.3))
+          sprite(BALL, 3.5, 58 - 200 * (s.t / 0.9) * (1 - s.t / 0.9), 3, palette: {k: #1a1a1f, K: #ffb03a})
+        }
+      }
+      for f in fx {
+        if f.k == "zap" {
+          Canvas {
+            width: abs(f.x - f.x0) + 30
+            height: abs(f.y - f.y0) + 30
+            offset: [min(f.x, f.x0) - 15, min(f.y, f.y0) - 15]
+            let ax = f.x0 - min(f.x, f.x0) + 15
+            let ay = f.y0 - min(f.y, f.y0) + 15
+            let bx = f.x - min(f.x, f.x0) + 15
+            let by = f.y - min(f.y, f.y0) + 15
+            let pts = map(range(7), j => [lerp(ax, bx, j / 6) + (j % 6 == 0 ? 0 : (hash(f.id, j) - 0.5) * 18), lerp(ay, by, j / 6) + (j % 6 == 0 ? 0 : (hash(j, f.id) - 0.5) * 18)])
+            if f.c == "rope" {
+              line(ax, ay, bx, by, stroke: #c8975a, width: 2.5)
+              circle(bx, by, 9, stroke: #e8eef2, width: 2)
+            } else {
+              path(pts, stroke: alpha(f.c == "storm" ? #fff27a : #7fe3ff, 0.45), width: 6)
+              path(pts, stroke: #ffffff, width: 2)
+              circle(bx, by, 7, fill: alpha(f.c == "storm" ? #fff27a : #7fe3ff, 0.6))
+            }
+          }
+        } else if f.k == "ring" {
+          Canvas {
+            width: f.r * 2 + 20
+            height: f.r * 2 + 20
+            offset: [f.x - f.r - 10, f.y - f.r - 10]
+            circle(f.r + 10, f.r + 10, f.r * (0.35 + 0.65 * (1 - f.life / 0.4)), stroke: alpha(#ffe066, f.life * 2), width: 4)
+            circle(f.r + 10, f.r + 10, f.r * (0.2 + 0.6 * (1 - f.life / 0.4)), stroke: alpha(#ffffff, f.life * 1.5), width: 2)
+          }
+        } else {
+        Canvas {
+          width: 80
+          height: 80
+          offset: [f.x - 40, f.y - 40]
+          if f.k == "splash" {
+            for j in range(10) {
+              rect(40 + sin(rad(j * 36)) * (6 + (0.4 - f.life) * 50) - 2, 40 - cos(rad(j * 36)) * (6 + (0.4 - f.life) * 50) - 2, 4, 4, fill: alpha(#ffffff, f.life * 2.2))
+            }
+          } else {
+            let big = f.k == "big" ? 1.9 : 1
+            let p = 1 - f.life / (f.k == "big" ? 0.9 : 0.5)
+            let fl = (1 - p) * 14 * big
+            rect(40 - fl - 4, 40 - fl - 4, (fl + 4) * 2, (fl + 4) * 2, fill: alpha(#ff5a1a, 0.75 * (1 - p)))
+            rect(40 - fl, 40 - fl, fl * 2, fl * 2, fill: alpha(#ffe066, 1 - p))
+            rect(40 - fl * 0.45, 40 - fl * 0.45, fl * 0.9, fl * 0.9, fill: alpha(#ffffff, 1 - p))
+            for j in range(12) {
+              rect(40 + sin(rad(j * 30 + f.id)) * (8 + p * 30) * big - 3, 40 - cos(rad(j * 30 + f.id)) * (8 + p * 30) * big - 3 - p * 6, 6 * (1 - p) + 1, 6 * (1 - p) + 1, fill: alpha(j % 3 == 0 ? #ffe066 : j % 3 == 1 ? #ff7a1a : #5a5a66, 1 - p))
+            }
+          }
+        }
+        }
+      }
+    }
+
+    // ---- the anchor flail, turning with its chain
+    if lv.anchor > 0 {
+      Canvas {
+        width: 220
+        height: 220
+        offset: [W / 2 - 110, H / 2 - 110]
+        rotation: anchA
+        animate rotation: tween(120ms, "linear")
+        for j in range(9) { rect(108.5, 110 - 24 - j * 7, 3, 5, fill: j % 2 == 0 ? #6f7a86 : #9aa4ae) }
+        sprite(ANCHOR, 99.5, 8.5, 3, palette: {i: lv.anchor >= 3 ? #ffd54a : #9aa4ae, I: #ffffff})
+      }
+    }
+
+    // ---- our ship, always in the middle; its canvas is big enough for the dragon's breath
+    Canvas {
+      width: 420
+      height: 420
+      offset: [W / 2 - 210 + shake, H / 2 - 210 + shake * 0.7]
+      rotation: sh
+      animate rotation: tween(120ms, "linear")
+      let hx = 190.5
+      let hy = 168
+      let P = 3
+      let pal = hurt > 0 && wardHp <= 0 ? {o: #ffffff, w: #ffdddd, b: #ffffff, l: #ffeeee, p: #ffdddd, c: #ffcccc, C: #ffcccc, h: #ffffff} : merge({l: #c8975a, p: #a87a45, c: #7a3b2a, C: #5a2a1e, h: #3b2412}, HULLPAL[lv.hull], lv.copper > 0 && lv.hull < 3 ? {o: lv.copper >= 3 ? #5fa88a : #b87333} : {})
+      scale(0.62, 1, 210, 214) { circle(210, 214, 46, fill: alpha(#000000, 0.2)) }
+      if sv > 6 {
+        let fo = min(1, sv / 70)
+        for j in range(16) {
+          let wy = hy + 82 + j * 5
+          let wz = 6 + j * 2.6
+          rect(210 - wz - 1.5 + sin(time * 6 + j) * 1, wy, 3, 3, fill: alpha(#ffffff, (0.75 - j * 0.045) * fo))
+          rect(210 + wz - 1.5 - sin(time * 6 + j) * 1, wy, 3, 3, fill: alpha(#ffffff, (0.75 - j * 0.045) * fo))
+          if j < 8 { rect(210 + (hash(j, floor(time * 8)) - 0.5) * 10 - 1.5, wy + 2, 3, 3, fill: alpha(#e8f6ff, (0.6 - j * 0.07) * fo)) }
+        }
+        for j in range(5) {
+          rect(hx + 3 * P - j * 3 - 2, hy + 4 + j * 3, 3, 3, fill: alpha(#ffffff, (0.7 - j * 0.12) * fo))
+          rect(hx + 10 * P + j * 3 - 1, hy + 4 + j * 3, 3, 3, fill: alpha(#ffffff, (0.7 - j * 0.12) * fo))
+        }
+      }
+      if lv.ghost > 0 { circle(210, 210, 64 + sin(time * 2) * 4, fill: alpha(#7fffb0, 0.1)) }
+      if lv.nets > 0 {
+        for j in range(2) {
+          let nx0 = j == 0 ? hx - P : hx + 13 * P
+          for q in range(3 + lv.nets) {
+            line(nx0, hy + 26 * P, nx0 + (j == 0 ? -1 : 1) * (4 + q * 5) + sin(time * 2 + q) * 2, hy + 26 * P + 8 + q * 8, stroke: alpha(#e8d8a8, 0.7), width: 1)
+            line(nx0 + (j == 0 ? -1 : 1) * (4 + q * 5), hy + 26 * P + 8 + q * 8, nx0 + (j == 0 ? -1 : 1) * (4 + q * 5) + (j == 0 ? 1 : -1) * 10, hy + 26 * P + 8 + q * 8, stroke: alpha(#e8d8a8, 0.5), width: 1)
+          }
+          circle(nx0 + (j == 0 ? -1 : 1) * (6 + (2 + lv.nets) * 5), hy + 26 * P + 8 + (2 + lv.nets) * 8, 2.5, fill: #e53935)
+        }
+      }
+      if lv.whirl > 0 { sprite(TRIDENT, hx + 4 * P, hy + 28 * P, P, palette: {g: lv.whirl >= 3 ? #fff1a8 : #ffd54a}) }
+      for j in range(lv.mines) {
+        circle(hx + (MINEP[j][0] + 0.5) * P, hy + (MINEP[j][1] + 0.5) * P, 4, fill: #22222a)
+        rect(hx + (MINEP[j][0] + 0.5) * P - 0.75, hy + (MINEP[j][1] + 0.5) * P - 0.75, 1.5, 1.5, fill: #ff3b30)
+      }
+      for j in range(lv.board) {
+        sprite(["yyy"], j == 0 ? hx - 3 * P : hx + 13 * P, hy + 27 * P, P, palette: {y: #c8975a})
+      }
+      for j in range(len(OARROWS[lv.oars])) {
+        let oy = hy + (OARROWS[lv.oars][j] + 0.5) * P
+        let sw = sv > 5 ? sin(time * 7 + j * 0.6) * 0.5 : 0.2
+        let ol = 16 + 4 * lv.oars
+        line(hx + P, oy, hx + P - cos(sw) * ol, oy + sin(sw) * ol, stroke: #8a5a2b, width: 2)
+        line(hx + 12 * P, oy, hx + 12 * P + cos(sw) * ol, oy + sin(sw) * ol, stroke: #8a5a2b, width: 2)
+      }
+      if breathT > 0 {
+        for j in range(16) {
+          circle(210 + (hash(j, floor(time * 12)) - 0.5) * j * 6, hy - 8 - j * 10, 5 + j * 0.9, fill: alpha(j % 3 == 0 ? #fff3a0 : j % 3 == 1 ? #ffb02a : #ff5a10, 0.95 - j * 0.02))
+        }
+      }
+      sprite(HULL, hx, hy, P, palette: pal)
+      for j in range(3 * lv.barnacle) {
+        let brow = BARN[j]
+        rect(hx + (brow >= 9 ? 1 : 2) * P, hy + brow * P, P, P, fill: j % 2 == 0 ? #e8e0d0 : #c8b8a8)
+        rect(hx + (brow >= 9 ? 11 : 10) * P, hy + (brow + 1) * P, P, P, fill: j % 2 == 0 ? #c8b8a8 : #e8e0d0)
+      }
+      if lv.doubloon > 0 {
+        rect(hx + 6 * P, hy + 27 * P, P, P, fill: #ffd54a)
+        if floor(time * 2) % 3 == 0 { circle(hx + 6.5 * P, hy + 27.5 * P, 2 + lv.doubloon, fill: alpha(#fff6c8, 0.7)) }
+      }
+      if lv.pumps > 0 {
+        rect(hx + P, hy + 25 * P, P, P, fill: #9aa4ae)
+        rect(hx + 11 * P, hy + 25 * P, P, P, fill: #9aa4ae)
+        if hp < maxHp * 0.4 {
+          for j in range(4) {
+            let t = (time * 2 + j / 4) % 1
+            circle(hx + P - t * 18, hy + 25.5 * P - sin(t * 3.1) * 8, 2, fill: alpha(#bfe8ff, 0.8 * (1 - t)))
+            circle(hx + 12 * P + t * 18, hy + 25.5 * P - sin(t * 3.1) * 8, 2, fill: alpha(#bfe8ff, 0.8 * (1 - t)))
+          }
+        }
+      }
+      for j in range(min(4, 2 * lv.drill)) {
+        circle(hx + (DRILLP[j][0] + 0.2) * P, hy + (DRILLP[j][1] + 0.7) * P, 1.4, fill: #1a1a1f)
+        circle(hx + (DRILLP[j][0] + 0.8) * P, hy + (DRILLP[j][1] + 0.7) * P, 1.4, fill: #1a1a1f)
+        circle(hx + (DRILLP[j][0] + 0.5) * P, hy + (DRILLP[j][1] + 0.2) * P, 1.4, fill: lv.drill >= 3 ? #3a3a44 : #1a1a1f)
+      }
+      for j in range(max(0, lv.boats - boatsUsed)) {
+        sprite(BOAT, j == 0 ? hx - 3 * P : hx + 14 * P, hy + 16 * P, P, palette: {y: #8a5a2b, Y: #c8975a})
+      }
+      if lv.dragon > 0 {
+        sprite(DRAGON, hx + 4 * P, hy - 4 * P, P, palette: {g: #1f6e3a, G: #2f9e55, y: #ffe066, w: #ffffff})
+      } else if lv.figure > 0 {
+        sprite(FIG, hx + 5 * P, hy - P, P, palette: {g: lv.figure >= 2 ? #ffd54a : #b8860b, G: lv.figure >= 3 ? #fff6c8 : #ffd54a})
+      }
+      if lv.ram == 1 { sprite(RAM1, hx + 15, hy - 6, P, palette: {i: #9aa4ae, g: #ffd54a}) }
+      if lv.ram == 2 { sprite(RAM2, hx + 15, hy - 9, P, palette: {i: #9aa4ae, g: #ffd54a}) }
+      if lv.ram >= 3 { sprite(RAM3, hx + 12, hy - 12, P, palette: {i: #c0c8d0, g: #ffd54a}) }
+      for j in range(lv.swivel) {
+        let hw = SWIV[j] == 6 ? 3 : 5
+        sprite(["kg"], hx + (5 - hw) * P, hy + SWIV[j] * P, P, palette: {k: #2a2a32, g: #d9a72b})
+        sprite(["gk"], hx + (6 + hw) * P, hy + SWIV[j] * P, P, palette: {k: #2a2a32, g: #d9a72b})
+      }
+      for j in range(lv.kegs) {
+        sprite(["kK", "Kk"], hx + KEGS[j][0] * P, hy + KEGS[j][1] * P, P, palette: {k: #2a2a32, K: #4a4a55})
+        rect(hx + (KEGS[j][0] + 1) * P, hy + (KEGS[j][1] - 0.5) * P, 1.5, 1.5, fill: floor(time * 6 + j) % 2 == 0 ? #ffb03a : #ff5a1a)
+      }
+      for j in range(2 * lv.crew) {
+        sprite(["h", "r"], hx + CREW[j][0] * P, hy + CREW[j][1] * P + sin(time * 3 + j) * 1.2, P, palette: {h: #f1c27d, r: j % 2 == 0 ? #e53935 : #f2f2f2})
+      }
+      if lv.chart > 0 { sprite(lv.chart >= 2 ? ["ppp", "pxp", "ppp"] : ["ppp", "pxp"], hx + 5 * P, hy + 7 * P, P, palette: {p: #f0e2b6, x: #c62828}) }
+      if lv.stove > 0 {
+        rect(hx + 9 * P, hy + 21 * P, P, P, fill: #2a2a32)
+        for j in range(1 + lv.stove) {
+          let t = (time * 0.8 + j / (1 + lv.stove)) % 1
+          circle(hx + 9.5 * P + sin(time * 2 + j) * 3, hy + 21 * P + t * 40, 2 + t * 5, fill: alpha(#d8d8d8, 0.55 * (1 - t)))
+        }
+      }
+      for j in range(min(4, 2 * lv.rockets)) {
+        sprite(["r", "R"], hx + ROCKP[j][0] * P, hy + ROCKP[j][1] * P, P, palette: {r: lv.rockets >= 3 ? #ffd54a : #e53935, R: #8a2e1e})
+      }
+      if lv.cat > 0 { sprite(CAT, hx + 5 * P, hy + 21 * P, P, palette: {o: #ff9f43, k: #2a2a32}) }
+      if lv.cat > 1 { sprite(["oo"], hx + 8 * P, hy + 23 * P, P, palette: {o: #ffb86b}) }
+      if lv.cat > 2 { sprite(["oo"], hx + 3 * P, hy + 24 * P, P, palette: {o: #f5f5f5}) }
+      let gunPal = {k: lv.gold > 0 ? #d9a72b : lv.chain > 0 ? #3a4a5e : #1a1a1f, g: lv.gold > 0 ? #fff1a8 : #d9a72b, c: #9aa4ae}
+      for j in range(lv.cannon + lv.deck) {
+        let row = j < lv.cannon ? CROWS[j] : DECKROWS[j - lv.cannon]
+        let hw = row == 8 ? 4 : 5
+        sprite([lv.heavy > 0 ? "kkkg" : "kkg"], hx + (3 - hw - (lv.heavy > 0 ? 1 : 0)) * P, hy + row * P, P, palette: gunPal)
+        sprite([lv.heavy > 0 ? "gkkk" : "gkk"], hx + (7 + hw) * P, hy + row * P, P, palette: gunPal)
+        if lv.grape > 0 {
+          rect(hx + (3 - hw - (lv.heavy > 0 ? 1 : 0)) * P - 1, hy + row * P - 1, 2, P + 2, fill: #d9a72b)
+          rect(hx + (10 + hw + (lv.heavy > 0 ? 1 : 0)) * P - 1, hy + row * P - 1, 2, P + 2, fill: #d9a72b)
+        }
+        if cdCannon > (1.15 - 0.1 * lv.cannon) * rof - 0.2 {
+          rect(hx + (2 - hw - (lv.heavy > 0 ? 1 : 0)) * P, hy + row * P, P, P, fill: #ffb03a)
+          rect(hx + (10 + hw + (lv.heavy > 0 ? 1 : 0)) * P, hy + row * P, P, P, fill: #ffb03a)
+        }
+      }
+      for j in range(lv.fire) {
+        sprite(["rR", "RR"], hx + BARRELS[j][0] * P, hy + BARRELS[j][1] * P, P, palette: {r: #c0573a, R: #8a2e1e})
+        sprite(floor(time * 8 + j) % 2 == 0 ? FLAME0 : FLAME1, hx + BARRELS[j][0] * P, hy + (BARRELS[j][1] - 2) * P, P, palette: {f: #ff7a1a, F: #ffd34d})
+      }
+      if lv.mortar >= 1 && lv.mortar < 3 { sprite(MORTAR, hx + 5 * P, hy + 13 * P, P, palette: {g: #d9a72b, k: #1a1a1f}) }
+      if lv.mortar >= 3 {
+        sprite(MORTAR, hx + 3 * P, hy + 13 * P, P, palette: {g: #ffd54a, k: #1a1a1f})
+        sprite(MORTAR, hx + 7 * P, hy + 13 * P, P, palette: {g: #ffd54a, k: #1a1a1f})
+      }
+      for m in MASTS[lv.sails] {
+        // the mainsail is the biggest; fore and mizzen are smaller and a row shorter
+        let big = lv.sails >= 3
+        let sp = m == 11 ? (big ? SAILBIG : SAIL) : m == 5 ? (big ? SAILFOREBIG : SAILFORE) : (big ? SAILMIZBIG : SAILMIZ)
+        let sw = len(sp[0])
+        scale(1 + sin(time * 3 + m) * 0.025, 1, 210, hy + m * P) {
+          sprite(sp, 210 - sw * P / 2, hy + (m + 2 - len(sp)) * P, P, palette: lv.ghost > 0 ? {s: alpha(#c8ffe0, 0.72), x: alpha(#7fe0a0, 0.72), y: #2f4f3f, t: alpha(#3fbf7f, 0.8)} : {s: #efe4c8, x: #cbbd9a, y: #6b4426, t: #b8322f})
+        }
+        rect(hx + 6 * P, hy + m * P, P, P, fill: #3b2412)
+      }
+      if lv.nest >= 1 {
+        sprite(NEST, hx + 5 * P, hy + 10 * P, P, palette: {n: #8a5a2b, N: #3b2412})
+        sprite(lv.nest >= 2 ? (floor(time * 5) % 2 == 0 ? FLAGB0 : FLAGB1) : (floor(time * 5) % 2 == 0 ? FLAG0 : FLAG1), hx + 5.5 * P, hy + 12.5 * P, P, palette: {K: #15151c, W: #f2f2f2})
+      }
+      if lv.nest >= 3 && lv.sails >= 1 { sprite(NEST, hx + 5 * P, hy + 4 * P, P, palette: {n: #8a5a2b, N: #3b2412}) }
+      if lv.flags > 0 {
+        line(hx + 6.5 * P, hy, hx + 6.5 * P, hy + 11 * P, stroke: alpha(#3b2412, 0.8), width: 1)
+        for j in range(3 + 2 * lv.flags) {
+          rect(hx + 6.5 * P + (j % 2 == 0 ? -2.5 : 0.5), hy + (0.5 + j * 10 / (3 + 2 * lv.flags)) * P, 2, 3, fill: FLAGCOL[j % 4])
+        }
+      }
+      if lv.lodestone > 0 {
+        sprite(["kK"], hx + 5 * P, hy + 6 * P, P, palette: {k: #3a3a44, K: #5a5a66})
+        if floor(time * 3 + 1) % 2 == 0 { rect(hx + 6.3 * P, hy + 5.6 * P, 1.5, 1.5, fill: #7fc8ff) }
+      }
+      if lv.ward > 0 && wardHp > 0 {
+        circle(210, 210, 60, fill: alpha(#7fe3ff, 0.06 + 0.08 * wardHp / (20 + 15 * lv.ward)))
+        circle(210, 210, 60, stroke: alpha(#bff4ff, 0.25 + 0.4 * wardHp / (20 + 15 * lv.ward)), width: 2)
+        for j in range(4) { sprite(["p.p", "ppp", ".p."], 210 + sin(rad(j * 90 + 45)) * 58 - 4.5, 210 - cos(rad(j * 90 + 45)) * 58 - 4.5, P, palette: {p: #ff7aa8}) }
+      }
+      if lv.harpoon > 0 {
+        sprite(BALLISTA, hx + 5 * P, hy + 3 * P, P, palette: {y: lv.harpoon >= 3 ? #ffd54a : lv.harpoon == 2 ? #9aa4ae : #8a5a2b, I: #dfe6ec, s: #3b2412})
+      }
+      if lv.bell > 0 {
+        rotate(bellT > 0 ? sin(time * 25) * 25 : 0, hx + 6.5 * P, hy + 17 * P) {
+          sprite(BELL, hx + 5 * P, hy + 17 * P, P, palette: {g: #d9a72b, G: #ffe066, k: #3b2412})
+        }
+      }
+      for j in range(2 * lv.lantern) {
+        circle(hx + (LANTS[j][0] + 0.5) * P, hy + (LANTS[j][1] + 0.5) * P, 6 + sin(time * 4 + j) * 1.5, fill: alpha(#7fe3ff, 0.35))
+        rect(hx + LANTS[j][0] * P, hy + LANTS[j][1] * P, P, P, fill: #d8f8ff)
+      }
+      if lv.storm > 0 {
+        rect(hx + 6 * P, hy + 7 * P, P, 3 * P, fill: #c87533)
+        for j in range(3) {
+          line(hx + 6.5 * P, hy + 7 * P, hx + 6.5 * P + (hash(j, floor(time * 14)) - 0.5) * 30, hy + 7 * P - 4 - hash(floor(time * 14), j) * 14, stroke: alpha(#fff27a, 0.85), width: 1.5)
+        }
+      }
+    }
+
+    // ---- parrots, turning with the ring they fly on
+    if lv.parrot > 0 {
+      Canvas {
+        width: 160
+        height: 160
+        offset: [W / 2 - 80, H / 2 - 80]
+        rotation: parA
+        animate rotation: tween(120ms, "linear")
+        for i in range(lv.parrot) {
+          let a = i * 360 / lv.parrot
+          rotate(a + 90, 80 + sin(rad(a)) * 46, 80 - cos(rad(a)) * 46) {
+            sprite(floor(time * 10 + i) % 2 == 0 ? PARROT0 : PARROT1, 80 + sin(rad(a)) * 46 - 7.5, 80 - cos(rad(a)) * 46 - 6, 3, palette: {r: PCOL[i % 4], g: #43a047, G: #2e7d32, y: #f4d03f, b: #1e88e5})
+          }
+        }
+      }
+    }
+
+    // ---- the air of each biome: fog closes in, snow falls on the frozen reach, embers rise from the burning sea
+    if shipBiome == "fog" || shipBiome == "ice" || shipBiome == "lava" {
+      Canvas {
+        width: W
+        height: H
+        rect(0, 0, W, H, fill: radial(W / 2, H / 2, H * (shipBiome == "fog" ? 0.55 : 0.68), shipBiome == "fog" ? [alpha(#120a1e, 0), alpha(#120a1e, 0), alpha(#120a1e, 0.55), alpha(#120a1e, 0.92)] : shipBiome == "ice" ? [alpha(#e8f6ff, 0), alpha(#e8f6ff, 0), alpha(#e8f6ff, 0.45)] : [alpha(#ff3a0a, 0), alpha(#ff3a0a, 0), alpha(#ff3a0a, 0.38)]))
+        if shipBiome == "fog" {
+          for j in range(6) { circle((hash(j, 1) * W + time * (8 + j * 3)) % (W + 160) - 80, hash(j, 2) * H, 60 + j * 10, fill: alpha(#b8a8d8, 0.07)) }
+        }
+        if shipBiome == "ice" {
+          for j in range(14) { circle((hash(j, 3) * W + time * 12) % W, (hash(j, 4) * H + time * (30 + j * 4)) % H, 1.5 + hash(j, 5), fill: alpha(#ffffff, 0.8)) }
+        }
+        if shipBiome == "lava" {
+          for j in range(10) { circle(hash(j, 6) * W, H - (time * (20 + j * 5) + hash(j, 7) * H) % H, 1.5 + hash(j, 8), fill: alpha(#ffb03a, 0.7)) }
+        }
+      }
+    }
+
+    // ---- the way on: a relic's biome, or Treasure Isle
+    if phase == "play" && goalOff {
+      Canvas {
+        width: 48
+        height: 48
+        offset: [W / 2 + sin(ga) * gk - 24, H / 2 - cos(ga) * gk - 24]
+        rotation: deg(ga)
+        animate rotation: tween(120ms, "linear")
+        circle(24, 24, 20, fill: alpha(goal.col, 0.18))
+        path([[24, 2], [40, 32], [24, 25], [8, 32]], closed: true, fill: goal.col)
+        path([[24, 8], [33, 27], [24, 23]], closed: true, fill: alpha(#ffffff, 0.5))
+      }
+      Canvas {
+        width: 160
+        height: 30
+        offset: [W / 2 + sin(ga) * (gk - 40) - 80, H / 2 - cos(ga) * (gk - 40) - 15]
+        text(goal.label, 80, 8, size: 10, bold: true, font: mono, align: center, color: goal.col)
+        text("${round(sqrt((goal.x - sx) * (goal.x - sx) + (goal.y - sy) * (goal.y - sy)) / 10)}m", 80, 22, size: 9, font: mono, align: center, color: alpha(#ffe8b0, 0.8))
+      }
+    }
+
+    // ---- the way to the nearest outpost, when it's out of sight
+    if phase == "play" && portOff {
+      Canvas {
+        width: 40
+        height: 40
+        offset: [W / 2 + sin(pa) * pk - 20, H / 2 - cos(pa) * pk - 20]
+        rotation: deg(pa)
+        animate rotation: tween(120ms, "linear")
+        path([[20, 2], [33, 26], [20, 20], [7, 26]], closed: true, fill: alpha(#ffd54a, 0.9))
+      }
+      Canvas {
+        width: 60
+        height: 16
+        offset: [W / 2 + sin(pa) * (pk - 32) - 30, H / 2 - cos(pa) * (pk - 32) - 8]
+        text("⚓ ${round(sqrt((seaPort.x - sx) * (seaPort.x - sx) + (seaPort.y - sy) * (seaPort.y - sy)) / 10)}m", 30, 8, size: 10, bold: true, font: mono, align: center, color: #ffe8b0)
+      }
+    }
+
+    // ---- touch anywhere and drag to steer
+    Box {
+      fill: true
+      onPress: {
+        if phase == "play" { joy = true; jx = 0; jy = 0; jox = x; joy0 = y }
+      }
+      onDrag: {
+        if phase == "play" {
+          let ax = jx + dx
+          let ay = jy + dy
+          let al = sqrt(ax * ax + ay * ay)
+          jx = al > 60 ? ax / al * 60 : ax
+          jy = al > 60 ? ay / al * 60 : ay
+        }
+      }
+      onRelease: { joy = false; jx = 0; jy = 0 }
+      onDragEnd: { joy = false; jx = 0; jy = 0 }
+    }
+    if joy && phase == "play" {
+      Canvas {
+        width: 140
+        height: 140
+        offset: [jox - 70, joy0 - 70]
+        circle(70, 70, 60, stroke: alpha(#ffffff, 0.35), width: 3)
+        circle(70 + jx, 70 + jy, 22, fill: alpha(#ffe8b0, 0.55))
+      }
+    }
+
+    // ---- the HUD
+    if phase != "title" {
+      Canvas {
+        width: W
+        height: 130
+        offset: [0, screenTop]
+        rect(6, 2, W - 12, 60, fill: alpha(#07121c, 0.62), radius: 8)
+        rect(6, 2, W - 12, 60, stroke: alpha(#d9a72b, 0.4), width: 1.5, radius: 8)
+        sprite(HEART, 13, 8, 2.5, palette: {r: hurt > 0 ? #ffffff : #e53935, R: #ff8a8a})
+        rect(34, 9, W - 48, 13, fill: alpha(#000000, 0.5), radius: 3)
+        rect(35, 10, (W - 50) * hp / maxHp, 11, fill: hp / maxHp < 0.3 ? (floor(time * 4) % 2 == 0 ? #ff5252 : #c62828) : #e53935, radius: 2)
+        rect(35, 10, (W - 50) * hp / maxHp, 3, fill: alpha(#ffffff, 0.25), radius: 2)
+        if wardHp > 0 { rect(35, 19, (W - 50) * min(1, wardHp / maxHp), 2, fill: #7fe3ff) }
+        text("${ceil(hp)} / ${maxHp}", 41, 16, size: 9, bold: true, font: mono, color: #ffffff)
+        sprite(STAR, 14, 25, 2, palette: {y: #ffd54a})
+        rect(34, 27, W - 48, 6, fill: alpha(#000000, 0.5), radius: 2)
+        rect(35, 28, (W - 50) * min(1, xp / xpNeed), 4, fill: #ffd54a, radius: 2)
+        text("LV ${level}", 14, 48, size: 14, bold: true, font: mono, color: #ffe8b0)
+        text(fmtTime(gt, "m:ss", "UTC"), W / 2, 48, size: 16, bold: true, font: mono, align: center, color: #ffffff)
+        sprite(COIN, W - 132, 42, 3, palette: {g: #b8860b, G: #ffd54a})
+        text("${gold}", W - 116, 48, size: 13, bold: true, font: mono, color: #ffd54a)
+        sprite(SKULL, W - 66, 41, 2.5, palette: {w: #f2f2f2, k: #15151c})
+        text("${kills}", W - 50, 48, size: 13, bold: true, font: mono, color: #f2f2f2)
+        for j in range(4) {
+          let rk = RELICKEYS[j]
+          let has = any(relics, r => r == rk)
+          circle(20 + j * 18, 74, 7, fill: alpha(#07121c, 0.6), stroke: alpha(get(RELIC, rk).col, has ? 0.9 : 0.35), width: 1.5)
+          if has { sprite(GEM, 20 + j * 18 - 4.5, 74 - 4.5, 3, palette: {g: get(RELIC, rk).col, W: #ffffff}) }
+        }
+        text(upper(here.name), W / 2, 72, size: 10, bold: true, font: mono, align: center, color: alpha(here.wave, 0.95), letterSpacing: 1)
+        text(here.trait, W / 2, 86, size: 9, font: mono, align: center, color: alpha(#ffe8b0, 0.6))
+        if bossE == null && !kingUp && get(stir, shipBiome) / stirT > 0.25 {
+          text("${here.boss == "kraken" && shipBiome == "reef" ? "The Coral Kraken" : get(BOSSNAME, here.boss)} stirs${inHunt ? " · guards the " + get(RELIC, shipBiome).name : ""}", W / 2, 104, size: 9, font: mono, align: center, color: alpha(#ff8a8a, 0.8))
+          rect(W / 2 - 60, 112, 120, 5, fill: alpha(#000000, 0.5), radius: 2)
+          rect(W / 2 - 60, 112, 120 * min(1, get(stir, shipBiome) / stirT), 5, fill: #ff8a8a, radius: 2)
+        }
+        if bossE != null {
+          text(upper((bossE.coral ?? false) ? "The Coral Kraken" : get(BOSSNAME, bossE.k)), W / 2, 104, size: 11, bold: true, font: mono, align: center, color: #ff8a8a)
+          rect(40, 113, W - 80, 9, fill: alpha(#000000, 0.55), radius: 3)
+          rect(41, 114, (W - 82) * bossE.hp / bossE.mhp, 7, fill: #c62828, radius: 3)
+          rect(41, 114, (W - 82) * bossE.hp / bossE.mhp, 2, fill: alpha(#ffffff, 0.25), radius: 2)
+        }
+        if bannerT > 0 {
+          text(banner, W / 2, 168, size: 20, bold: true, font: mono, align: center, color: alpha(#ffe8b0, min(1, bannerT)))
+        }
+      }
+    }
+
+    Canvas {
+      width: 80
+      height: 16
+      offset: [W - 88, H - 20]
+      text("v${VERSION}", 80, 8, size: 10, font: mono, align: end, color: alpha(#ffe8b0, 0.45))
+    }
+
+    // ---- the menu button
+    if phase == "play" {
+      Box {
+        width: 40
+        height: 40
+        offset: [W - 48, screenTop + 64]
+        radius: 20
+        background: alpha(#07121c, 0.62)
+        border: 1.5
+        borderColor: alpha(#d9a72b, 0.5)
+        align: center
+        onTap: { phase = "pause"; confirm = ""; joy = false; jx = 0; jy = 0 }
+        Canvas {
+          width: 16
+          height: 16
+          rect(3, 2, 4, 12, fill: #ffe8b0, radius: 1)
+          rect(9, 2, 4, 12, fill: #ffe8b0, radius: 1)
+        }
+      }
+    }
+
+    // ---- an outpost within reach
+    if phase == "play" && dock != null {
+      Row {
+        width: W
+        offset: [0, H - 110]
+        justify: center
+        Box {
+          width: min(W - 40, 280)
+          onTap: {
+            port = dock
+            offers = any(LEG, k => get(lv, k) < 1) ? take(shuffle(filter(LEG, k => get(lv, k) < 1)), 2) : take(shuffle(filter(KEYS, k => get(lv, k) < get(UP, k).max)), 2)
+            phase = "shop"
+            joy = false; jx = 0; jy = 0
+          }
+          Btn { label: "⚓ Dock at ${dock.name}" }
+        }
+      }
+    }
+
+    // ---- screens over the sea
+    if phase == "title" {
+      Column {
+        fill: true
+        background: alpha(#0d1b2a, 0.55)
+        align: center
+        justify: center
+        gap: 14
+        padding: 24
+        Box {
+          Text { text: "CORSAIR"; fontSize: 48; bold: true; font: mono; color: #3b2412; align: center; letterSpacing: 5; offset: [3, 4] }
+          Text { text: "CORSAIR"; fontSize: 48; bold: true; font: mono; color: #ffd54a; align: center; letterSpacing: 5 }
+        }
+        Text { text: "a cursed sea, a small ship, and everything in the water wants it sunk"; color: #c9d6e3; align: center; fontSize: 14 }
+        Canvas {
+          width: 220
+          height: 190
+          rotate(sin(time * 1.3) * 3, 110, 100) {
+            scale(0.62, 1, 110, 100) { circle(110, 100, 66, fill: alpha(#000000, 0.22)) }
+            sprite(RAM2, 110 - 4.5 * 1.5 - 2.25, 100 - 63 - 13.5, 4.5, palette: {i: #9aa4ae, g: #ffd54a})
+            sprite(HULL, 110 - 29.25, 100 - 63, 4.5, palette: merge({l: #c8975a, p: #a87a45, c: #7a3b2a, C: #5a2a1e, h: #3b2412}, HULLPAL[1]))
+            for m in [11, 5, 18] {
+              let sp = m == 11 ? SAIL : m == 5 ? SAILFORE : SAILMIZ
+              sprite(sp, 110 - len(sp[0]) * 2.25, 100 - 63 + (m + 2 - len(sp)) * 4.5, 4.5, palette: {s: #efe4c8, x: #cbbd9a, y: #6b4426, t: #b8322f})
+            }
+            sprite(floor(time * 5) % 2 == 0 ? FLAGB0 : FLAGB1, 110 - 2.25, 100 - 63 + 12.5 * 4.5, 4.5, palette: {K: #15151c, W: #f2f2f2})
+          }
+          for j in range(10) {
+            rect(110 + sin(time * 2 + j) * (40 + j * 5) - 2, 175 + sin(time * 3 + j * 1.7) * 4, 4, 4, fill: alpha(#ffffff, 0.5))
+          }
+        }
+        Text { text: "Drag anywhere to steer; your guns fire on their own. Sink foes, gather doubloons, level up the ship. Each dangerous biome's boss guards a relic: take all four, then find Treasure Isle and slay the Sea King. Gold you bring home buys upgrades in the harbor."; color: #9fb4c8; align: center; fontSize: 13 }
+        Box { onTap: phase = "start"; Btn { label: "SET SAIL" } }
+        Box { onTap: phase = "harbor"; Btn { label: "HARBOR · ${bank} gold banked"; on: false } }
+        if bestT > 0 {
+          Text { text: "best voyage ${fmtTime(bestT, "m:ss", "UTC")} · ${bestK} sunk · ${bestRelics}/4 relics${wins > 0 ? " · " + str(wins) + " won" : ""}"; color: #d9a72b; font: mono; fontSize: 12; align: center }
+        }
+      }
+    }
+
+    if phase == "level" {
+      Column {
+        fill: true
+        background: alpha(#0d1b2a, 0.7)
+        justify: center
+        gap: 10
+        padding: 20
+        Text { text: "LEVEL ${level}!"; fontSize: 30; bold: true; font: mono; color: #ffd54a; align: center }
+        Text { text: "choose an upgrade for the ship"; color: #c9d6e3; align: center }
+        Spacer { height: 6 }
+        if rerolls > 0 && choices[0] != "rum" {
+          Box {
+            onTap: {
+              rerolls = rerolls - 1
+              let open = filter(KEYS, k => get(lv, k) < get(UP, k).max)
+              let drawn = map(open, k => {k: k, s: pow(random(), 1 / (get(RAR, k) == "epic" ? 12 * luckE : get(RAR, k) == "rare" ? 28 * luckR : 60))})
+              choices = map(take(sortBy(drawn, o => -o.s), 3), o => o.k)
+            }
+            Btn { label: "Reroll · ${rerolls} left"; on: false }
+          }
+        }
+        for c in choices {
+          Box {
+            onTap: {
+              if c == "rum" { hp = min(maxHp, hp + maxHp / 2) } else if c == "chest" { gold = gold + 25 } else {
+                lv = set(lv, c, get(lv, c) + 1)
+                if c == "hull" { hp = hp + 40 }
+                if c == "ward" { wardHp = 20 + 15 * get(lv, c); wardBroke = false }
+              }
+              phase = "play"
+            }
+            Card { k: c }
+          }
+        }
+      }
+    }
+
+    if phase == "shop" && port != null {
+      Column {
+        fill: true
+        background: alpha(#0d1b2a, 0.8)
+        justify: center
+        gap: 10
+        padding: 20
+        Text { text: port.name; fontSize: 28; bold: true; font: mono; color: #ffd54a; align: center }
+        Text { text: "an outpost of honest smugglers · you have ${gold} gold"; color: #c9d6e3; align: center; fontSize: 13 }
+        Spacer { height: 6 }
+        let repaired = any(used, u => u == port.id + "r")
+        let traded = any(used, u => u == port.id + "u")
+        let rare = any(offers, o => any(LEG, k => k == o))
+        let price = rare ? 100 + 50 * legends : 40 + 15 * bought
+        Box {
+          onTap: {
+            if !repaired && gold >= 10 && hp < maxHp { gold = gold - 10; hp = maxHp; used = flatten([used, [port.id + "r"]]) }
+          }
+          Btn { label: repaired ? "hull already patched here" : "Repair the hull · 10 gold"; on: !repaired && gold >= 10 && hp < maxHp }
+        }
+        if traded {
+          Text { text: "the shipwright has nothing more to sell"; color: #9fb4c8; align: center }
+        } else {
+          Text { text: rare ? "the smugglers' rarest goods, ${price} gold each · one per port:" : "the shipwright offers, for ${price} gold:"; color: #9fb4c8; align: center; fontSize: 13 }
+          for c in offers {
+            Box {
+              opacity: gold >= price ? 1 : 0.45
+              onTap: {
+                if gold >= price {
+                  gold = gold - price
+                  if rare { legends = legends + 1 } else { bought = bought + 1 }
+                  lv = set(lv, c, get(lv, c) + 1)
+                  if c == "hull" { hp = hp + 40 }
+                  if c == "ward" { wardHp = 20 + 15 * get(lv, c); wardBroke = false }
+                  used = flatten([used, [port.id + "u"]])
+                }
+              }
+              Card { k: c }
+            }
+          }
+        }
+        Spacer { height: 6 }
+        Box { onTap: { phase = "play" }; Btn { label: "Cast off" } }
+      }
+    }
+
+    if phase == "pause" {
+      Column {
+        fill: true
+        background: alpha(#0d1b2a, 0.75)
+        justify: center
+        align: center
+        gap: 14
+        padding: 28
+        Text { text: "BECALMED"; fontSize: 30; bold: true; font: mono; color: #ffd54a; align: center }
+        Text { text: "${fmtTime(gt, "m:ss", "UTC")} at sea · level ${level} · ${kills} sunk · ${gold} gold"; color: #c9d6e3; align: center }
+        Text { text: nRel >= 4 ? (endless ? "endless voyage · escalation ${esc}" : "all four relics: find Treasure Isle") : "relics ${nRel}/4 · still to find: ${join(map(filter(RELICKEYS, r => !any(relics, q => q == r)), r => get(RELIC, r).name), ", ")}"; color: #9fb4c8; fontSize: 12; align: center }
+        Spacer { height: 6 }
+        Box { width: 260; onTap: { phase = "play"; confirm = "" }; Btn { label: "Resume" } }
+        Box {
+          width: 260
+          onTap: {
+            if confirm == "restart" {
+              lastBank = won ? gold : floor(gold / 2); bank = bank + lastBank; bestRelics = max(bestRelics, nRel); bestT = max(bestT, gt); bestK = max(bestK, kills)
+              confirm = ""
+              phase = "start"
+            } else { confirm = "restart" }
+          }
+          Btn { label: confirm == "restart" ? "Tap again to restart" : "Restart voyage"; on: confirm == "restart" }
+        }
+        Box {
+          width: 260
+          onTap: {
+            if confirm == "abandon" {
+              lastBank = won ? gold : floor(gold / 2); bank = bank + lastBank; bestRelics = max(bestRelics, nRel); bestT = max(bestT, gt); bestK = max(bestK, kills)
+              confirm = ""
+              phase = "over"
+            } else { confirm = "abandon" }
+          }
+          Btn { label: confirm == "abandon" ? "Tap again to abandon" : "Abandon ship"; on: confirm == "abandon" }
+        }
+        Text { text: "restarting or abandoning banks ${won ? gold : floor(gold / 2)} gold${won ? "" : " (half)"} in the harbor"; color: alpha(#ffd54a, 0.7); fontSize: 11; font: mono; align: center }
+      }
+    }
+
+    if phase == "won" {
+      Column {
+        fill: true
+        background: alpha(#1a1206, 0.78)
+        justify: center
+        align: center
+        gap: 12
+        padding: 24
+        Box {
+          Text { text: "VICTORY"; fontSize: 46; bold: true; font: mono; color: #3b2412; letterSpacing: 4; offset: [3, 4] }
+          Text { text: "VICTORY"; fontSize: 46; bold: true; font: mono; color: #ffd54a; letterSpacing: 4 }
+        }
+        Text { text: "The Sea King is slain and Treasure Isle is yours."; color: #ffe8b0; align: center }
+        Text { text: "${fmtTime(gt, "m:ss", "UTC")} at sea · level ${level} · ${kills} sunk · ${gold} gold"; color: #c9d6e3; align: center; fontSize: 13 }
+        Spacer { height: 10 }
+        Box { onTap: { gold = gold; endless = true; phase = "play"; banner = "The sea grows wilder..."; bannerT = 3 }; Btn { label: "SAIL ON · endless" } }
+        Box { onTap: { lastBank = gold; bank = bank + gold; bestT = max(bestT, gt); bestK = max(bestK, kills); phase = "harbor" }; Btn { label: "Return to harbor · bank ${gold} gold"; on: false } }
+      }
+    }
+
+    if phase == "harbor" {
+      Column {
+        fill: true
+        background: alpha(#07121c, 0.88)
+        justify: center
+        gap: 8
+        padding: 20
+        Text { text: "THE HARBOR"; fontSize: 28; bold: true; font: mono; color: #ffd54a; align: center }
+        Text { text: "${bank} gold banked · what you buy here sails with every voyage"; color: #c9d6e3; align: center; fontSize: 13 }
+        Spacer { height: 6 }
+        for q in PERMS {
+          Row {
+            gap: 10
+            padding: [12, 8]
+            background: alpha(#0d1b2a, 0.92)
+            border: 1
+            borderColor: alpha(#d9a72b, 0.5)
+            radius: 6
+            align: center
+            Column {
+              weight: 1
+              gap: 0
+              Text { text: q.name; color: #ffe8b0; bold: true; font: mono; fontSize: 13 }
+              Text { text: "${q.info} · ${get(perm, q.k, 0)}/${q.max}"; color: #9fb4c8; fontSize: 12 }
+            }
+            Box {
+              width: 96
+              onTap: {
+                if get(perm, q.k, 0) < q.max && bank >= q.cost * (get(perm, q.k, 0) + 1) {
+                  bank = bank - q.cost * (get(perm, q.k, 0) + 1)
+                  perm = set(perm, q.k, get(perm, q.k, 0) + 1)
+                }
+              }
+              Btn { label: get(perm, q.k, 0) >= q.max ? "max" : "${q.cost * (get(perm, q.k, 0) + 1)}g"; on: get(perm, q.k, 0) < q.max && bank >= q.cost * (get(perm, q.k, 0) + 1) }
+            }
+          }
+        }
+        Spacer { height: 6 }
+        Box { onTap: phase = "start"; Btn { label: "SET SAIL" } }
+        Box { onTap: phase = "title"; Btn { label: "Back"; on: false } }
+      }
+    }
+
+    if phase == "over" {
+      Column {
+        fill: true
+        background: alpha(#2a0d0d, 0.7)
+        justify: center
+        align: center
+        gap: 12
+        padding: 24
+        Text { text: "SUNK"; fontSize: 46; bold: true; font: mono; color: #ff5252; letterSpacing: 4 }
+        Text { text: "you kept her afloat for ${fmtTime(gt, "m:ss", "UTC")}"; color: #ffe8b0; align: center }
+        Text { text: "level ${level} · ${kills} sunk · ${nRel}/4 relics"; color: #c9d6e3; align: center }
+        Text { text: "${lastBank} gold banked in the harbor${won ? "" : " (half your gold)"}"; color: #ffd54a; font: mono; fontSize: 13; align: center }
+        Text { text: "best ${fmtTime(bestT, "m:ss", "UTC")} · ${bestK} sunk"; color: #d9a72b; font: mono; fontSize: 12 }
+        Spacer { height: 10 }
+        Box { onTap: phase = "start"; Btn { label: "SAIL AGAIN" } }
+        Box { onTap: phase = "harbor"; Btn { label: "HARBOR · ${bank} gold"; on: false } }
+      }
+    }
+  }
+}

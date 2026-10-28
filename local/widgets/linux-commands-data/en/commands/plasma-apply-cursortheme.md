@@ -1,0 +1,62 @@
+# TAGLINE
+
+Apply KDE Plasma cursor themes
+
+# TLDR
+
+**Apply** a cursor theme by name
+
+```plasma-apply-cursortheme [breeze_cursors]```
+
+**List** installed cursor themes
+
+```plasma-apply-cursortheme --list-themes```
+
+Show **help**
+
+```plasma-apply-cursortheme --help```
+
+# SYNOPSIS
+
+**plasma-apply-cursortheme** [**--list-themes**] [_theme_name_]
+
+# PARAMETERS
+
+**--list-themes**
+> List all available cursor themes
+
+**theme_name**
+> Name of cursor theme to apply
+
+**--help**
+> Display help information
+
+# DESCRIPTION
+
+**plasma-apply-cursortheme** changes the cursor theme of KDE Plasma desktop from the command line. It provides the same functionality as the System Settings cursor configuration but in a scriptable form.
+
+Cursor themes affect the mouse pointer appearance throughout the desktop and applications. Changes apply immediately without requiring session restart.
+
+# CAVEATS
+
+Requires running Plasma session. Some applications may need restart to display new cursor. Theme names are case-sensitive.
+
+# HISTORY
+
+**plasma-apply-cursortheme** is part of **KDE Plasma Workspace**, providing command-line control over cursor appearance for scripting and automation purposes.
+
+# INSTALL
+
+```apt: sudo apt install plasma-workspace```
+
+```dnf: sudo dnf install plasma-workspace```
+
+```pacman: sudo pacman -S plasma-workspace```
+
+```apk: sudo apk add plasma-workspace```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[plasma-apply-colorscheme](/man/plasma-apply-colorscheme)(1), [plasma-apply-desktoptheme](/man/plasma-apply-desktoptheme)(1)

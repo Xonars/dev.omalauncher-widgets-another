@@ -1,0 +1,124 @@
+# TAGLINE
+
+Command-line internet speed test client
+
+# TLDR
+
+**Run speed test**
+
+```speedtest-cli```
+
+**Simple output**
+
+```speedtest-cli --simple```
+
+**List servers**
+
+```speedtest-cli --list```
+
+**Use specific server**
+
+```speedtest-cli --server [12345]```
+
+**JSON output**
+
+```speedtest-cli --json```
+
+**No download test**
+
+```speedtest-cli --no-download```
+
+**No upload test**
+
+```speedtest-cli --no-upload```
+
+**Show bytes**
+
+```speedtest-cli --bytes```
+
+# SYNOPSIS
+
+**speedtest-cli** [_--simple_] [_--server id_] [_--json_] [_options_]
+
+# PARAMETERS
+
+**--simple**
+> Simple output.
+
+**--list**
+> List servers.
+
+**--server** _ID_
+> Specific server.
+
+**--json**
+> JSON output.
+
+**--csv**
+> CSV output.
+
+**--csv-header**
+> Print CSV header row.
+
+**--no-download**
+> Skip download test.
+
+**--no-upload**
+> Skip upload test.
+
+**--single**
+> Use a single connection instead of multiple.
+
+**--bytes**
+> Show bytes/second instead of bits/second.
+
+**--share**
+> Generate share URL with results image.
+
+**--secure**
+> Use HTTPS instead of HTTP.
+
+**--source** _address_
+> Bind to a specific source IP address.
+
+**--timeout** _seconds_
+> Set HTTP timeout (default: 10).
+
+**--exclude** _ID_
+> Exclude a server from selection.
+
+# DESCRIPTION
+
+**speedtest-cli** is a Python-based command-line tool for testing internet bandwidth using Speedtest.net infrastructure. It measures download speed, upload speed, and ping latency against Ookla's worldwide server network.
+
+The tool supports multiple output modes including simple (single-line metrics), JSON, and CSV for scripting and monitoring integration. A share option generates a URL to an image of the results on Speedtest.net. Specific test servers can be selected by ID, and individual tests (download or upload) can be skipped to speed up partial measurements.
+
+The tool uses HTTPS connections by default with the **--secure** flag and can show results in bytes per second instead of bits. It is community-maintained and distinct from Ookla's official **speedtest** CLI binary.
+
+# CAVEATS
+
+Python-based, needs installation. Server availability varies. Results differ from browser.
+
+# HISTORY
+
+**speedtest-cli** was created by **Matt Martz** as a CLI for Speedtest.net. It enables automated and scripted speed testing.
+
+# INSTALL
+
+```dnf: sudo dnf install speedtest-cli```
+
+```pacman: sudo pacman -S speedtest-cli```
+
+```apk: sudo apk add speedtest-cli```
+
+```zypper: sudo zypper install speedtest-cli```
+
+```brew: brew install speedtest-cli```
+
+```nix: nix profile install nixpkgs#speedtest-cli```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[iperf](/man/iperf)(1), [fast](/man/fast)(1), [curl](/man/curl)(1)

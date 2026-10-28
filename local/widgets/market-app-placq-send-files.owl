@@ -1,0 +1,315 @@
+app "Send Files to Linux" {
+  meta { owl: 9; description: "Local file transfers from Android to Linux on this phone"; version: "1.3.1"; license: "MIT"; category: "productivity" }
+  requires { pacman: ["python", "bash"] }
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 18v23h38V18H29l-5-6H5v6"/><path d="M24 3v26m-8-8 8 8 8-8"/></svg>"""
+  title: "Send Files to Linux"
+  // Install the embedded, reviewed helper in the app cache; no downloads.
+  // Owl's multiline strings keep backslashes; decode the embedded helper's escaping before writing Python.
+  let runner = "import pathlib,runpy,sys; p=pathlib.Path.home()/'.cache/owl-send-files/server.py'; p.parent.mkdir(parents=True,exist_ok=True,mode=0o700); s=sys.argv.pop(1); p.write_text(s.replace(chr(92)*2,chr(92)).replace(chr(92)+chr(34),chr(34)).replace(chr(92)+'$','$')); sys.argv[0]=str(p); runpy.run_path(str(p),run_name='__main__')"
+  let helper = """#!/usr/bin/env python3
+\"\"\"Loopback-only, temporary Android → local Linux file receiver.\"\"\"
+import argparse
+import json
+import os
+from pathlib import Path
+import secrets
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import unquote, urlsplit
+from urllib.request import Request, urlopen
+
+CACHE = Path.home() / '.cache' / 'owl-send-files'
+STATUS = CACHE / 'status.json'
+SESSION = CACHE / 'session.json'
+LOCK = threading.Lock()
+
+
+def save(path, data):
+    CACHE.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with tempfile.NamedTemporaryFile(mode='w', dir=CACHE, delete=False) as f:
+        json.dump(data, f, ensure_ascii=False)
+    os.replace(f.name, path)
+
+
+PAGE = r'''<!doctype html>
+<html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
+<title>Send Files to Linux</title>
+<style>
+:root{color-scheme:dark;font:16px system-ui;background:#17191c;color:#edf0f2}
+*{box-sizing:border-box}body{max-width:520px;margin:0 auto;padding:32px 20px}
+h1{font-size:24px;font-weight:650;letter-spacing:-.6px;margin:0 0 28px}
+section{margin:24px 0}label{display:block;margin-bottom:12px;font-weight:550}
+input,button{font:inherit;border-radius:10px;padding:12px;border:1px solid #454c54;background:#242930;color:inherit}
+input[type=text]{width:100%;margin-top:14px}button{cursor:pointer;min-height:48px}
+button.primary{background:#a9d6bf;color:#13251b;border:0;font-weight:650;width:100%}
+button:disabled{opacity:.45}#folders button{display:block;width:100%;text-align:left;border:0;background:none;border-radius:0;border-bottom:1px solid #343a40}
+#folders{max-height:220px;overflow:auto;margin-top:8px}.row{display:flex;gap:8px;margin-top:8px}.row button{flex:1}
+details{border-block:1px solid #343a40;padding:16px 0}summary{cursor:pointer;list-style:none;display:flex;align-items:baseline;gap:12px;min-height:28px}
+summary::-webkit-details-marker{display:none}.caption{font-size:13px;color:#aeb7be}#folder-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}summary::after{content:'Change';font-size:13px;color:#a9d6bf}details[open] summary::after{content:'Done'}
+progress{display:block;width:100%;height:6px;accent-color:#a9d6bf;margin-top:16px}progress[hidden]{display:none}
+#status{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.5;font-size:14px;color:#aeb7be;margin:14px 0}
+#files{width:100%;font-size:14px;padding:0;border:0;background:none}#files::file-selector-button{font:inherit;border:1px solid #454c54;border-radius:10px;background:#242930;color:#edf0f2;padding:13px 16px;margin-right:12px;min-height:48px;cursor:pointer}
+#status.error{color:#ffb3ab}#list{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;color:#aeb7be;line-height:1.7;max-height:200px;overflow:auto}#list:empty{display:none}
+footer{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:28px;color:#aeb7be;font-size:12px}#stop{background:none;border:0;padding:8px 0;color:#aeb7be;font-size:13px}
+</style>
+<h1>Send Files to Linux</h1>
+<details id=\"destination\"><summary><span class=\"caption\">Save to</span><span id=\"folder-label\">Loading…</span></summary><input id=\"dest\" type=\"text\" aria-label=\"Destination folder\" autocomplete=\"off\"><div class=\"row\"><button id=\"browse\">Open folder</button><button id=\"parent\">Up one level</button></div><div id=\"folders\"></div></details>
+<section><label for=\"files\">Files from Android</label><input id=\"files\" type=\"file\" multiple><p id=\"list\"></p></section>
+<section><button class=\"primary\" id=\"send\" disabled>Send</button><progress id=\"progress\" value=\"0\" max=\"100\" hidden aria-label=\"Upload progress\"></progress><p id=\"status\" role=\"status\" aria-live=\"polite\">Choose files to get started.</p></section>
+<footer><span>On this phone only · No overwriting</span><button id=\"stop\">Stop server</button></footer>
+<script>
+const \$=id=>document.getElementById(id), base=location.pathname.replace(/\\/\$/,''), api=p=>base+p;
+let busy=false,completed=0;
+function status(t,error=false){\$('status').textContent=t;\$('status').className=error?'error':''}
+async function request(path,body){const r=await fetch(api(path),{method:body?'POST':'GET',headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined});const d=await r.json();if(!r.ok)throw Error(d.error||'Server error');return d}
+async function browse(path){try{const d=await request('/browse',{path});\$('dest').value=d.path;\$('folder-label').textContent=d.path;\$('folders').replaceChildren();for(const folder of d.folders){const b=document.createElement('button');b.textContent='▸ '+folder.name;b.onclick=()=>browse(folder.path);\$('folders').append(b)}\$('parent').onclick=()=>browse(d.parent)}catch(e){status(e.message,true)}}
+\$('browse').onclick=()=>browse(\$('dest').value);
+\$('dest').oninput=()=>{\$('folder-label').textContent=\$('dest').value};
+\$('files').onchange=()=>{const fs=[...\$('files').files];\$('list').textContent=fs.map(f=>f.name+' · '+(f.size/1048576).toFixed(1)+' MB').join('\\n');\$('send').textContent=fs.length?'Send '+fs.length+(fs.length===1?' file':' files'):'Send';\$('send').disabled=!fs.length||busy;status(fs.length?'Ready to send.':'Choose files to get started.')};
+function upload(file,path,index,total){return new Promise((resolve,reject)=>{const x=new XMLHttpRequest();x.open('POST',api('/upload'));x.setRequestHeader('X-File-Name',encodeURIComponent(file.name));x.setRequestHeader('X-Destination',encodeURIComponent(path));x.upload.onprogress=e=>{if(e.lengthComputable){\$('progress').value=e.loaded/e.total*100;status('Uploading '+index+'/'+total+' · '+file.name+'\\n'+Math.round(e.loaded/e.total*100)+'%')}};x.onload=()=>{let d;try{d=JSON.parse(x.responseText)}catch{reject(Error('Invalid server response'));return}x.status===200?resolve(d):reject(Error(d.error||'Could not save file'))};x.onerror=()=>reject(Error('Connection lost. Return to the app and restart the server.'));x.send(file)})}
+\$('send').onclick=async()=>{busy=true;\$('destination').open=false;\$('progress').hidden=false;\$('progress').value=0;for(const id of ['send','files','dest','browse','parent','stop'])\$(id).disabled=true;\$('folders').replaceChildren();const fs=[...\$('files').files];const saved=[];try{for(let i=0;i<fs.length;i++){status('Preparing '+fs[i].name);\$('progress').value=0;const result=await upload(fs[i],\$('dest').value,i+1,fs.length);completed++;saved.push('✓ '+result.path.split('/').pop());\$('list').textContent=saved.join('\\n')}await request('/finish',{count:completed});\$('progress').value=100;\$('send').textContent='Sent';status('Saved to '+\$('dest').value+'\\nServer stopped. You can close this tab.')}catch(e){status(e.message+'\\nFiles already saved: '+completed+'. Select only the remaining files to retry.',true);busy=false;for(const id of ['files','dest','browse','parent','stop'])\$(id).disabled=false;\$('files').value='';\$('send').textContent='Send';\$('send').disabled=true}};
+\$('stop').onclick=async()=>{try{await request('/stop',{});status('Server stopped. You can close this tab.');\$('send').disabled=true}catch(e){status(e.message,true)}};
+request('/info').then(d=>browse(d.path)).catch(e=>status(e.message,true));
+</script></html>'''
+
+
+def serve(destination):
+    token = secrets.token_urlsafe(32)
+    activity = [time.monotonic()]
+    active = [0]
+    result = {'phase': 'ready', 'message': 'Server ready. Choose files in your browser.', 'path': destination, 'count': 0}
+
+    def report(**updates):
+        with LOCK:
+            result.update(updates)
+            save(STATUS, result)
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def reply(self, code, data, html=False):
+            payload = data.encode() if html else json.dumps(data, ensure_ascii=False).encode()
+            self.send_response(code)
+            self.send_header('Content-Type', 'text/html; charset=utf-8' if html else 'application/json; charset=utf-8')
+            self.send_header('Content-Length', str(len(payload)))
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self.send_header('Referrer-Policy', 'no-referrer')
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def route(self):
+            if self.headers.get('Host') != f'127.0.0.1:{server.server_port}':
+                self.reply(403, {'error': 'Address not allowed.'})
+                return
+            path = urlsplit(self.path).path
+            prefix = '/' + token
+            if path != prefix and not path.startswith(prefix + '/'):
+                self.reply(403, {'error': 'Invalid or expired link.'})
+                return
+            origin = self.headers.get('Origin')
+            if origin and origin != f'http://127.0.0.1:{server.server_port}':
+                self.reply(403, {'error': 'Origin not allowed.'})
+                return
+            activity[0] = time.monotonic()
+            route = path[len(prefix):].rstrip('/')
+            try:
+                if self.command == 'GET' and route == '':
+                    self.reply(200, PAGE, True)
+                elif self.command == 'GET' and route == '/info':
+                    self.reply(200, {'path': destination})
+                elif self.command == 'POST' and route == '/upload':
+                    self.receive()
+                elif self.command == 'POST':
+                    length = int(self.headers.get('Content-Length', '0'))
+                    if length > 16384:
+                        raise ValueError('Request too large.')
+                    data = json.loads(self.rfile.read(length) or '{}')
+                    if route == '/browse':
+                        folder = Path(data.get('path') or destination).expanduser().resolve(strict=True)
+                        if not folder.is_dir():
+                            raise ValueError('This is not a folder.')
+                        children = []
+                        for p in folder.iterdir():
+                            try:
+                                if p.is_dir() and not p.name.startswith('.'):
+                                    children.append({'name': p.name, 'path': str(p)})
+                            except OSError:
+                                pass
+                        self.reply(200, {'path': str(folder), 'parent': str(folder.parent), 'folders': sorted(children, key=lambda p: p['name'].lower())})
+                    elif route in ('/finish', '/stop'):
+                        report(phase='done' if route == '/finish' else 'stopped', message=f\"Files saved: {result['count']}. Server stopped.\" if route == '/finish' else 'Server stopped.')
+                        self.reply(200, {'ok': True})
+                        threading.Thread(target=server.shutdown, daemon=True).start()
+                    else:
+                        self.reply(404, {'error': 'Unknown request.'})
+                else:
+                    self.reply(404, {'error': 'Unknown request.'})
+            except (OSError, ValueError) as e:
+                report(phase='error', message=str(e))
+                self.reply(400, {'error': str(e)})
+
+        do_GET = route
+        do_POST = route
+
+        def receive(self):
+            length = int(self.headers.get('Content-Length', '-1'))
+            if length < 0:
+                raise ValueError('File size missing.')
+            name = unquote(self.headers.get('X-File-Name', ''))
+            if not name or name in ('.', '..') or '/' in name or '\\\\' in name or '\\x00' in name:
+                raise ValueError('Invalid filename.')
+            folder = Path(unquote(self.headers.get('X-Destination', destination))).expanduser().resolve(strict=True)
+            if not folder.is_dir():
+                raise ValueError('Destination folder does not exist.')
+            temporary = None
+            active[0] += 1
+            try:
+                self.connection.settimeout(120)
+                report(phase='uploading', message='Saving: ' + name, path=str(folder))
+                with tempfile.NamedTemporaryFile(dir=folder, prefix='.owl-upload-', delete=False) as f:
+                    temporary = Path(f.name)
+                    remaining = length
+                    while remaining:
+                        chunk = self.rfile.read(min(1024 * 1024, remaining))
+                        if not chunk:
+                            raise ValueError('Transfer interrupted. Incomplete file removed.')
+                        f.write(chunk)
+                        remaining -= len(chunk)
+                        activity[0] = time.monotonic()
+                    f.flush()
+                    os.fsync(f.fileno())
+                target = folder / name
+                for i in range(10000):
+                    if i:
+                        target = folder / f'{Path(name).stem} ({i}){Path(name).suffix}'
+                    try:
+                        os.close(os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+                        break
+                    except FileExistsError:
+                        continue
+                else:
+                    raise ValueError('Too many files with this name.')
+                try:
+                    os.replace(temporary, target)
+                except OSError:
+                    target.unlink(missing_ok=True)
+                    raise
+                temporary = None
+                report(phase='ready', message='Saved: ' + target.name, count=result['count'] + 1, path=str(folder))
+                self.reply(200, {'path': str(target)})
+            finally:
+                if temporary:
+                    temporary.unlink(missing_ok=True)
+                active[0] -= 1
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    server.daemon_threads = True
+    url = f'http://127.0.0.1:{server.server_port}/{token}'
+    save(SESSION, {'url': url})
+    report()
+
+    def expire():
+        while True:
+            time.sleep(5)
+            if not active[0] and time.monotonic() - activity[0] > 300:
+                report(phase='stopped', message='Server stopped after 5 minutes of inactivity.')
+                server.shutdown()
+                return
+
+    threading.Thread(target=expire, daemon=True).start()
+    server.serve_forever(poll_interval=0.2)
+    server.server_close()
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('action', choices=['start', 'serve', 'stop'])
+    parser.add_argument('--dest', default='~/')
+    args = parser.parse_args()
+    if args.action == 'serve':
+        serve(args.dest)
+        return
+    try:
+        session = json.loads(SESSION.read_text())
+        url = session['url']
+        with urlopen(url + '/info', timeout=2):
+            pass
+    except Exception:
+        url = None
+    if args.action == 'stop':
+        if url:
+            with urlopen(Request(url + '/stop', data=b'{}', headers={'Content-Type': 'application/json'}), timeout=3):
+                pass
+        else:
+            try:
+                status = json.loads(STATUS.read_text())
+            except Exception:
+                status = {}
+            status.update(phase='stopped', message='Server stopped.')
+            save(STATUS, status)
+        print(json.dumps({'ok': True}))
+        return
+    if url:
+        print(json.dumps({'url': url}))
+        return
+    destination = Path(args.dest).expanduser()
+    try:
+        destination.mkdir(parents=True, exist_ok=True)
+        if not destination.is_dir():
+            raise ValueError('The specified path is not a folder.')
+        SESSION.unlink(missing_ok=True)
+        subprocess.Popen([sys.executable, str(Path(__file__).resolve()), 'serve', '--dest', str(destination.resolve())], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        for _ in range(60):
+            time.sleep(0.05)
+            if SESSION.exists():
+                print(SESSION.read_text())
+                return
+        raise ValueError('Could not start the server.')
+    except (OSError, ValueError) as e:
+        print(json.dumps({'error': str(e)}, ensure_ascii=False))
+
+
+if __name__ == '__main__':
+    main()
+"""
+  state destinationFolder = "~/" persist
+  state response = ""
+  source transfer = file("~/.cache/owl-send-files/status.json") json
+  let running = transfer.phase == "ready" || transfer.phase == "uploading" || transfer.phase == "error"
+  on response {
+    let answer = parseJson(value)
+    if answer.url != null { url(answer.url) }
+  }
+  Column {
+    padding: [16, 12]
+    gap: 16
+    Text { text: "Android → Linux"; style: title }
+    Text { text: "Files stay on this phone. No cloud or Wi-Fi needed."; style: small }
+    Spacer { height: 8 }
+    Text { text: "DESTINATION FOLDER"; style: label }
+    Input { text: destinationFolder; placeholder: "~/"; onChange: destinationFolder = value }
+    Text { text: "The folder will be created if needed. You can also browse folders on the upload page."; style: small }
+    Button {
+      text: running ? "Open upload page" : "Choose files and send"
+      onTap: { response = ""; response = run("python -c ${sh(runner)} ${sh(helper)} start --dest ${sh(destinationFolder)}") }
+    }
+    Text { text: "Choose Android files in your browser, then tap Send. Upload progress appears on the page."; style: small }
+    Column {
+      padding: 16
+      gap: 8
+      background: surface
+      Text { text: "STATUS"; style: label; color: muted }
+      Text { text: parseJson(response).error ?? (transfer.phase == "stopped" && transfer.count == 0 ? "Server is off. Ready to send files." : transfer.message ?? "Server is off. Ready to send files."); color: parseJson(response).error != null || transfer.phase == "error" ? red : foreground }
+      if transfer.path != null { Text { text: transfer.path; style: small } }
+    }
+    if running { Button { text: "Stop server"; onTap: run("python -c ${sh(runner)} ${sh(helper)} stop") } }
+    Spacer { weight: 1 }
+    Text { text: "Local access only • no files overwritten\nStops after uploading or 5 minutes of inactivity."; style: small }
+  }
+}

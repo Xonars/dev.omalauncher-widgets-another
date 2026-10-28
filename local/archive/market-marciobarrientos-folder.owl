@@ -1,0 +1,261 @@
+widget "folder" {
+  meta { owl: 9; description: "Folder of Android apps: custom title, reorder, 3-5 columns, border and corners. Optional duplicate/sync buttons write copies of this widget file into the widgets folder."; version: "1.1.1"; license: "MIT"; category: "productivity" }
+  size: 6x3
+  minSize: 3x2
+
+  let folderMain = true
+  let copyN = 0
+  source apps = android.apps every 1m
+  state title = "apps" persist
+  state picks = [] persist
+  state names = true persist
+  state titleSize = 12 persist
+  state q = ""
+  state pg = 0
+  state madeCopy = false
+  state askCopy = false
+  state copyPage = 1 persist
+  state synced = false persist
+  state framed = true persist
+  state colCount = 4 persist
+  state corner = "soft" persist
+
+  let all = (apps ?? []).sortBy(a => lower(a.name))
+  let items = picks.map(k => find(all, a => a.key == k)).filter(a => a != null)
+  // the picks still installed: the list buttons edit these, so an uninstalled app drops out
+  let keys = items.map(a => a.key)
+  let rad = corner == "edge" ? 0 : corner == "soft" ? 6 : 12
+  // a narrow tile (the landscape home screen) gets fewer columns, so an icon and its name still fit
+  let nc = min(colCount, max(2, floor(((tileWidth ?? 320) - 24) / 76)))
+  let cw = floor(((tileWidth ?? 320) - 24 - 8 * (nc - 1)) / nc)
+  let lines = range(ceil(len(items) / nc)).map(r => items.drop(r * nc).take(nc))
+  let avail = all.filter(a => !any(picks, k => k == a.key) && (q == "" || contains(lower(a.name), lower(q))))
+
+  Column {
+    gap: 6
+    Row {
+      align: center
+      Text { text: title; style: label; fontSize: titleSize; color: foreground; weight: 1; maxLines: 1 }
+      Canvas {
+        size: 18
+        onTap: screen()
+        let k = width / 24
+        scale(k, k, 0, 0) {
+          for i in range(8) {
+            rotate(i * 45, 12, 12) { line(12, 2.5, 12, 5.5, stroke: accent, width: 3, cap: round) }
+          }
+          circle(12, 12, 6.5, stroke: accent, width: 2)
+          circle(12, 12, 2.8, stroke: accent, width: 2)
+        }
+      }
+    }
+    if len(items) == 0 {
+      Text { text: "tap the icon to add apps"; style: muted; onTap: screen() }
+    } else {
+      Box {
+        weight: 1
+        align: center
+        Column {
+          scroll: true
+          gap: 8
+          align: center
+          for r, ri in lines key ri {
+            Row {
+              gap: 8
+              justify: center
+              fill: width
+              for a in r key a.key {
+                Column {
+                  gap: 2
+                  align: center
+                  width: cw
+                  padding: framed ? 6 : 0
+                  border: framed ? 1 : 0
+                  borderColor: border
+                  radius: rad
+                  onTap: androidApp(a.key)
+                  Image { src: a.icon; size: 44 }
+                  if names { Text { text: a.name; style: small; align: center; maxLines: 1 } }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  screen {
+    title: folderMain ? "folder · v1.1.1" : "folder · v1.1.1 (copy)"
+    Box {
+    Column {
+      scroll: true
+      gap: 10
+      padding: 8
+      Row {
+        align: center
+        Text { text: "title"; width: 110 }
+        Input { text: title; placeholder: "folder name"; weight: 1; onChange: title = value }
+      }
+      Row {
+        align: center
+        Text { text: "title size (${titleSize})"; weight: 1 }
+        Button { text: "A−"; width: 56; onTap: titleSize = max(8, titleSize - 2) }
+        Button { text: "A+"; width: 56; onTap: titleSize = min(40, titleSize + 2) }
+      }
+      Row {
+        align: center
+        Text { text: "show app names"; weight: 1 }
+        Button { text: names ? "on" : "off"; width: 56; onTap: names = !names }
+      }
+      Row {
+        align: center
+        Text { text: "icon border"; weight: 1 }
+        Button { text: framed ? "on" : "off"; width: 56; onTap: framed = !framed }
+      }
+      Row {
+        align: center
+        Text { text: "corners"; weight: 1 }
+        Row {
+          gap: 0
+          border: 1
+          borderColor: accent
+          radius: 8 * corners
+          clip: true
+          for c in ["edge", "soft", "round"] {
+            Text { text: "${c}"; width: 64; align: center; padding: [0, 8]; background: corner == c ? accent : alpha(accent, 0); color: corner == c ? background : foreground; onTap: corner = c }
+          }
+        }
+      }
+      Row {
+        align: center
+        Text { text: "columns"; weight: 1 }
+        Row {
+          gap: 0
+          border: 1
+          borderColor: accent
+          radius: 8 * corners
+          clip: true
+          for c in [3, 4, 5] {
+            Text { text: "${c}"; width: 48; align: center; padding: [0, 8]; background: colCount == c ? accent : alpha(accent, 0); color: colCount == c ? background : foreground; onTap: colCount = c }
+          }
+        }
+      }
+      Spacer { height: 12 }
+      Text { text: "in folder (${len(items)})"; fontSize: 16; color: accent }
+      for a, i in items key a.key {
+        Row {
+          align: center
+          gap: 8
+          Image { src: a.icon; size: 32 }
+          Text { text: a.name; weight: 1; maxLines: 1 }
+          Button { text: "↑"; width: 40; visible: i > 0; onTap: picks = set(set(keys, i, keys[i - 1]), i - 1, keys[i]) }
+          Button { text: "↓"; width: 40; visible: i < len(keys) - 1; onTap: picks = set(set(keys, i, keys[i + 1]), i + 1, keys[i]) }
+          Button { text: "✕"; width: 40; color: red; onTap: picks = remove(keys, i) }
+        }
+      }
+      Spacer { height: 12 }
+      Text { text: "add an app"; fontSize: 16; color: accent }
+      Input { text: q; placeholder: "search…"; onChange: { q = value; pg = 0 } }
+      for a in avail.drop(pg * 30).take(30) key a.key {
+        Row {
+          align: center
+          gap: 8
+          onTap: picks = flatten([picks, [a.key]])
+          Image { src: a.icon; size: 32 }
+          Text { text: a.name; weight: 1; maxLines: 1 }
+          Text { text: "+"; width: 20; color: accent }
+        }
+      }
+      Row {
+        align: center
+        gap: 8
+        Button { text: "‹ prev"; width: 80; visible: pg > 0; onTap: pg = pg - 1 }
+        Text { text: "${pg + 1} / ${max(1, ceil(len(avail) / 30))}  (${len(avail)} apps)"; align: center; weight: 1 }
+        Button { text: "next ›"; width: 80; visible: (pg + 1) * 30 < len(avail); onTap: pg = pg + 1 }
+      }
+      Spacer { height: 20 }
+      Row {
+        align: center
+        gap: 8
+        fill: width
+        if !folderMain {
+          Button { text: "sync widget"; weight: 1; onTap: { synced = true; run("n=${int(copyN)}; d=~/.config/omalauncher/widgets; m=$(grep -l '^  let folderMain = true$' $d/*.owl | head -1); case $m in ?*) ;; *) exit 1;; esac; f=$d/$n-folder.owl; pg=$(grep -m1 '^  page:' $f | tr -dc 0-9); { head -1 $f; tail -n +2 $m | sed -e 's/^  order: .*$/  order: '$n'/' -e 's/^  page: .*$/  page: '$pg'/' -e 's/^  let folderMain = true$/  let folderMain = false/' -e 's/^  let copyN = 0$/  let copyN = '$n'/'; } > $f.tmp && mv $f.tmp $f") } }
+        }
+        Button { text: "duplicate widget"; weight: 1; onTap: askCopy = true }
+      }
+    }
+    if askCopy {
+      Box {
+        fill: true
+        align: center
+        background: alpha(background, 0.88)
+        onTap: askCopy = true
+        Column {
+          width: 280
+          gap: 14
+          padding: 20
+          background: surface
+          border: 1
+          borderColor: accent
+          radius: 8 * corners
+          Text { text: "duplicate widget"; fontSize: 16; color: accent }
+          Text { text: "Home page for the new copy:" }
+          Row {
+            align: center
+            gap: 8
+            Button { text: "−"; width: 56; onTap: copyPage = max(1, copyPage - 1) }
+            Text { text: "${copyPage}"; fontSize: 16; align: center; weight: 1 }
+            Button { text: "+"; width: 56; onTap: copyPage = min(9, copyPage + 1) }
+          }
+          Row {
+            gap: 8
+            Button { text: "cancel"; weight: 1; onTap: askCopy = false }
+            Button { text: "create"; weight: 1; onTap: { askCopy = false; run("p=${int(copyPage)}; d=~/.config/omalauncher/widgets; m=$(grep -l '^  let folderMain = true$' $d/*.owl | head -1); case $m in ?*) ;; *) exit 1;; esac; for n in $(seq 31 99); do f=$d/$n-folder.owl; [ -e $f ] || break; done; sed -e 's/^  order: .*$/  order: '$n'/' -e 's/^  page: .*$/  page: '$p'/' -e 's/^  let folderMain = true$/  let folderMain = false/' -e 's/^  let copyN = 0$/  let copyN = '$n'/' $m > $f.tmp && mv $f.tmp $f"); madeCopy = true } }
+          }
+        }
+      }
+    }
+    if madeCopy {
+      Box {
+        fill: true
+        align: center
+        background: alpha(background, 0.88)
+        onTap: madeCopy = true
+        Column {
+          width: 280
+          gap: 14
+          padding: 20
+          background: surface
+          border: 1
+          borderColor: accent
+          radius: 8 * corners
+          Text { text: "copy created"; fontSize: 16; color: accent }
+          Text { text: "A copy of this widget was added to your home screen." }
+          Button { text: "close"; fill: width; onTap: { madeCopy = false; close() } }
+        }
+      }
+    }
+    if synced {
+      Box {
+        fill: true
+        align: center
+        background: alpha(background, 0.88)
+        onTap: synced = true
+        Column {
+          width: 280
+          gap: 14
+          padding: 20
+          background: surface
+          border: 1
+          borderColor: accent
+          radius: 8 * corners
+          Text { text: "synced"; fontSize: 16; color: accent }
+          Text { text: "This widget was updated from the main one." }
+          Button { text: "close"; fill: width; onTap: synced = false }
+        }
+      }
+    }
+    }
+  }
+}

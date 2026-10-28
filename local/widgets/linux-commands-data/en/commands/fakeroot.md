@@ -1,0 +1,85 @@
+# TAGLINE
+
+simulated root environment for package building
+
+# TLDR
+
+Start default shell as **fakeroot**
+
+```fakeroot```
+
+Run a **command** as fakeroot
+
+```fakeroot -- [command] [command_arguments]```
+
+Run command and **save** environment on exit
+
+```fakeroot -s [path/to/file] -- [command] [command_arguments]```
+
+**Load** environment and run command
+
+```fakeroot -i [path/to/file] -- [command] [command_arguments]```
+
+**Keep** real ownership instead of pretending root
+
+```fakeroot [-u|--unknown-is-real] -- [command] [command_arguments]```
+
+Display **help**
+
+```fakeroot [-h|--help]```
+
+# SYNOPSIS
+
+**fakeroot** [_options_] [_command_]
+
+# PARAMETERS
+
+**-s** _file_
+> Save fakeroot environment on exit.
+
+**-i** _file_
+> Load fakeroot environment from a previous session.
+
+**-u**, **--unknown-is-real**
+> Keep real ownership of files not tracked by fakeroot.
+
+**-b** _fd_
+> File descriptor for faked library to use.
+
+**-h**, **--help**
+> Display help.
+
+**-v**, **--version**
+> Display version.
+
+# DESCRIPTION
+
+**fakeroot** runs commands in an environment that fakes root privileges for file manipulation. It intercepts system calls to make files appear owned by root without actual root access.
+
+The tool uses LD_PRELOAD to intercept library calls and maintain a database of fake ownership and permission information. When a program creates a file, fakeroot records it as owned by root (uid 0, gid 0) while the actual file on disk retains the user's ownership.
+
+This is commonly used for building packages (particularly Debian .deb packages) that need to create root-owned files. The saved environment (-s/-i) allows preserving fake ownership across multiple commands and sessions.
+
+# CAVEATS
+
+Does not provide real root privileges. Only fakes ownership information. Used extensively in package building systems like dpkg-buildpackage.
+
+# INSTALL
+
+```dnf: sudo dnf install fakeroot```
+
+```pacman: sudo pacman -S fakeroot```
+
+```apk: sudo apk add fakeroot```
+
+```zypper: sudo zypper install fakeroot```
+
+```brew: brew install fakeroot```
+
+```nix: nix profile install nixpkgs#fakeroot```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[sudo](/man/sudo)(8), [dpkg-buildpackage](/man/dpkg-buildpackage)(1)

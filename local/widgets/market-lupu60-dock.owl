@@ -1,0 +1,455 @@
+widget "dock" {
+  size: 6x2
+  minSize: 4x2
+  padding: 8
+  meta { owl: 9; description: "A dock of app shortcuts, edited on the phone, that opens apps, the browser, the app drawer or a terminal"; version: "1.0"; license: "MIT"; category: "productivity" }
+  requires { pacman: [] }
+  source apps = android.apps
+
+  // Up to 16 slots, edited on the phone: tap the ✎ in the corner.
+  // pkg is an Android app key (from the picker), or "web" (default browser),
+  // "drawer" (app drawer) or "terminal" (a Linux shell).
+  let maxSlots = 16
+  state slots = [
+    { label: "browser", pkg: "web",    art: "globe", icon: null },
+    { label: "apps",    pkg: "drawer", art: "grid",  icon: null }
+  ] persist
+  state sel = 0
+  state tab = "apps"
+
+  // built-ins that aren't Android apps, always offered first in the picker
+  let builtins = [
+    { label: "browser",  pkg: "web",      art: "globe", icon: null },
+    { label: "apps",     pkg: "drawer",   art: "grid",  icon: null },
+    { label: "terminal", pkg: "terminal", art: "term",  icon: null }
+  ]
+  // whatever's actually installed, most used first, so nobody has to type a package name
+  let installed = (apps ?? []).filter(a => a.profile == null && (!a.system || a.score > 0)).sortBy(a => -a.score)
+    .map(a => { label: a.name, pkg: a.key, art: null, icon: a.icon })
+  let presets = flatten([builtins, installed])
+
+  // whichever of these is installed, so "browser" opens it as its own icon would
+  // (resuming where it was left), instead of a url() that always starts a fresh tab
+  let browserPkgs = ["com.android.chrome", "org.mozilla.firefox", "com.sec.android.app.sbrowser",
+    "com.microsoft.emmx", "com.brave.browser", "com.opera.browser", "com.opera.mini.native",
+    "com.duckduckgo.mobile.android", "com.kiwibrowser.browser", "com.vivaldi.browser",
+    "org.fossify.browser", "com.android.browser"]
+  let browserApp = (apps ?? []).find(a => a.profile == null && contains(browserPkgs, a.package))
+
+  // Line icons on a 24-unit grid, stroked in the theme's accent colour
+  let artNames = [
+    "phone", "chat", "camera", "globe", "photo", "grid", "mail", "music", "pin", "gear",
+    "clock", "calendar", "video", "term", "folder", "note", "user", "calc", "bag", "card",
+    "cloud", "bell", "search", "game", "heart", "star", "whatsapp", "signal", "telegram", "slack", "gphotos", "reddit", "x"
+  ]
+  // ellipses, as points, for shapes arcs can't draw
+  let meridian = range(37).map(i => [12 + 4 * sin(rad(i * 10)), 12 - 9.5 * cos(rad(i * 10))])
+  let snooHead = range(37).map(i => [12 + 8.5 * sin(rad(i * 10)), 15 - 6 * cos(rad(i * 10))])
+  let starPts = range(10).map(i => [12 + (i % 2 == 0 ? 9.5 : 4) * sin(rad(i * 36)), 13 - (i % 2 == 0 ? 9.5 : 4) * cos(rad(i * 36))])
+  // dot/square grids for grid, calendar and calc, as point lists rather than nested loops
+  let gridPts = flatten(range(3).map(i => range(3).map(j => [3.5 + i * 6.5, 3.5 + j * 6.5])))
+  let calendarDots = flatten([range(3).map(i => [7.5 + i * 4.5, 14.5]), range(2).map(i => [7.5 + i * 4.5, 18])])
+  let calcDots = flatten(range(2).map(r => range(3).map(c => [8.3 + c * 3.7, 13.5 + r * 4])))
+
+  let pencil = [
+    ".......xx", "......x.x", ".....x.x.", "....x.x..",
+    "...x.x...", "..x.x....", ".x.x.....", "xxx......", "xx......."
+  ]
+
+  // tile layout: one row up to the tile's width, then a second row
+  let n = len(slots)
+  let perRow = clamp(max(min(n, cols ?? 6), ceil(n / max(1, rows ?? 2))), 1, 16)
+  let nRows = max(1, ceil(n / perRow))
+  let cellW = ((tileWidth ?? 400) - 16) / perRow
+  let rowH = ((tileHeight ?? 130) - 16) / nRows
+  let showLabels = rowH >= 72
+  let iconSize = floor(clamp(min(cellW - 8, rowH - (showLabels ? 24 : 6)), 24, 56))
+
+  // Icon artwork as data: one entry per name, each a list of shape ops for the
+  // generic drawer in Icon below. k picks the shape; c is a round cap, f fills
+  // instead of stroking, wd overrides the default stroke width.
+  let iconDefault = { name: "_default", ops: [{ k: "circle", x: 12, y: 12, r: 3, f: true }] }
+  let iconDefs = [
+    { name: "phone", ops: [
+      { k: "path", p: [[5, 3], [9, 3], [11, 8], [8.5, 9.8], [14.2, 15.5], [16, 13], [21, 15], [21, 19], [19, 21], [13, 19.3], [7.5, 15], [4.2, 10], [3, 5.5]], closed: true, c: true }
+    ] },
+    { name: "chat", ops: [
+      { k: "rect", x: 3, y: 4, w: 18, h: 13, r: 3.5 },
+      { k: "path", p: [[7, 17], [6.5, 21], [11.5, 17]], c: true },
+      { k: "line", x1: 7.5, y1: 9, x2: 16.5, y2: 9, c: true },
+      { k: "line", x1: 7.5, y1: 12.5, x2: 13, y2: 12.5, c: true }
+    ] },
+    { name: "camera", ops: [
+      { k: "rect", x: 2, y: 7, w: 20, h: 14, r: 3 },
+      { k: "path", p: [[7.5, 7], [9.3, 4], [14.7, 4], [16.5, 7]], c: true },
+      { k: "circle", x: 12, y: 14, r: 4 }
+    ] },
+    { name: "globe", ops: [
+      { k: "circle", x: 12, y: 12, r: 9.5 },
+      { k: "path", p: meridian },
+      { k: "line", x1: 2.5, y1: 12, x2: 21.5, y2: 12 }
+    ] },
+    { name: "photo", ops: [
+      { k: "rect", x: 3, y: 4, w: 18, h: 16, r: 2.5 },
+      { k: "circle", x: 15.5, y: 9, r: 1.8, f: true },
+      { k: "path", p: [[3.5, 17.5], [9, 12], [14, 17], [16.5, 14.5], [20.5, 18.5]], c: true }
+    ] },
+    { name: "grid", ops: [{ k: "squares", pts: gridPts, s: 4, r: 1.2 }] },
+    { name: "mail", ops: [
+      { k: "rect", x: 2.5, y: 5, w: 19, h: 14, r: 2.5 },
+      { k: "path", p: [[3.5, 6.5], [12, 13], [20.5, 6.5]], c: true }
+    ] },
+    { name: "music", ops: [
+      { k: "path", p: [[9, 18], [9, 5], [20, 3], [20, 16]], c: true },
+      { k: "circle", x: 6.5, y: 18, r: 2.6 },
+      { k: "circle", x: 17.5, y: 16, r: 2.6 }
+    ] },
+    { name: "pin", ops: [
+      { k: "arc", x: 12, y: 10, r: 7, start: 225, sweep: 270 },
+      { k: "path", p: [[7.05, 14.95], [12, 21.5], [16.95, 14.95]], c: true },
+      { k: "circle", x: 12, y: 10, r: 2.5 }
+    ] },
+    { name: "gear", ops: [
+      { k: "rotrep", n: 8, step: 45, cx: 12, cy: 12, ops: [{ k: "line", x1: 12, y1: 2.8, x2: 12, y2: 5, wd: 3.4 }] },
+      { k: "circle", x: 12, y: 12, r: 7 },
+      { k: "circle", x: 12, y: 12, r: 2.8 }
+    ] },
+    { name: "clock", ops: [
+      { k: "circle", x: 12, y: 12, r: 9.5 },
+      { k: "path", p: [[12, 6.5], [12, 12], [15.5, 14.5]], c: true }
+    ] },
+    { name: "calendar", ops: [
+      { k: "rect", x: 3, y: 5, w: 18, h: 16, r: 2.5 },
+      { k: "line", x1: 3, y1: 10, x2: 21, y2: 10 },
+      { k: "line", x1: 8, y1: 3, x2: 8, y2: 7, c: true },
+      { k: "line", x1: 16, y1: 3, x2: 16, y2: 7, c: true },
+      { k: "dots", pts: calendarDots, r: 1.1 }
+    ] },
+    { name: "video", ops: [
+      { k: "rect", x: 2, y: 5, w: 20, h: 14, r: 4 },
+      { k: "path", p: [[10, 9], [15.5, 12], [10, 15]], closed: true, f: true }
+    ] },
+    { name: "term", ops: [
+      { k: "rect", x: 2, y: 4, w: 20, h: 16, r: 2.5 },
+      { k: "path", p: [[6.5, 9], [9.5, 12], [6.5, 15]], c: true },
+      { k: "line", x1: 12, y1: 15, x2: 17, y2: 15, c: true }
+    ] },
+    { name: "folder", ops: [
+      { k: "path", p: [[3, 5], [9, 5], [11, 7.5], [21, 7.5], [21, 19], [3, 19]], closed: true },
+      { k: "line", x1: 3, y1: 10.5, x2: 21, y2: 10.5 }
+    ] },
+    { name: "note", ops: [
+      { k: "path", p: [[5, 3], [14, 3], [19, 8], [19, 21], [5, 21]], closed: true },
+      { k: "path", p: [[14, 3], [14, 8], [19, 8]] },
+      { k: "line", x1: 8.5, y1: 13, x2: 15.5, y2: 13, c: true },
+      { k: "line", x1: 8.5, y1: 17, x2: 12.5, y2: 17, c: true }
+    ] },
+    { name: "user", ops: [
+      { k: "circle", x: 12, y: 8, r: 4 },
+      { k: "arc", x: 12, y: 21, r: 7.5, start: 270, sweep: 180, c: true }
+    ] },
+    { name: "calc", ops: [
+      { k: "rect", x: 4, y: 2, w: 16, h: 20, r: 2.5 },
+      { k: "rect", x: 7.5, y: 5.5, w: 9, h: 3.5, r: 1, f: true },
+      { k: "dots", pts: calcDots, r: 1.1 }
+    ] },
+    { name: "bag", ops: [
+      { k: "path", p: [[4, 8], [20, 8], [19, 21], [5, 21]], closed: true },
+      { k: "arc", x: 12, y: 8, r: 4, start: 270, sweep: 180 }
+    ] },
+    { name: "card", ops: [
+      { k: "rect", x: 2, y: 5, w: 20, h: 14, r: 2.5 },
+      { k: "line", x1: 2, y1: 9.5, x2: 22, y2: 9.5 },
+      { k: "line", x1: 6, y1: 15, x2: 10, y2: 15, c: true }
+    ] },
+    { name: "cloud", ops: [
+      { k: "arc", x: 7, y: 14.5, r: 4, start: 180, sweep: 180 },
+      { k: "arc", x: 12.5, y: 11, r: 5.5, start: 300, sweep: 130 },
+      { k: "arc", x: 17.5, y: 14.5, r: 4, start: 0, sweep: 180 },
+      { k: "line", x1: 7, y1: 18.5, x2: 17.5, y2: 18.5, c: true }
+    ] },
+    { name: "bell", ops: [
+      { k: "arc", x: 12, y: 10, r: 6, start: 270, sweep: 180 },
+      { k: "path", p: [[6, 10], [6, 15], [4, 17.5], [20, 17.5], [18, 15], [18, 10]], c: true },
+      { k: "line", x1: 12, y1: 2.5, x2: 12, y2: 4, c: true },
+      { k: "arc", x: 12, y: 19.5, r: 2.2, start: 90, sweep: 180 }
+    ] },
+    { name: "search", ops: [
+      { k: "circle", x: 10.5, y: 10.5, r: 6.5 },
+      { k: "line", x1: 15.5, y1: 15.5, x2: 21, y2: 21, wd: 2.5, c: true }
+    ] },
+    { name: "game", ops: [
+      { k: "rect", x: 2, y: 7, w: 20, h: 11, r: 5.5 },
+      { k: "line", x1: 7.5, y1: 10.5, x2: 7.5, y2: 14.5, c: true },
+      { k: "line", x1: 5.5, y1: 12.5, x2: 9.5, y2: 12.5, c: true },
+      { k: "circle", x: 15, y: 11.5, r: 1.2, f: true },
+      { k: "circle", x: 17.5, y: 14, r: 1.2, f: true }
+    ] },
+    { name: "heart", ops: [
+      { k: "arc", x: 7.5, y: 9.5, r: 4.5, start: 225, sweep: 225 },
+      { k: "arc", x: 16.5, y: 9.5, r: 4.5, start: 270, sweep: 225 },
+      { k: "path", p: [[4.32, 12.68], [12, 20.5], [19.68, 12.68]], c: true }
+    ] },
+    { name: "star", ops: [{ k: "path", p: starPts, closed: true }] },
+    { name: "whatsapp", ops: [
+      { k: "arc", x: 12, y: 12, r: 9.5, start: 235, sweep: 325 },
+      { k: "path", p: [[4.22, 17.45], [3, 21], [8.75, 20.93]], c: true },
+      { k: "path", p: [[9.06, 7.82], [10.74, 7.82], [11.58, 9.92], [10.53, 10.68], [12.92, 13.07], [13.68, 12.02], [15.78, 12.86], [15.78, 14.54], [14.94, 15.38], [12.42, 14.67], [10.11, 12.86], [8.72, 10.76], [8.22, 8.87]], closed: true, f: true }
+    ] },
+    { name: "signal", ops: [
+      { k: "arcring", x: 12, y: 12, r: 9.5, n: 10, start0: 240, step: 31, sweep: 19 },
+      { k: "circle", x: 12, y: 12, r: 6, f: true },
+      { k: "path", p: [[7.2, 14.2], [6, 18.5], [10.3, 17.3]], closed: true, f: true }
+    ] },
+    { name: "telegram", ops: [
+      { k: "path", p: [[2.5, 11.2], [21.5, 3.5], [17.8, 20.5]], closed: true },
+      { k: "path", p: [[21.5, 3.5], [9.5, 14], [10, 19.5], [13, 16.5]], c: true }
+    ] },
+    { name: "slack", ops: [{ k: "rotrep", n: 4, step: 90, cx: 12, cy: 12, ops: [
+      { k: "line", x1: 9.6, y1: 4, x2: 9.6, y2: 9.6, wd: 3.4 },
+      { k: "circle", x: 4.6, y: 9.6, r: 1.7, f: true }
+    ] }] },
+    { name: "gphotos", ops: [{ k: "rotrep", n: 4, step: 90, cx: 12, cy: 12, ops: [
+      { k: "arc", x: 12, y: 7.25, r: 4.75, start: 180, sweep: 180 },
+      { k: "line", x1: 12, y1: 2.5, x2: 12, y2: 12 }
+    ] }] },
+    { name: "reddit", ops: [
+      { k: "path", p: snooHead },
+      { k: "circle", x: 4.5, y: 10, r: 1.8 },
+      { k: "circle", x: 19.5, y: 10, r: 1.8 },
+      { k: "circle", x: 9, y: 14.5, r: 1.3, f: true },
+      { k: "circle", x: 15, y: 14.5, r: 1.3, f: true },
+      { k: "arc", x: 12, y: 15.5, r: 3.2, start: 125, sweep: 110, wd: 1.6, c: true },
+      { k: "path", p: [[12, 9], [13.5, 3.5], [17.5, 4.5]], wd: 1.6, c: true },
+      { k: "circle", x: 19, y: 4.8, r: 1.5, f: true }
+    ] },
+    { name: "x", ops: [
+      { k: "path", p: [[3.5, 3], [8.5, 3], [20.5, 21], [15.5, 21]], closed: true, wd: 1.7 },
+      { k: "line", x1: 19.5, y1: 3, x2: 13.6, y2: 9.6, c: true },
+      { k: "line", x1: 10.4, y1: 14.4, x2: 4.5, y2: 21, c: true }
+    ] }
+  ]
+
+  // A generic drawer for the ops above, instead of one branch per icon name.
+  component Icon(art, px, tint = accent) {
+    Canvas {
+      size: px * 16
+      let g = px * 16 * 0.6
+      let w = 1.9
+      let ops = (find(iconDefs, d => d.name == art) ?? iconDefault).ops
+      translate((px * 16 - g) / 2, (px * 16 - g) / 2) {
+        scale(g / 24, g / 24, 0, 0) {
+          for o in ops {
+            if o.k == "path" {
+              if o.f { path(o.p, closed: o.closed ?? false, fill: tint) }
+              else if o.c { path(o.p, closed: o.closed ?? false, stroke: tint, width: o.wd ?? w, cap: round) }
+              else { path(o.p, closed: o.closed ?? false, stroke: tint, width: o.wd ?? w) }
+            } else if o.k == "line" {
+              if o.c { line(o.x1, o.y1, o.x2, o.y2, stroke: tint, width: o.wd ?? w, cap: round) }
+              else { line(o.x1, o.y1, o.x2, o.y2, stroke: tint, width: o.wd ?? w) }
+            } else if o.k == "rect" {
+              if o.f { rect(o.x, o.y, o.w, o.h, radius: o.r ?? 0, fill: tint) }
+              else { rect(o.x, o.y, o.w, o.h, radius: o.r ?? 0, stroke: tint, width: o.wd ?? w) }
+            } else if o.k == "circle" {
+              if o.f { circle(o.x, o.y, o.r, fill: tint) }
+              else { circle(o.x, o.y, o.r, stroke: tint, width: o.wd ?? w) }
+            } else if o.k == "arc" {
+              if o.c { arc(o.x, o.y, o.r, o.start, o.sweep, stroke: tint, width: o.wd ?? w, cap: round) }
+              else { arc(o.x, o.y, o.r, o.start, o.sweep, stroke: tint, width: o.wd ?? w) }
+            } else if o.k == "dots" {
+              for p in o.pts { circle(p[0], p[1], o.r, fill: tint) }
+            } else if o.k == "squares" {
+              for p in o.pts { rect(p[0], p[1], o.s, o.s, radius: o.r, fill: tint) }
+            } else if o.k == "rotrep" {
+              for i in range(o.n) {
+                rotate(o.step * i, o.cx, o.cy) {
+                  for o2 in o.ops {
+                    if o2.k == "line" { line(o2.x1, o2.y1, o2.x2, o2.y2, stroke: tint, width: o2.wd ?? w, cap: round) }
+                    else if o2.k == "circle" { circle(o2.x, o2.y, o2.r, fill: tint) }
+                    else { arc(o2.x, o2.y, o2.r, o2.start, o2.sweep, stroke: tint, width: o2.wd ?? w) }
+                  }
+                }
+              }
+            } else if o.k == "arcring" {
+              for i in range(o.n) {
+                arc(o.x, o.y, o.r, o.start0 + i * o.step, o.sweep, stroke: tint, width: w, cap: round)
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  component DockFace(label, art, icon, box, labels) {
+    Column {
+      gap: 4
+      align: center
+      Box {
+        size: box
+        background: surface
+        border: 1
+        borderColor: border
+        align: center
+        if icon != null { Image { src: icon; size: box * 0.7 } } else { Icon { art: art; px: box / 16 } }
+      }
+      if labels {
+        Text { text: label; style: small; color: alpha(foreground, 0.75); align: center; maxLines: 1 }
+      }
+    }
+  }
+
+  component DockApp(label, pkg, art, icon, box, labels) {
+    if pkg == "" || pkg == "drawer" {
+      Column { align: center; onTap: launcher("drawer")
+        DockFace { label: label; art: art; icon: icon; box: box; labels: labels } }
+    } else if pkg == "web" {
+      // opens the browser itself, resuming it, like tapping its own icon would;
+      // only falls back to a fresh tab when no known browser is installed
+      Column { align: center; onTap: if browserApp != null { androidApp(browserApp.key) } else { url("https://www.google.com") }
+        DockFace { label: label; art: art; icon: icon; box: box; labels: labels } }
+    } else if pkg == "terminal" {
+      Column { align: center; onTap: terminal("bash")
+        DockFace { label: label; art: art; icon: icon; box: box; labels: labels } }
+    } else {
+      Column { align: center; onTap: androidApp(pkg)
+        DockFace { label: label; art: art; icon: icon; box: box; labels: labels } }
+    }
+  }
+
+  Box {
+    fill: true
+    Column {
+      fill: true
+      gap: 0
+      justify: spaceEvenly
+      for r in range(nRows) {
+        Row {
+          gap: 0
+          justify: center
+          align: center
+          fill: width
+          for a in slots.drop(r * perRow).take(perRow) {
+            DockApp { label: a.label; pkg: a.pkg; art: a.art; icon: a.icon; box: iconSize; labels: showLabels; width: cellW }
+          }
+        }
+      }
+    }
+    // edit button, tucked into the tile's corner
+    Box {
+      align: topEnd
+      fill: true
+      Box {
+        size: 22
+        offset: [8, -8]
+        align: center
+        opacity: 0.85
+        onTap: { sel = 0; screen() }
+        Canvas { size: 14; sprite(pencil, 0, 0, 1.5, fill: alpha(foreground, 0.6)) }
+      }
+    }
+  }
+
+  screen {
+    title: "edit dock"
+    Column {
+      scroll: true
+      gap: 10
+      padding: 12
+
+      Row {
+        align: center
+        Text { text: "slots  ${n}/${maxSlots}"; style: label; weight: 1 }
+        Button { text: "+ add"; color: n < maxSlots ? accent : muted
+          onTap: { slots = n < maxSlots ? flatten([slots, [{ label: "new", pkg: "drawer", art: "star", icon: null }]]) : slots; sel = n < maxSlots ? n : sel } }
+      }
+      Grid {
+        columns: 6
+        gap: 6
+        for a, i in slots {
+          Column {
+            gap: 2
+            align: center
+            onTap: sel = i
+            Box {
+              size: 48
+              background: surface
+              border: i == sel ? 2 : 1
+              borderColor: i == sel ? accent : border
+              align: center
+              if a.icon != null { Image { src: a.icon; size: 34 } } else { Icon { art: a.art; px: 3 } }
+            }
+            Text { text: a.label; style: small; align: center; maxLines: 1; color: i == sel ? accent : alpha(foreground, 0.75) }
+          }
+        }
+      }
+
+      if sel < n {
+        let s = slots[sel]
+        Row {
+          gap: 6
+          Button { text: "◀ left"; onTap: { slots = range(n).map(i => i == sel - 1 ? slots[sel] : i == sel ? slots[sel - 1] : slots[i]); sel = sel - 1 }; visible: sel > 0 }
+          Button { text: "right ▶"; onTap: { slots = range(n).map(i => i == sel + 1 ? slots[sel] : i == sel ? slots[sel + 1] : slots[i]); sel = sel + 1 }; visible: sel < n - 1 }
+          Spacer { weight: 1 }
+          Button { text: "remove"; color: red; visible: n > 1
+            onTap: { slots = range(n).filter(i => i != sel).map(i => slots[i]); sel = min(sel, n - 2) } }
+        }
+
+        Text { text: "label"; style: label }
+        Input { text: s.label; placeholder: "label"
+          onChange: slots = range(n).map(i => i == sel ? { label: value, pkg: slots[i].pkg, art: slots[i].art, icon: slots[i].icon } : slots[i]) }
+        Text { text: "opens"; style: label }
+        Input { text: s.pkg; placeholder: "package name, web, drawer or terminal"
+          onChange: slots = range(n).map(i => i == sel ? { label: slots[i].label, pkg: trim(value), art: slots[i].art, icon: null } : slots[i]) }
+
+        Row {
+          gap: 6
+          Button { text: "pick app"; color: tab == "apps" ? accent : muted; onTap: tab = "apps" }
+          Button { text: "pick icon"; color: tab == "icons" ? accent : muted; onTap: tab = "icons" }
+        }
+
+        if tab == "icons" {
+          Grid {
+            columns: 6
+            gap: 6
+            for name in artNames {
+              Box {
+                size: 48
+                background: surface
+                border: name == s.art ? 2 : 1
+                borderColor: name == s.art ? accent : border
+                align: center
+                onTap: slots = range(n).map(i => i == sel ? { label: slots[i].label, pkg: slots[i].pkg, art: name, icon: null } : slots[i])
+                Icon { art: name; px: 3 }
+              }
+            }
+          }
+        } else {
+          Grid {
+            columns: 3
+            gap: 6
+            for p in presets {
+              Row {
+                gap: 6
+                align: center
+                padding: [6, 4]
+                background: surface
+                border: 1
+                borderColor: p.pkg == s.pkg ? accent : border
+                onTap: slots = range(n).map(i => i == sel ? { label: p.label, pkg: p.pkg, art: p.art, icon: p.icon } : slots[i])
+                if p.icon != null { Image { src: p.icon; size: 21 } } else { Icon { art: p.art; px: 1.5 } }
+                Text { text: p.label; style: small; maxLines: 1; weight: 1 }
+              }
+            }
+          }
+        }
+      }
+
+      Row {
+        gap: 6
+        Spacer { weight: 1 }
+        Button { text: "done"; color: accent; onTap: close() }
+      }
+    }
+  }
+}

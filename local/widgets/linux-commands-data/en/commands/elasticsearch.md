@@ -1,0 +1,91 @@
+# TAGLINE
+
+distributed search and analytics engine
+
+# TLDR
+
+**Start Elasticsearch**
+
+```elasticsearch```
+
+**Start with specific config**
+
+```elasticsearch -Epath.conf=[/etc/elasticsearch]```
+
+**Start as a background daemon**
+
+```elasticsearch -d -p [/var/run/elasticsearch.pid]```
+
+**Check cluster health**
+
+```curl -X GET "localhost:9200/_cluster/health?pretty"```
+
+**List indices**
+
+```curl -X GET "localhost:9200/_cat/indices?v"```
+
+**Create index**
+
+```curl -X PUT "localhost:9200/[index_name]"```
+
+# SYNOPSIS
+
+**elasticsearch** [_options_]
+
+# PARAMETERS
+
+**-d**, **--daemonize**
+> Run as daemon.
+
+**-p** _pidfile_
+> Write PID to file.
+
+**-E** _setting=value_
+> Configure setting.
+
+**-q**, **--quiet**
+> Quiet output.
+
+**-s**, **--silent**
+> Silent output.
+
+**-v**, **--verbose**
+> Verbose output.
+
+**-V**, **--version**
+> Show version.
+
+# DESCRIPTION
+
+**Elasticsearch** is a distributed search and analytics engine built on Apache Lucene. It provides full-text search, structured search, and analytics capabilities through a RESTful API.
+
+Data is stored as JSON documents in indices (analogous to databases). Elasticsearch automatically distributes data across nodes for scalability and replication. It's commonly used with Kibana for visualization and as part of the ELK stack (Elasticsearch, Logstash, Kibana).
+
+# CONFIGURATION
+
+**/etc/elasticsearch/elasticsearch.yml**
+> Main configuration file for cluster settings, network configuration, and paths.
+
+**/etc/elasticsearch/jvm.options**
+> JVM heap size and garbage collection settings.
+
+**config/elasticsearch.keystore**
+> Secure storage for sensitive settings like passwords.
+
+# CAVEATS
+
+Requires Java runtime. Memory-intensive; configure heap size appropriately. Security disabled by default in older versions. Single-node development mode differs from production clusters. Index mappings should be defined before heavy indexing.
+
+# HISTORY
+
+Elasticsearch was created by **Shay Banon** and first released in **2010**. It grew from his earlier work on Compass. Elastic (the company) was founded in **2012**, and the product became the foundation of the Elastic Stack used for observability and security analytics.
+
+# INSTALL
+
+```nix: nix profile install nixpkgs#elasticsearch```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[opensearch](/man/opensearch)(1), [logstash](/man/logstash)(1), [curl](/man/curl)(1)

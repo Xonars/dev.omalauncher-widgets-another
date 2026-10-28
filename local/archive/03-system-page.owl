@@ -1,0 +1,40 @@
+page "Система" {
+  page: -3
+  meta { owl: 11; description: "Персональная страница: Система"; version: "1.0"; license: "MIT"; category: "productivity" }
+  padding: 0
+  background: alpha(background, 0.95)
+  let card = alpha(surface, 0.85)
+  source sys = android.system every 10s
+  source dev = android.device
+  source bat = android.battery
+  source modes = android.modes
+  Column {
+    fill: true; scroll: true; padding: [20, 16]; gap: 16
+    Text { text: "СИСТЕМА"; style: label; color: accent; letterSpacing: 2 }
+    Text { text: dev.model ?? "Устройство"; fontSize: 30; fontWeight: 300; maxLines: 2 }
+    Column {
+      padding: 16; gap: 10; background: card; radius: 14 * corners
+      Text { text: "БАТАРЕЯ"; style: label; color: accent }
+      Text { text: bat == null ? "Загрузка…" : "${bat.level}%"; fontSize: 48; fontWeight: 300 }
+      Progress { height: 6; value: bat.level ?? 0; max: 100; fill: width }
+      Text { text: bat.charging ? "Заряжается" : "От батареи"; color: muted }
+      Text { text: bat.temp == null ? "" : "Температура: ${bat.temp} °C"; style: small; color: muted }
+    }
+    Column {
+      padding: 16; gap: 12; background: card; radius: 14 * corners
+      Text { text: "РЕСУРСЫ ANDROID"; style: label; color: accent }
+      Text { text: sys == null ? "Загрузка…" : "Память: ${fmtBytes(sys.memory.used)} / ${fmtBytes(sys.memory.total)}"; maxLines: 2 }
+      Progress { height: 6; max: 1; value: sys.memory.total > 0 ? sys.memory.used / sys.memory.total : 0; fill: width }
+      Text { text: sys == null ? "" : "Хранилище: свободно ${fmtBytes(sys.storage.free)}"; maxLines: 2 }
+      Progress { height: 6; max: 1; value: sys.storage.total > 0 ? sys.storage.used / sys.storage.total : 0; fill: width }
+      Text { text: "Время работы: ${fmtDuration(sys.uptime ?? 0)}"; style: small; color: muted; maxLines: 2 }
+    }
+    Text { text: "Android ${dev.android ?? "…"} · OMA ${sys.launcher ?? "…"}"; style: small; color: muted; maxLines: 2 }
+    Button { text: "Тема и оформление"; onTap: launcher("style") }
+    Button { text: "Настройки Wi-Fi"; onTap: url("intent:#Intent;action=android.settings.WIFI_SETTINGS;end") }
+    Button { text: "Память устройства"; onTap: url("intent:#Intent;action=android.settings.INTERNAL_STORAGE_SETTINGS;end") }
+    if modes.torch != null { Button { text: modes.torch ? "Выключить фонарик" : "Включить фонарик"; onTap: torch(!modes.torch) } }
+    Text { text: "Обновление OMA, очистка, сеть и резервная копия — на странице плиток 3"; style: small; color: muted; maxLines: 3 }
+    Spacer { height: screenInset }
+  }
+}

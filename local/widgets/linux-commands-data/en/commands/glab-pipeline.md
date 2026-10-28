@@ -1,0 +1,87 @@
+# TAGLINE
+
+Manage GitLab CI/CD pipelines
+
+# TLDR
+
+**List pipelines**
+
+```glab pipeline list```
+
+**View pipeline**
+
+```glab pipeline view [id]```
+
+**Run pipeline**
+
+```glab pipeline run```
+
+**Run with variables**
+
+```glab pipeline run --variables [KEY:VALUE]```
+
+**Show CI status**
+
+```glab pipeline ci status```
+
+**View jobs**
+
+```glab pipeline ci view```
+
+# SYNOPSIS
+
+**glab** **pipeline** _command_ [_options_]
+
+# SUBCOMMANDS
+
+**list**
+> List pipelines.
+
+**view**
+> View pipeline details.
+
+**run**
+> Trigger pipeline.
+
+**status**
+> Show pipeline status.
+
+**delete**
+> Delete pipeline.
+
+**ci**
+> CI-related commands.
+
+# PARAMETERS
+
+**--variables** _vars_
+> Pipeline variables.
+
+**--branch** _branch_
+> Branch to run on.
+
+# DESCRIPTION
+
+**glab pipeline** manages GitLab CI/CD pipelines from the command line. It provides subcommands for viewing, triggering, and monitoring pipelines, as well as inspecting individual job details and logs.
+
+# INSTALL
+
+```apt: sudo apt install glab```
+
+```dnf: sudo dnf install glab```
+
+```pacman: sudo pacman -S glab```
+
+```apk: sudo apk add glab```
+
+```zypper: sudo zypper install glab```
+
+```brew: brew install glab```
+
+```nix: nix profile install nixpkgs#glab```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[glab](/man/glab)(1)

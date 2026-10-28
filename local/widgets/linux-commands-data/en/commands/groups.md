@@ -1,0 +1,68 @@
+# TAGLINE
+
+display user group memberships
+
+# TLDR
+
+**Show current user groups**
+
+```groups```
+
+**Show groups for user**
+
+```groups [username]```
+
+**Show groups for multiple users**
+
+```groups [user1] [user2]```
+
+# SYNOPSIS
+
+**groups** [_options_] [_users_]
+
+# PARAMETERS
+
+_USERS_
+> Usernames to check groups for.
+
+**--help**
+> Display help information.
+
+**--version**
+> Display version.
+
+# DESCRIPTION
+
+**groups** displays the group memberships for a user. Without arguments, it shows groups for the current user. The primary group is listed first, followed by supplementary groups.
+
+The command reads from **/etc/group** and the user's supplementary group list. It is equivalent to **id -Gn** but with simpler output formatting.
+
+# CAVEATS
+
+Shows cached groups at login. New group memberships require re-login. Primary group shown first.
+
+# HISTORY
+
+groups is a standard Unix command, part of **GNU coreutils** on Linux systems.
+
+# INSTALL
+
+```apt: sudo apt install coreutils```
+
+```dnf: sudo dnf install coreutils```
+
+```pacman: sudo pacman -S coreutils```
+
+```apk: sudo apk add uutils-coreutils-groups```
+
+```zypper: sudo zypper install coreutils```
+
+```brew: brew install coreutils```
+
+```nix: nix profile install nixpkgs#coreutils```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[id](/man/id)(1), [groupmems](/man/groupmems)(8), [newgrp](/man/newgrp)(1)

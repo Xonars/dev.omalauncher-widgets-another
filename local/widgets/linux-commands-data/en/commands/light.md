@@ -1,0 +1,80 @@
+# TAGLINE
+
+controls the backlight brightness of laptop screens and other devices
+
+# TLDR
+
+Get current **backlight** value
+
+```light```
+
+**Set** backlight to 50%
+
+```light -S 50```
+
+**Increase** backlight by 20%
+
+```light -A 20```
+
+**Decrease** backlight by 20%
+
+```light -U 20```
+
+# SYNOPSIS
+
+**light** [_options_]
+
+# DESCRIPTION
+
+**light** controls the backlight brightness of laptop screens and other controllable backlights. It works without X or Wayland and can save and restore brightness levels.
+
+# PARAMETERS
+
+**-S PERCENT**
+> Set brightness to specified percent
+
+**-A PERCENT**
+> Add percent to current brightness
+
+**-U PERCENT**
+> Subtract percent from current brightness
+
+**-G**
+> Get current brightness (default)
+
+**-O**
+> Save current brightness
+
+**-I**
+> Restore previously saved brightness
+
+**-N PERCENT**
+> Set minimum brightness cap
+
+**-P**
+> Get minimum brightness cap
+
+**-L**
+> List available devices
+
+**-s DEVICE**
+> Select specific device
+
+**-r**
+> Interpret values in raw mode (device-specific values instead of percent)
+
+# CAVEATS
+
+May require udev rules for non-root access. Works with devices exposed through /sys/class/backlight. The minimum brightness cap (-N) prevents the display from going completely dark on controllers that turn off at 0.
+
+# INSTALL
+
+```apt: sudo apt install light```
+
+```dnf: sudo dnf install light```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[xbacklight](/man/xbacklight)(1), [brightnessctl](/man/brightnessctl)(1)

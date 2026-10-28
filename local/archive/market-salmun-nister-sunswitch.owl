@@ -1,0 +1,378 @@
+// sunswitch — the Omarchy theme at sunrise and sunset, for a place you pick.
+//
+// The launcher has no "set the theme" action a widget can call, so this writes the theme
+// into the file the Style menu owns, ~/.config/omalauncher/style/style.toml, the way the
+// menu does: only the top-level theme, and only when it changes, so the launcher isn't
+// reloaded for nothing and comments and settings it doesn't own stay as they are.
+//
+// Sunrise and sunset are computed on the spot with the NOAA solar position algorithm — no
+// request, nothing cached to go stale, no key — and the place comes from the phone's own
+// timezone, whose reference coordinates tzdata carries, unless coordinates are typed in the
+// settings screen. So nothing here needs the network at all.
+//
+// The switch itself is an `at` trigger, which still runs with the widget's page off screen,
+// where a source like the clock has stopped: the times wait in `queue`, a persisted list of
+// [Unix time, 1 for the day theme, -1 for the night theme], and every firing takes one off
+// the front and arms the next, so days of switches keep working without the phone
+// looking at the widget. Nothing is written before its time: the theme is applied when a
+// rise or a set arrives, or by the button in the settings screen, never as a correction
+// behind the user's back.
+widget "sunswitch" {
+  meta { owl: 6; description: "Automatically switch your Omarchy theme based on sunrise and sunset. Works completely offline. Choose your day/night themes and set your coordinates (or use timezone approximation)."; version: "1.0"; license: "MIT"; category: "time" }
+  size: 1x1
+  // One cell shows nothing but the mark, drawn in the theme's colours so it follows a theme
+  // change. The same geometry as the app's icon, in its 48x48 box, scaled to the cell.
+  minSize: 1x1
+
+  state oCoords = ""  persist   // "latitude, longitude" typed in the screen; empty: the timezone's
+  state dayTheme = ""    persist   // empty: the first light-looking installed theme
+  state nightTheme = ""  persist
+  state mode = "auto"    persist   // auto: the sun decides; day/night: pin one
+  state queue = []       persist   // [[Unix time, 1|-1], ...] switches still to come
+  state lastFired = 0    persist   // when the last one fired, so a re-plan can't re-arm it
+  state q = ""                     // what is typed in the search field
+  state pick = ""                  // "" hides the theme list; "day"/"night" is which pick it sets
+
+  source now = clock every 1m
+  source sys = android.system every 1h
+  source loc = cmd('awk -F\'\\t\' -v z=' + sh(sys.timezone) + ' \'$1 !~ /^#/ && $3 == z {print $2; exit}\' /usr/share/zoneinfo/zone1970.tab /usr/share/zoneinfo/zone.tab') every 1h
+  // Read with cat, not a file() source: the launcher watches the style folder itself, and
+  // Android keeps one watch per folder per app, so a second watch would take its change events.
+  source style = cmd("cat ~/.config/omalauncher/style/style.toml") every 1m
+  source themes = cmd('for d in "$HOME/.config/omarchy/themes" "$HOME/.local/share/omarchy/themes"; do ls -1p "$d" 2>/dev/null; done') every 10m
+
+  // What size the tile is right now: one cell, a two-cell strip, or room for the lot.
+  // The mark's two inks: the theme's accent for the sun, a translucent foreground
+  // for the trough under it, so both move with the theme.
+  let markInk = accent
+  let markTrough = alpha(foreground, 0.55)
+  let cellW = cols ?? 3
+  let cellH = rows ?? 3
+  let showLogo = cellW < 2 || cellH < 2
+  let compact = !showLogo && (cellW < 3 || cellH < 3)
+
+  let m = match(style ?? "", "theme[ ]*=[ ]*\"([^\"]+)\"")
+  let styleTheme = m != null && len(m) > 0 ? m[0] : ""     // what style.toml says now
+
+  let themeNames = themes == null ? [] : unique(sort(lines(themes).filter(l => endsWith(l, "/")).map(l => replace(l, "/", ""))))
+  // The app's own guess when nothing is chosen: a name that sounds light for the day theme,
+  // and for the night theme the first that doesn't. They are defaults; the screen sets them.
+  let lightWord = ["day", "light", "latte", "white", "dawn", "sun"]
+  let dayPick = dayTheme != "" ? dayTheme : (find(themeNames, n => any(lightWord, w => contains(lower(n), w))) ?? (first(themeNames) ?? ""))
+  let nightPick = nightTheme != "" ? nightTheme : (find(themeNames, n => !any(lightWord, w => contains(lower(n), w))) ?? (first(themeNames) ?? ""))
+
+  // The place, worked out here: the phone's own timezone, and the reference coordinates
+  // tzdata records for it (ISO 6709 in zone1970.tab, +/-DD[MM[SS]] and +/-DDD[MM[SS]],
+  // widths varying per zone). Typed coordinates win; a pair out of range, or a zero pair,
+  // is ignored rather than obeyed.
+  let M = match(loc ?? "", "^([+-])([0-9]+)([+-])([0-9]+)$")
+  let zoneLat = M == null ? 0 : (M[0] == "-" ? -1 : 1) * (num(sub(M[1], 0, 2)) + num(sub(M[1], 2, 4)) / 60 + (len(M[1]) > 4 ? num(sub(M[1], 4, len(M[1]))) / 3600 : 0))
+  let zoneLon = M == null ? 0 : (M[2] == "-" ? -1 : 1) * (num(sub(M[3], 0, 3)) + num(sub(M[3], 3, 5)) / 60 + (len(M[3]) > 5 ? num(sub(M[3], 5, len(M[3]))) / 3600 : 0))
+  let oLat = oCoords == "" ? 0 : num(trim(first(split(oCoords, ","))))
+  let oLon = oCoords == "" ? 0 : num(trim(last(split(oCoords, ","))))
+  let typed = oCoords != "" && abs(oLat) <= 90 && abs(oLon) <= 180 && (oLat != 0 || oLon != 0)
+  let badCoords = oCoords != "" && !typed
+  let lat = typed ? oLat : zoneLat
+  let lon = typed ? oLon : zoneLon
+  let zone = sys == null ? "" : sys.timezone ?? ""
+  let placeReady = typed || (M != null && (zoneLat != 0 || zoneLon != 0))
+  let place = typed ? "Manual Coordinates" : zone
+  let placeShort = typed ? "latlon" : replace(last(split(zone, "/")), "_", " ")
+
+  // The sun, worked out here too. The NOAA solar position algorithm, the one the desktop
+  // sunswitch app uses: no request, no key, nothing to go stale. Three days, because the
+  // place's local date is not the UTC date everywhere and only one of them brackets the
+  // moment. A day number is days since J2000 — `floor(t / 86400) - 10957` — and a day's
+  // rise and set come from its solar transit and the sun's hour angle there. OWL has no
+  // `asin` or `acos`, so both are written as `atan2` with the complementary leg.
+  let D = floor(now / 86400) - 10957
+  let D_m1 = D - 1
+  let d0_m1 = D_m1 - lon / 360
+  let anom_m1 = (357.5291 + 0.98560028 * d0_m1) % 360
+  let center_m1 = 1.9148 * sin(rad(anom_m1)) + 0.02 * sin(rad(2 * anom_m1)) + 0.0003 * sin(rad(3 * anom_m1))
+  let ecl_m1 = (anom_m1 + center_m1 + 180 + 102.9372) % 360
+  let transit_m1 = 2451545 + d0_m1 + 0.0053 * sin(rad(anom_m1)) - 0.0069 * sin(rad(2 * ecl_m1))
+  let sinDecl_m1 = sin(rad(ecl_m1)) * sin(rad(23.44))
+  let decl_m1 = deg(atan2(sinDecl_m1, sqrt(max(1 - sinDecl_m1 * sinDecl_m1, 0))))
+  let cosH_m1 = (cos(rad(90.833)) - sin(rad(lat)) * sin(rad(decl_m1))) / (cos(rad(lat)) * cos(rad(decl_m1)))
+  let hasEvent_m1 = cosH_m1 > -1 && cosH_m1 < 1
+  let h_m1 = hasEvent_m1 ? deg(atan2(sqrt(max(1 - cosH_m1 * cosH_m1, 0)), cosH_m1)) : 0
+  let rise_m1 = hasEvent_m1 ? (transit_m1 - h_m1 / 360 - 2440587.5) * 86400 : null
+  let set_m1 = hasEvent_m1 ? (transit_m1 + h_m1 / 360 - 2440587.5) * 86400 : null
+  let D_z = D
+  let d0_z = D_z - lon / 360
+  let anom_z = (357.5291 + 0.98560028 * d0_z) % 360
+  let center_z = 1.9148 * sin(rad(anom_z)) + 0.02 * sin(rad(2 * anom_z)) + 0.0003 * sin(rad(3 * anom_z))
+  let ecl_z = (anom_z + center_z + 180 + 102.9372) % 360
+  let transit_z = 2451545 + d0_z + 0.0053 * sin(rad(anom_z)) - 0.0069 * sin(rad(2 * ecl_z))
+  let sinDecl_z = sin(rad(ecl_z)) * sin(rad(23.44))
+  let decl_z = deg(atan2(sinDecl_z, sqrt(max(1 - sinDecl_z * sinDecl_z, 0))))
+  let cosH_z = (cos(rad(90.833)) - sin(rad(lat)) * sin(rad(decl_z))) / (cos(rad(lat)) * cos(rad(decl_z)))
+  let hasEvent_z = cosH_z > -1 && cosH_z < 1
+  let h_z = hasEvent_z ? deg(atan2(sqrt(max(1 - cosH_z * cosH_z, 0)), cosH_z)) : 0
+  let rise_z = hasEvent_z ? (transit_z - h_z / 360 - 2440587.5) * 86400 : null
+  let set_z = hasEvent_z ? (transit_z + h_z / 360 - 2440587.5) * 86400 : null
+  let D_p1 = D + 1
+  let d0_p1 = D_p1 - lon / 360
+  let anom_p1 = (357.5291 + 0.98560028 * d0_p1) % 360
+  let center_p1 = 1.9148 * sin(rad(anom_p1)) + 0.02 * sin(rad(2 * anom_p1)) + 0.0003 * sin(rad(3 * anom_p1))
+  let ecl_p1 = (anom_p1 + center_p1 + 180 + 102.9372) % 360
+  let transit_p1 = 2451545 + d0_p1 + 0.0053 * sin(rad(anom_p1)) - 0.0069 * sin(rad(2 * ecl_p1))
+  let sinDecl_p1 = sin(rad(ecl_p1)) * sin(rad(23.44))
+  let decl_p1 = deg(atan2(sinDecl_p1, sqrt(max(1 - sinDecl_p1 * sinDecl_p1, 0))))
+  let cosH_p1 = (cos(rad(90.833)) - sin(rad(lat)) * sin(rad(decl_p1))) / (cos(rad(lat)) * cos(rad(decl_p1)))
+  let hasEvent_p1 = cosH_p1 > -1 && cosH_p1 < 1
+  let h_p1 = hasEvent_p1 ? deg(atan2(sqrt(max(1 - cosH_p1 * cosH_p1, 0)), cosH_p1)) : 0
+  let rise_p1 = hasEvent_p1 ? (transit_p1 - h_p1 / 360 - 2440587.5) * 86400 : null
+  let set_p1 = hasEvent_p1 ? (transit_p1 + h_p1 / 360 - 2440587.5) * 86400 : null
+  // Which of the three owns the moment: the middle one, its hour angle wrapped.
+  let transitEpoch = (transit_z - 2440587.5) * 86400
+  let ha = (now - transitEpoch) / 3600 * 15
+  let sinAlt = sin(rad(lat)) * sin(rad(decl_z)) + cos(rad(lat)) * cos(rad(decl_z)) * cos(rad(ha))
+  let alt = deg(atan2(sinAlt, sqrt(max(1 - sinAlt * sinAlt, 0))))
+  let up = alt > -0.833
+  // What to arm, oldest first, and the two the table names: the last rise behind us and the
+  // next set ahead, which is the pair that describes the day the reader is in.
+  let events = [[rise_m1, 1], [set_m1, -1], [rise_z, 1], [set_z, -1], [rise_p1, 1], [set_p1, -1]].filter(e => e[0] != null)
+  let rises = events.filter(e => e[1] == 1)
+  let sets = events.filter(e => e[1] == -1)
+  let lastRise = last(rises.filter(e => e[0] <= now))[0] ?? (first(rises)[0] ?? null)
+  let nextSet = first(sets.filter(e => e[0] >= now))[0] ?? (last(sets)[0] ?? null)
+
+  // What the moment calls for: the sun's own height decides, so a moment either side of a
+  // rise or a set, and the polar day and night, all land right.
+  let wanted = mode == "day" ? dayPick : mode == "night" ? nightPick : up ? dayPick : nightPick
+
+  // The queue's next filling: what the sun has coming, oldest first.
+  let after = max(now, lastFired)
+  let plan = mode == "auto" ? events.filter(e => e[0] > after).sortBy(e => e[0]).take(14) : []
+
+  let next = len(queue) > 0 ? queue[0][0] : 0
+  let nextIsDay = len(queue) > 0 && queue[0][1] == 1
+  let inNext = max(next - now, 0)
+  // The table in the settings screen: what style.toml says now, the two times, the two
+  // themes and what the next armed switch brings. The separators are template text, not
+  // values: a value that is nothing but a literal loses its spaces.
+  let nextTheme = nextIsDay ? dayPick : nightPick
+  let nowThemeText = styleTheme == "" ? "—" : styleTheme
+  let nextThemeText = next == 0 || nextTheme == "" ? "—" : nextTheme
+  let nextKindText = next == 0 ? "—" : nextIsDay ? "day" : "night"
+  let nextWhenText = next == 0 ? "—" : fmtTime(next, "HH:mm")
+  let riseText = lastRise == null ? "—" : fmtTime(lastRise, "HH:mm")
+  let setText = nextSet == null ? "—" : fmtTime(nextSet, "HH:mm")
+
+  // The queue keeps itself: topped up while the horizon runs low, re-planned when the place
+  // moves or the mode changes (a pinned mode arms nothing). `now > 0` keeps a filling from
+  // happening before the clock has a value at all. A fetch that fails leaves `daily` null,
+  // so none of these fire and the armed times stand.
+  when mode == "auto" && placeReady && now > 0 && len(queue) < 3 { queue = plan }
+  on lat { queue = plan }
+  on mode { queue = plan }
+
+  // The switch. It reads the head of the queue itself, not a let, so it doesn't matter what
+  // the engine has recomputed by the time this runs. The theme goes into the command
+  // through sh(), as one quoted word; the file edit is the same shape as the Style menu's,
+  // setting the top-level theme and dropping a background the new theme doesn't have.
+  at next {
+    lastFired = queue[0][0]
+    run("f=$HOME/.config/omalauncher/style/style.toml; t=${sh(queue[0][1] == 1 ? dayPick : nightPick)}; [ -z \"$t\" ] && exit 0; c=$(awk -F'\"' '/^[ ]*theme[ ]*=/{print $2;exit}' \"$f\"); [ \"$c\" = \"$t\" ] && exit 0; b=$(awk -F'\"' '/^[ ]*background[ ]*=/{print $2;exit}' \"$f\"); k=1; if [ -n \"$b\" ]; then k=0; for d in \"$HOME/.config/omarchy/themes\" \"$HOME/.local/share/omarchy/themes\"; do [ -f \"$d/$t/backgrounds/$b\" ] && k=1; done; [ -f \"$HOME/.config/omarchy/backgrounds/$t/$b\" ] && k=1; fi; awk -v q='\"' -v t=\"$t\" -v k=\"$k\" '!s && /^[ ]*\\[/ {if (!d) {print \"theme = \" q t q; d=1} s=1} !s && /^[ ]*theme[ ]*=/ {if (!d) {print \"theme = \" q t q; d=1} next} !s && k == 0 && /^[ ]*background[ ]*=/ {next} {print} END {if (!d) print \"theme = \" q t q}' \"$f\" > \"$f.new\" && mv \"$f.new\" \"$f\"")
+    queue = drop(queue, 1)
+  }
+
+  onTap: screen()
+
+  Column {
+    gap: 4
+    if showLogo {
+      // One cell: just the mark, as big as the tile allows.
+      Canvas {
+        let s = min(width, height) / 48
+        translate((width - 48 * s) / 2, (height - 48 * s) / 2) {
+          scale(s, s) {
+            line(24, 4, 24, 9.5, stroke: markInk, width: 2.6, cap: round)
+            line(9.7, 9.7, 13.6, 13.6, stroke: markInk, width: 2.6, cap: round)
+            line(38.3, 9.7, 34.4, 13.6, stroke: markInk, width: 2.6, cap: round)
+            line(5, 24, 10.5, 24, stroke: markInk, width: 2.6, cap: round)
+            line(43, 24, 37.5, 24, stroke: markInk, width: 2.6, cap: round)
+            arc(24, 26.5, 11.5, 270, 180, fill: markInk)
+            line(6, 26.5, 42, 26.5, stroke: markInk, width: 2.6, cap: round)
+            rect(13.5, 31.5, 21, 4, fill: markTrough)
+            arc(24, 35.5, 10.5, 90, 180, fill: markTrough)
+          }
+        }
+      }
+    } else if compact {
+      // Two cells: the day's pair and when the next switch is. No theme names — two cells
+      // of width can't hold them without cutting them off.
+      Text { text: "↑ ${lastRise == null ? "—" : fmtTime(lastRise, "HH:mm")}"; fontSize: 12; maxLines: 1 }
+      Text { text: "↓ ${nextSet == null ? "—" : fmtTime(nextSet, "HH:mm")}"; fontSize: 12; maxLines: 1 }
+      Text { text: mode != "auto" ? "pinned to ${wanted}" : next == 0 ? "nothing armed yet" : "${nextIsDay ? "sunrise" : "sunset"} ${fmtDuration(inNext)}"; fontSize: 12; color: accent; maxLines: 1 }
+    } else {
+      Row {
+        gap: 6
+        align: center
+        Text { text: "sunswitch"; style: label; color: muted; weight: 1 }
+        Text { text: place == "" ? "" : placeShort; style: label; color: muted; maxLines: 1; width: 104; align: end }
+      }
+      if !placeReady {
+        Text { text: "no coordinates yet"; style: body }
+        Text { text: "tap to set them, or let the timezone say"; style: small; color: muted; maxLines: 2 }
+      } else {
+        Text { text: "↑ ${lastRise == null ? "—" : fmtTime(lastRise, "HH:mm")}  ${dayPick}"; fontSize: 12; maxLines: 1 }
+        Text { text: "↓ ${nextSet == null ? "—" : fmtTime(nextSet, "HH:mm")}  ${nightPick}"; fontSize: 12; maxLines: 1 }
+        Text { text: mode != "auto" ? "pinned to ${wanted}" : next == 0 ? "nothing armed yet" : "${nextIsDay ? "sunrise" : "sunset"} in ${fmtDuration(inNext)}"; fontSize: 12; color: accent; maxLines: 1 }
+        Text { text: up ? "the sun is up" : "the sun is down"; style: small; color: muted; maxLines: 1 }
+        Text { text: styleTheme == wanted ? "theme ${styleTheme == "" ? "—" : styleTheme}" : "want ${wanted == "" ? "—" : wanted}"; style: small; color: styleTheme == wanted ? muted : accent; maxLines: 1 }
+      }
+    }
+  }
+
+  screen {
+    title: "sunswitch"
+    Column {
+      gap: 12
+      padding: [12, 0]
+      scroll: true
+
+      if !placeReady {
+        Text { text: "where is the sun watched?"; style: title }
+        Text { text: "the coordinates could not be read from the timezone, so type them below"; style: small; color: muted; maxLines: 2 }
+      } else {
+        Text { text: place; style: title; maxLines: 1 }
+        Text { text: "${fixed(lat, 3)}, ${fixed(lon, 3)}${typed ? " · manual" : " · from the timezone"}"; style: small; color: muted; maxLines: 1 }
+      }
+      Text { text: "place"; style: label; color: accent }
+      Text { text: "The timezone's reference city is usually within minutes of the sun, up to about half an hour across most zones. Decimal degrees only, like 12.3456, -78.9012."; style: small; color: muted; maxLines: 3 }
+      Input {
+        text: oCoords
+        placeholder: "decimal latitude, longitude"
+        fontSize: 16
+        onSubmit: oCoords = trim(value)
+      }
+      if badCoords { Text { text: "only decimal degrees are read, like 12.3456, -78.9012 — using the timezone instead"; style: small; color: accent; maxLines: 2 } }
+      if oCoords != "" { Button { text: "use the phone's timezone"; color: muted; onTap: oCoords = "" } }
+
+      Text { text: "themes"; style: label; color: accent }
+      Row {
+        gap: 8
+        Column {
+          gap: 2
+          weight: 1
+          padding: [10, 8]
+          background: pick == "day" ? alpha(accent, 0.12) : surface
+          border: 1
+          borderColor: pick == "day" ? accent : border
+          radius: 6 * corners
+          Text { text: "sun is up"; style: label; color: pick == "day" ? accent : muted; maxLines: 1 }
+          Text { text: dayPick == "" ? "—" : dayPick; style: body; maxLines: 1 }
+          Text { text: "sunrise theme"; style: label; color: muted }
+          onTap: pick = pick == "day" ? "" : "day"
+        }
+        Column {
+          gap: 2
+          weight: 1
+          padding: [10, 8]
+          background: pick == "night" ? alpha(accent, 0.12) : surface
+          border: 1
+          borderColor: pick == "night" ? accent : border
+          radius: 6 * corners
+          Text { text: "sun is down"; style: label; color: pick == "night" ? accent : muted; maxLines: 1 }
+          Text { text: nightPick == "" ? "—" : nightPick; style: body; maxLines: 1 }
+          Text { text: "sunset theme"; style: label; color: muted }
+          onTap: pick = pick == "night" ? "" : "night"
+        }
+      }
+      // The list only shows while one of the two above is picked, and closes again the
+      // moment a theme is taken.
+      if pick == "" {
+        Text { text: "tap sun is up or sun is down to choose that theme"; style: small; color: muted }
+      } else {
+        Text { text: pick == "day" ? "tap a theme to use it while the sun is up" : "tap a theme to use it while the sun is down"; style: small; color: muted }
+        Grid {
+          columns: 2
+          gap: 6
+          // One theme per card, tinted while it is the sunrise or the sunset theme.
+          for t in themeNames {
+            Column {
+              gap: 0
+              padding: [8, 6]
+              background: (pick == "day" ? t == dayPick : t == nightPick) ? alpha(accent, 0.14) : surface
+              border: 1
+              borderColor: (pick == "day" ? t == dayPick : t == nightPick) ? accent : border
+              radius: 5 * corners
+              Text { text: t; style: small; maxLines: 1; color: (pick == "day" ? t == dayPick : t == nightPick) ? accent : foreground }
+              Text { text: t == dayPick ? (t == nightPick ? "sunrise · sunset" : "sunrise") : t == nightPick ? "sunset" : " "; style: label; color: muted; maxLines: 1 }
+              onTap: { dayTheme = pick == "day" ? t : dayTheme; nightTheme = pick == "night" ? t : nightTheme; pick = "" }
+            }
+          }
+        }
+      }
+
+      Text { text: "when"; style: label; color: accent }
+      Row {
+        gap: 8
+        Button { text: "auto"; color: mode == "auto" ? accent : muted; onTap: mode = "auto" }
+        Button { text: "always day"; color: mode == "day" ? accent : muted; onTap: mode = "day" }
+        Button { text: "always night"; color: mode == "night" ? accent : muted; onTap: mode = "night" }
+      }
+      Text { text: mode == "auto" ? "the theme follows the sun" : "one theme stays, whatever the sun does"; style: small; color: muted }
+
+      if place != "" {
+        Text { text: "now"; style: label; color: accent }
+        // A table, no cell borders: a label column of its own width and values beside it.
+        // A theme the mode doesn't use reads "disabled" rather than pretending to matter.
+        Column {
+          gap: 6
+          Row {
+            gap: 8
+            align: center
+            Text { text: "now"; style: label; color: muted; width: 74; maxLines: 1 }
+            Text { text: "${nowThemeText}"; style: body; weight: 1; maxLines: 1 }
+          }
+          Row {
+            gap: 8
+            align: center
+            Text { text: "next"; style: label; color: muted; width: 74; maxLines: 1 }
+            Text { text: mode != "auto" || next == 0 ? "disabled" : "${nextThemeText} (${nextKindText}) @ ${nextWhenText}"; style: body; weight: 1; maxLines: 1; color: mode != "auto" || next == 0 ? muted : accent }
+          }
+          Row {
+            gap: 8
+            align: center
+            Text { text: "sunrise"; style: label; color: muted; width: 74; maxLines: 1 }
+            Text { text: riseText; style: body; weight: 1; maxLines: 1 }
+          }
+          Row {
+            gap: 8
+            align: center
+            Text { text: "day"; style: label; color: muted; width: 74; maxLines: 1 }
+            Text { text: mode == "night" ? "disabled" : dayPick == "" ? "—" : dayPick; style: body; weight: 1; maxLines: 1; color: mode == "night" ? muted : foreground }
+          }
+          Row {
+            gap: 8
+            align: center
+            Text { text: "sunset"; style: label; color: muted; width: 74; maxLines: 1 }
+            Text { text: setText; style: body; weight: 1; maxLines: 1 }
+          }
+          Row {
+            gap: 8
+            align: center
+            Text { text: "night"; style: label; color: muted; width: 74; maxLines: 1 }
+            Text { text: mode == "day" ? "disabled" : nightPick == "" ? "—" : nightPick; style: body; weight: 1; maxLines: 1; color: mode == "day" ? muted : foreground }
+          }
+        }
+        // The same edit the switch trigger makes, run straight away instead of armed: run()
+        // is a background command, so the tap doesn't wait for the file or the network, and
+        // the store's checker wants a command's values inline, so the text is written out
+        // here again rather than shared with the trigger.
+        Button {
+          text: "apply"
+          color: styleTheme == wanted ? muted : accent
+          onTap: run("f=$HOME/.config/omalauncher/style/style.toml; t=${sh(wanted)}; [ -z \"$t\" ] && exit 0; c=$(awk -F'\"' '/^[ ]*theme[ ]*=/{print $2;exit}' \"$f\"); [ \"$c\" = \"$t\" ] && exit 0; b=$(awk -F'\"' '/^[ ]*background[ ]*=/{print $2;exit}' \"$f\"); k=1; if [ -n \"$b\" ]; then k=0; for d in \"$HOME/.config/omarchy/themes\" \"$HOME/.local/share/omarchy/themes\"; do [ -f \"$d/$t/backgrounds/$b\" ] && k=1; done; [ -f \"$HOME/.config/omarchy/backgrounds/$t/$b\" ] && k=1; fi; awk -v q='\"' -v t=\"$t\" -v k=\"$k\" '!s && /^[ ]*\\[/ {if (!d) {print \"theme = \" q t q; d=1} s=1} !s && /^[ ]*theme[ ]*=/ {if (!d) {print \"theme = \" q t q; d=1} next} !s && k == 0 && /^[ ]*background[ ]*=/ {next} {print} END {if (!d) print \"theme = \" q t q}' \"$f\" > \"$f.new\" && mv \"$f.new\" \"$f\"")
+        }
+        Text { text: "Omalauncher can take up to 30s to apply themes."; style: small; color: muted; maxLines: 1 }
+        Text { text: "The times are shown on this phone's clock. Switching writes style.toml, so it needs Linux."; style: small; color: muted; maxLines: 3 }
+      }
+      Button { text: "close"; color: muted; onTap: close() }
+    }
+  }
+}

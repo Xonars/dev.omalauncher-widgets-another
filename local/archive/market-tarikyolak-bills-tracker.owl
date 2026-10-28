@@ -1,0 +1,510 @@
+widget "bills tracker" {
+  size: 3x3
+  minSize: 3x2
+  padding: 8
+  meta {
+    owl: 11
+    version: "1.0"
+    license: "MIT"
+    category: "productivity"
+    description: "Offline recurring bills with a resizable upcoming-payment list, payment history, currency options and read-only lock."
+  }
+
+  requires { pacman: [] }
+
+  // Everything stays on the device; no API, bank connection or shell commands.
+  state bills = [] persist
+  state payments = [] persist
+  state editing = false
+  state editingId = 0
+  state formName = ""
+  state formAmount = ""
+  state formFrequency = "monthly"
+  state formDue = ""
+  state formError = ""
+  state confirmDeleteId = 0
+  state confirmClearHistory = false
+  state paymentHistoryLimit = 5
+  state currencyCode = "GBP" persist
+  state choosingCurrency = false
+  // A convenience lock against accidental changes, not a security password.
+  state locked = false persist
+
+  let currencies = [
+    {code: "GBP", symbol: "£", flag: "🇬🇧"}, {code: "EUR", symbol: "€", flag: "🇪🇺"},
+    {code: "USD", symbol: "$", flag: "🇺🇸"}, {code: "TRY", symbol: "₺", flag: "🇹🇷"},
+    {code: "CAD", symbol: "C$", flag: "🇨🇦"}, {code: "AUD", symbol: "A$", flag: "🇦🇺"},
+    {code: "NZD", symbol: "NZ$", flag: "🇳🇿"}, {code: "CHF", symbol: "CHF ", flag: "🇨🇭"},
+    {code: "JPY", symbol: "¥", flag: "🇯🇵"}, {code: "CNY", symbol: "CN¥", flag: "🇨🇳"},
+    {code: "SYP", symbol: "SYP ", flag: "🇸🇾"},
+    {code: "INR", symbol: "₹", flag: "🇮🇳"}, {code: "AED", symbol: "AED ", flag: "🇦🇪"},
+    {code: "SAR", symbol: "SAR ", flag: "🇸🇦"}, {code: "SEK", symbol: "kr ", flag: "🇸🇪"},
+    {code: "NOK", symbol: "kr ", flag: "🇳🇴"}, {code: "DKK", symbol: "kr ", flag: "🇩🇰"},
+    {code: "PLN", symbol: "zł ", flag: "🇵🇱"}, {code: "CZK", symbol: "Kč ", flag: "🇨🇿"},
+    {code: "HUF", symbol: "Ft ", flag: "🇭🇺"}, {code: "RON", symbol: "lei ", flag: "🇷🇴"},
+    {code: "BRL", symbol: "R$", flag: "🇧🇷"}, {code: "MXN", symbol: "MX$", flag: "🇲🇽"},
+    {code: "ZAR", symbol: "R", flag: "🇿🇦"}, {code: "SGD", symbol: "S$", flag: "🇸🇬"},
+    {code: "HKD", symbol: "HK$", flag: "🇭🇰"}, {code: "KRW", symbol: "₩", flag: "🇰🇷"},
+    {code: "THB", symbol: "฿", flag: "🇹🇭"}, {code: "MYR", symbol: "RM ", flag: "🇲🇾"},
+    {code: "IDR", symbol: "Rp ", flag: "🇮🇩"}, {code: "PHP", symbol: "₱", flag: "🇵🇭"},
+    {code: "ILS", symbol: "₪", flag: "🇮🇱"}, {code: "PKR", symbol: "Rs ", flag: "🇵🇰"},
+    {code: "EGP", symbol: "E£", flag: "🇪🇬"}, {code: "NGN", symbol: "₦", flag: "🇳🇬"},
+    {code: "BDT", symbol: "৳", flag: "🇧🇩"}, {code: "VND", symbol: "₫", flag: "🇻🇳"},
+    {code: "UAH", symbol: "₴", flag: "🇺🇦"}, {code: "TWD", symbol: "NT$", flag: "🇹🇼"},
+    {code: "ALL", symbol: "L ", flag: "🇦🇱"}, {code: "BAM", symbol: "KM ", flag: "🇧🇦"},
+    {code: "GEL", symbol: "₾", flag: "🇬🇪"}, {code: "ISK", symbol: "kr ", flag: "🇮🇸"},
+    {code: "RSD", symbol: "RSD ", flag: "🇷🇸"}, {code: "RUB", symbol: "₽", flag: "🇷🇺"},
+    {code: "MKD", symbol: "MKD ", flag: "🇲🇰"}, {code: "MDL", symbol: "L ", flag: "🇲🇩"},
+    {code: "KZT", symbol: "₸", flag: "🇰🇿"}, {code: "NPR", symbol: "Rs ", flag: "🇳🇵"},
+    {code: "LKR", symbol: "Rs ", flag: "🇱🇰"}, {code: "BND", symbol: "B$", flag: "🇧🇳"},
+    {code: "KHR", symbol: "៛", flag: "🇰🇭"}, {code: "MNT", symbol: "₮", flag: "🇲🇳"},
+    {code: "BHD", symbol: "BD ", flag: "🇧🇭"}, {code: "JOD", symbol: "JD ", flag: "🇯🇴"},
+    {code: "KWD", symbol: "KD ", flag: "🇰🇼"}, {code: "OMR", symbol: "OMR ", flag: "🇴🇲"},
+    {code: "QAR", symbol: "QR ", flag: "🇶🇦"}, {code: "MAD", symbol: "DH ", flag: "🇲🇦"},
+    {code: "DZD", symbol: "DA ", flag: "🇩🇿"}, {code: "TND", symbol: "DT ", flag: "🇹🇳"},
+    {code: "ARS", symbol: "AR$", flag: "🇦🇷"}, {code: "CLP", symbol: "CL$", flag: "🇨🇱"},
+    {code: "COP", symbol: "CO$", flag: "🇨🇴"}, {code: "PEN", symbol: "S/", flag: "🇵🇪"},
+    {code: "UYU", symbol: "$U", flag: "🇺🇾"}, {code: "CRC", symbol: "₡", flag: "🇨🇷"},
+    {code: "DOP", symbol: "RD$", flag: "🇩🇴"}, {code: "JMD", symbol: "J$", flag: "🇯🇲"},
+    {code: "PYG", symbol: "₲", flag: "🇵🇾"}, {code: "KES", symbol: "KSh ", flag: "🇰🇪"},
+    {code: "GHS", symbol: "GH₵", flag: "🇬🇭"}, {code: "ETB", symbol: "Br ", flag: "🇪🇹"},
+    {code: "MUR", symbol: "Rs ", flag: "🇲🇺"}, {code: "BWP", symbol: "P ", flag: "🇧🇼"},
+    {code: "BYN", symbol: "Br ", flag: "🇧🇾"}, {code: "UZS", symbol: "UZS ", flag: "🇺🇿"},
+    {code: "AFN", symbol: "AFN ", flag: "🇦🇫"}, {code: "MMK", symbol: "K ", flag: "🇲🇲"},
+    {code: "BOB", symbol: "Bs ", flag: "🇧🇴"}, {code: "GTQ", symbol: "Q ", flag: "🇬🇹"},
+    {code: "TTD", symbol: "TT$", flag: "🇹🇹"}, {code: "TZS", symbol: "TSh ", flag: "🇹🇿"},
+    {code: "UGX", symbol: "USh ", flag: "🇺🇬"}, {code: "ZMW", symbol: "ZK ", flag: "🇿🇲"}
+  ]
+  let selectedCurrency = currencies.find(c => c.code == currencyCode)
+  let currencySymbol = selectedCurrency == null ? "£" : selectedCurrency.symbol
+  let currencyFlag = selectedCurrency == null ? "" : selectedCurrency.flag
+
+  source now = clock every 1m
+
+  let today = fmtTime(now, "yyyy-MM-dd")
+  let thisMonth = fmtTime(now, "yyyy-MM")
+  let sortedBills = bills.sortBy(b => b.due)
+  let nextBill = first(sortedBills)
+  let overdue = bills.filter(b => b.due < today)
+  let dueThisMonth = bills.filter(b => startsWith(b.due, thisMonth))
+  let dueTotal = sum(dueThisMonth.map(b => b.amount))
+  let paidThisMonth = payments.filter(p => startsWith(p.paidAt, thisMonth))
+  let paidTotal = sum(paidThisMonth.map(p => p.amount))
+  let monthlyAverage = sum(bills.map(b => b.frequency == "weekly" ? b.amount * 52 / 12 : b.frequency == "yearly" ? b.amount / 12 : b.amount))
+  // Compact bills list follows tile height. The minimum tile shows 2,
+  // the default 3x3 shows 5, and taller sizes reveal more.
+  let tileRows = max(2, round(3 * (tileHeight ?? 250) / max(1, tileWidth ?? 250)))
+  // Denser rows in compact tiles keep five upcoming bills and totals visible.
+  let compactTile = true
+  let upcomingCount = tileRows < 3 ? 1 : 5 + (tileRows - 3) * 4
+  let upcomingBills = sortedBills.take(upcomingCount)
+  let lastUpcoming = last(upcomingBills)
+  let nextDueCount = nextBill == null ? 0 : len(bills.filter(b => b.due == nextBill.due))
+  let validName = len(trim(formName)) > 0 && len(trim(formName)) <= 60
+  let amountNumber = num(trim(formAmount))
+  let validAmount = trim(formAmount) != "" && amountNumber != null && amountNumber > 0 && amountNumber <= 1000000
+  // Show and accept UK-style dates, while keeping ISO dates in saved records.
+  let dueInput = trim(formDue)
+  let isoDue = len(dueInput) == 10 ? "${sub(dueInput, 6, 10)}-${sub(dueInput, 3, 5)}-${sub(dueInput, 0, 2)}" : ""
+  let parsedDue = parseTime("${isoDue}T12:00:00Z")
+  let validDue = len(dueInput) == 10 && sub(dueInput, 2, 3) == "/" && sub(dueInput, 5, 6) == "/" && parsedDue != null && fmtTime(parsedDue, "yyyy-MM-dd", "UTC") == isoDue
+
+  onTap: { editing = false; screen() }
+
+  Column {
+    fill: true
+    gap: compactTile ? 5 : 7
+    Row {
+      Text { text: "BILLS TRACKER"; bold: true; color: accent; fontSize: 13; weight: 1; maxLines: 1 }
+      if locked { Text { text: "LOCKED"; fontSize: 12; color: muted; align: end } }
+    }
+    if len(bills) == 0 {
+      Spacer { weight: 1 }
+      Text { text: "No bills yet"; fontSize: 18; bold: true; align: center }
+      Text { text: "Tap to add your first bill"; fontSize: 12; color: muted; align: center }
+      Spacer { weight: 1 }
+    } else {
+      Row {
+        Column {
+          gap: compactTile ? 1 : 2
+          weight: 1
+          Text { text: "MONTHLY AVERAGE"; fontSize: 10; color: muted }
+          Text { text: "${currencySymbol}${fmtNum(monthlyAverage, 2)}"; fontSize: compactTile ? 22 : 24; bold: true; color: foreground; maxLines: 1 }
+        }
+        Column {
+          gap: compactTile ? 1 : 2
+          Text { text: "OVERDUE"; fontSize: 10; color: muted; align: end }
+          Text { text: "${len(overdue)}"; fontSize: compactTile ? 20 : 22; bold: true; align: end; color: len(overdue) > 0 ? red : green }
+        }
+      }
+      Column {
+        padding: compactTile ? 5 : 8
+        gap: compactTile ? 1 : 4
+        background: surface
+        radius: 8 * corners
+        Row {
+          gap: 5
+          Text {
+            text: nextBill.due < today ? "OVERDUE · ${fmtTime(parseTime(nextBill.due + "T12:00:00Z"), "dd MMM", "UTC")}" : nextBill.due == today ? "DUE TODAY" : "UPCOMING · ${fmtTime(parseTime(nextBill.due + "T12:00:00Z"), "dd MMM", "UTC")}"
+            color: nextBill.due < today ? red : muted
+            fontSize: 10
+            weight: 1
+            maxLines: 1
+          }
+          Text { text: "${nextDueCount} due"; color: muted; fontSize: 10; align: end; maxLines: 1 }
+        }
+        for b in upcomingBills key b.id {
+          Row {
+            gap: 5
+            Text { text: b.name; fontSize: compactTile ? 12 : 13; color: foreground; weight: 1; maxLines: 1 }
+            if b.due != nextBill.due {
+              Text { text: fmtTime(parseTime(b.due + "T12:00:00Z"), "dd MMM", "UTC"); fontSize: 9; color: muted; maxLines: 1 }
+            }
+            Text { text: "${currencySymbol}${fmtNum(b.amount, 2)}"; fontSize: compactTile ? 12 : 13; color: foreground; align: end; maxLines: 1 }
+          }
+          if b.id != lastUpcoming.id {
+            Box { height: 1; fill: width; background: muted; opacity: 0.18 }
+          }
+        }
+      }
+      Spacer { weight: 1 }
+      Row {
+        Text { text: "Due: ${currencySymbol}${fmtNum(dueTotal, 2)}"; color: muted; fontSize: 11; weight: 1; maxLines: 1 }
+        Text { text: "Paid: ${currencySymbol}${fmtNum(paidTotal, 2)}"; color: green; fontSize: 11; maxLines: 1 }
+      }
+    }
+  }
+
+  screen {
+    title: "Bills Tracker"
+    Column {
+      padding: 12
+      fill: true
+      gap: 10
+      Row {
+        Text { text: "BILLS TRACKER"; style: title; color: accent; weight: 1 }
+        Box {
+          width: 36
+          height: 28
+          border: 1
+          borderColor: accent
+          radius: 4 * corners
+          align: center
+          onTap: {
+            locked = !locked
+            editing = false
+            choosingCurrency = false
+            confirmDeleteId = 0
+            confirmClearHistory = false
+          }
+          Text { text: locked ? "Unlock bills" : "Lock bills"; opacity: 0; width: 1; height: 1 }
+          Canvas {
+            width: 23
+            height: 24
+            if locked {
+              path([[7, 10], [7, 7], [9, 4], [15, 4], [17, 7], [17, 10]], stroke: accent, width: 2, cap: round)
+            } else {
+              path([[7, 10], [7, 7], [9, 4], [15, 4], [17, 7]], stroke: accent, width: 2, cap: round)
+            }
+            rect(5, 10, 14, 11, radius: 2, stroke: accent, width: 2)
+            line(12, 14, 12, 18, stroke: accent, width: 2)
+          }
+        }
+        if !editing && !locked {
+          Button {
+            text: "+ Add bill"
+            onTap: {
+              editingId = 0
+              formName = ""
+              formAmount = ""
+              formFrequency = "monthly"
+              formDue = fmtTime(now, "dd/MM/yyyy")
+              formError = ""
+              editing = true
+            }
+          }
+        }
+      }
+
+      Row {
+        gap: 8
+        align: center
+        Text { text: "CURRENCY"; color: muted; fontSize: 11; weight: 1 }
+        if locked {
+          Text { text: "${currencyFlag} ${currencyCode} (${currencySymbol})"; color: muted; fontSize: 12 }
+        } else {
+          Button { text: "${currencyFlag} ${currencyCode} (${currencySymbol})"; onTap: choosingCurrency = !choosingCurrency }
+        }
+      }
+      if choosingCurrency && !locked {
+        Column {
+          padding: 8
+          gap: 8
+          background: surface
+          radius: 8 * corners
+          Text { text: "Choose your currency. Amounts are not converted."; color: muted; fontSize: 11; maxLines: 2 }
+          Grid {
+            columns: 5
+            gap: 4
+            fill: width
+            for c in currencies key c.code {
+              Row {
+                fill: width
+                height: 26
+                gap: 2
+                padding: 2
+                border: 1
+                borderColor: currencyCode == c.code ? accent : muted
+                radius: 2
+                onTap: {
+                  currencyCode = c.code
+                  choosingCurrency = false
+                }
+                Spacer { weight: 1 }
+                Text { text: c.flag; fontSize: 14 }
+                Text { text: c.code; fontSize: 14; color: currencyCode == c.code ? accent : foreground }
+                Spacer { weight: 1 }
+              }
+            }
+          }
+        }
+      }
+
+      if editing && !locked {
+        Column {
+          weight: 1
+          scroll: true
+          gap: 12
+          Text { text: editingId == 0 ? "New bill" : "Edit bill"; style: title }
+          Text { text: "BILL NAME"; color: muted; style: small }
+          Input { text: formName; placeholder: "e.g. Rent"; onChange: formName = value }
+          Text { text: "AMOUNT (${currencyCode})"; color: muted; style: small }
+          Input { text: formAmount; placeholder: "e.g. 350.00"; onChange: formAmount = value }
+          Text { text: "REPEAT"; color: muted; style: small }
+          Row {
+            gap: 6
+            Button { text: "Weekly"; color: formFrequency == "weekly" ? accent : muted; weight: 1; onTap: formFrequency = "weekly" }
+            Button { text: "Monthly"; color: formFrequency == "monthly" ? accent : muted; weight: 1; onTap: formFrequency = "monthly" }
+            Button { text: "Yearly"; color: formFrequency == "yearly" ? accent : muted; weight: 1; onTap: formFrequency = "yearly" }
+          }
+          Text { text: "NEXT DUE DATE (DD/MM/YYYY)"; color: muted; style: small }
+          Input { text: formDue; placeholder: "01/11/2026"; onChange: formDue = value }
+          Text { text: "Choose the next payment date. After you mark it paid, the date advances automatically. An unpaid bill stays overdue."; color: muted; style: small; maxLines: 4 }
+          if formError != "" { Text { text: formError; color: red; maxLines: 3 } }
+        }
+        Row {
+            gap: 8
+            Button { text: "Cancel"; weight: 1; onTap: editing = false }
+            Button {
+              text: "Save bill"
+              weight: 1
+              onTap: {
+                formError = ""
+                if !validName {
+                  formError = "Enter a bill name (1–60 characters)."
+                } else if !validAmount {
+                  formError = "Enter an amount greater than 0 and no more than 1,000,000 ${currencyCode}."
+                } else if !validDue {
+                  formError = "Enter a real date as DD/MM/YYYY."
+                } else {
+                  let id = editingId == 0 ? random(1000000000) + 1 : editingId
+                  let d = isoDue
+                  let record = {id: id, name: trim(formName), amount: round(amountNumber * 100) / 100, frequency: formFrequency, due: d, anchorDay: int(sub(d, 8, 10)), anchorMonth: int(sub(d, 5, 7))}
+                  bills = editingId == 0 ? bills + [record] : bills.map(b => b.id == editingId ? record : b)
+                  editing = false
+                }
+              }
+            }
+          }
+      } else {
+        if !choosingCurrency {
+          Row {
+            gap: 8
+            Column {
+              padding: 9
+              background: surface
+              radius: 8 * corners
+              weight: 1
+              Text { text: "MONTHLY AVERAGE"; fontSize: 10; color: muted }
+              Text { text: "${currencySymbol}${fmtNum(monthlyAverage, 2)}"; fontSize: 20; bold: true }
+            }
+            Column {
+              padding: 9
+              background: surface
+              radius: 8 * corners
+              weight: 1
+              Text { text: "PAID THIS MONTH"; fontSize: 10; color: muted }
+              Text { text: "${currencySymbol}${fmtNum(paidTotal, 2)}"; fontSize: 20; bold: true; color: green }
+            }
+          }
+        }
+        if len(overdue) > 0 { Text { text: "${len(overdue)} overdue payment(s)"; color: red; bold: true } }
+        Column {
+          visible: !choosingCurrency
+          weight: 1
+          scroll: true
+          gap: 8
+          if len(sortedBills) == 0 {
+            Text { text: "Add your first bill to get started. All information stays on this device."; color: muted; maxLines: 3 }
+          }
+          for b in sortedBills key b.id {
+            Column {
+              background: surface
+              padding: 10
+              gap: 7
+              radius: 8 * corners
+              Row {
+                Column {
+                  gap: 2
+                  weight: 1
+                  Text { text: b.name; fontSize: 16; bold: true; maxLines: 2 }
+                  Text { text: "${capitalize(b.frequency)} · ${fmtTime(parseTime(b.due + "T12:00:00Z"), "dd/MM/yyyy", "UTC")}"; fontSize: 11; color: b.due < today ? red : muted }
+                }
+                Text { text: "${currencySymbol}${fmtNum(b.amount, 2)}"; bold: true; fontSize: 16; align: end }
+              }
+              if b.due < today {
+                Text { text: "OVERDUE"; color: red; fontSize: 11; bold: true }
+              } else if b.due == today {
+                Text { text: "DUE TODAY"; color: yellow; fontSize: 11; bold: true }
+              }
+              if !locked {
+              Row {
+                gap: 6
+                Button {
+                  text: "✓ Paid"
+                  weight: 1
+                  onTap: {
+                    // Work with dates at noon UTC so weekly schedules do not drift at DST changes.
+                    let dueUtc = parseTime("${b.due}T12:00:00Z")
+                    let todayUtc = parseTime("${today}T12:00:00Z")
+                    let pivot = max(dueUtc, todayUtc)
+                    let weeks = max(1, floor((todayUtc - dueUtc) / 604800) + 1)
+                    let nextWeekly = fmtTime(dueUtc + weeks * 604800, "yyyy-MM-dd", "UTC")
+                    let currentMonthStart = parseTime("${fmtTime(pivot, "yyyy-MM", "UTC")}-01T12:00:00Z")
+                    let nextMonthPrefix = fmtTime(currentMonthStart + 32 * 86400, "yyyy-MM", "UTC")
+                    let nextMonthStart = parseTime("${nextMonthPrefix}-01T12:00:00Z")
+                    let afterNextPrefix = fmtTime(nextMonthStart + 32 * 86400, "yyyy-MM", "UTC")
+                    let nextMonthDays = round((parseTime("${afterNextPrefix}-01T12:00:00Z") - nextMonthStart) / 86400)
+                    let nextMonthly = "${nextMonthPrefix}-${pad(min(b.anchorDay, nextMonthDays), 2, "0")}"
+                    let nextYear = int(fmtTime(pivot, "yyyy", "UTC")) + 1
+                    let yearlyPrefix = "${nextYear}-${pad(b.anchorMonth, 2, "0")}"
+                    let yearlyMonthStart = parseTime("${yearlyPrefix}-01T12:00:00Z")
+                    let yearlyFollowingPrefix = fmtTime(yearlyMonthStart + 32 * 86400, "yyyy-MM", "UTC")
+                    let yearlyDays = round((parseTime("${yearlyFollowingPrefix}-01T12:00:00Z") - yearlyMonthStart) / 86400)
+                    let nextYearly = "${yearlyPrefix}-${pad(min(b.anchorDay, yearlyDays), 2, "0")}"
+                    let nextDue = b.frequency == "weekly" ? nextWeekly : b.frequency == "yearly" ? nextYearly : nextMonthly
+                    payments = payments + [{id: random(1000000000) + 1, billId: b.id, name: b.name, amount: b.amount, paidAt: today, previousDue: b.due, nextDue: nextDue}]
+                    bills = bills.map(x => x.id == b.id ? merge(x, {due: nextDue}) : x)
+                  }
+                }
+                Button {
+                  text: "Edit"
+                  onTap: {
+                    editingId = b.id
+                    formName = b.name
+                    formAmount = "${b.amount}"
+                    formFrequency = b.frequency
+                    formDue = fmtTime(parseTime(b.due + "T12:00:00Z"), "dd/MM/yyyy", "UTC")
+                    formError = ""
+                    editing = true
+                  }
+                }
+                Button { text: "Delete"; onTap: confirmDeleteId = b.id }
+              }
+              }
+              if !locked && confirmDeleteId == b.id {
+                Text { text: "Delete this bill and its payment history?"; color: yellow; fontSize: 12 }
+                Row {
+                  gap: 8
+                  Button { text: "Keep"; onTap: confirmDeleteId = 0; weight: 1 }
+                  Button {
+                    text: "Delete permanently"
+                    weight: 1
+                    onTap: {
+                      bills = bills.filter(x => x.id != b.id)
+                      payments = payments.filter(p => p.billId != b.id)
+                      confirmDeleteId = 0
+                    }
+                  }
+                }
+              }
+            }
+          }
+          if len(payments) > 0 {
+            Text { text: "PAYMENT HISTORY · ${len(payments)}"; bold: true; color: accent; fontSize: 12 }
+            for p in reverse(payments).take(paymentHistoryLimit) key p.id {
+              Row {
+                padding: 7
+                Text { text: "${p.name} · ${fmtTime(parseTime(p.paidAt + "T12:00:00Z"), "dd/MM/yyyy", "UTC")}"; fontSize: 11; color: muted; weight: 1; maxLines: 1 }
+                Text { text: "${currencySymbol}${fmtNum(p.amount, 2)}"; fontSize: 11; color: green }
+              }
+            }
+            if len(payments) > paymentHistoryLimit {
+              Button { text: "Show more (${len(payments) - paymentHistoryLimit} remaining)"; onTap: paymentHistoryLimit = paymentHistoryLimit + 5 }
+            }
+            if paymentHistoryLimit > 5 {
+              Button { text: "Show less"; onTap: paymentHistoryLimit = 5 }
+            }
+            if len(payments) > 0 {
+              let recent = last(payments)
+              let current = bills.find(b => b.id == recent.billId)
+              if !locked {
+                Row {
+                  gap: 8
+                  if current != null && current.due == recent.nextDue {
+                    Button {
+                      text: "Undo last payment"
+                      onTap: {
+                        bills = bills.map(b => b.id == recent.billId ? merge(b, {due: recent.previousDue}) : b)
+                        payments = payments.filter(p => p.id != recent.id)
+                      }
+                    }
+                  }
+                  Box {
+                    padding: 8
+                    border: 1
+                    borderColor: "#ff4545"
+                    radius: 4 * corners
+                    onTap: confirmClearHistory = true
+                    Text {
+                      text: "Delete history"
+                      color: "#ff4545"
+                      fontSize: 12
+                    }
+                  }
+                }
+                if confirmClearHistory {
+                  Text {
+                    text: "Delete all ${len(payments)} payment records permanently? This cannot be undone. Bills and due dates will stay unchanged."
+                    color: yellow
+                    fontSize: 12
+                    maxLines: 3
+                  }
+                  Row {
+                    gap: 8
+                    Button {
+                      text: "Cancel"
+                      weight: 1
+                      onTap: confirmClearHistory = false
+                    }
+                    Button {
+                      text: "Delete permanently"
+                      color: "#ff4545"
+                      weight: 1
+                      onTap: {
+                        payments = []
+                        paymentHistoryLimit = 5
+                        confirmClearHistory = false
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        Text { text: locked ? "Locked · Read only · Tap the lock to make changes" : "Private to this phone · No accounts or internet · Mark paid manually"; color: muted; fontSize: 10; maxLines: 2 }
+      }
+    }
+  }
+}

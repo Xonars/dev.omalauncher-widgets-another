@@ -1,0 +1,413 @@
+widget "tafel" {
+  meta {
+    owl: 7
+    description: "A green chalkboard. Draw with colorful chalk and wipe it clean with one tap."
+    version: "1.0"
+    license: "MIT"
+    category: "fun"
+  }
+  requires { pacman: [] }
+  page: 2
+  order: 2
+  size: 6x5
+  minSize: 6x4
+  padding: 10
+
+  // One entry per continuous stroke: {c: chalk index, p: [[x, y], ...]} in
+  // thousandths of the green board. Older boards stored every dash as
+  // [x1, y1, x2, y2, color]; drawing still understands that and folds it into
+  // strokes. ax, ay is the pen while a finger is down; -1 starts a new stroke.
+  state marks = [] persist
+  state chalk = 0 persist
+  state ax = -1
+  state ay = -1
+  state tip = {sx: 0, sy: 0, nx: 0, ny: 0}
+  // -1 draws with chalk, and that is how the board starts. 0–9 is the stamp
+  // waiting for a tap. The pen puts it back to chalk.
+  state mode = -1
+  state picker = false
+  state stamps = [] persist
+
+  // White, yellow, pink, blue, orange, green. The index is what a stroke stores.
+  let chalks = ["#f4f0e6", "#ffe566", "#ff8ebf", "#7ad7ff", "#ffb067", "#8ef0b0"]
+  // One finger-line is one stroke. A line used to be hundreds of dashes, and
+  // everything past the last 400 was thrown away, so a picture vanished after
+  // a few strokes. These caps only drop the oldest stroke once the board is
+  // too full to paint (drawing calls, and the work of placing every point).
+  let maxStrokes = 900
+  let maxPoints = 900
+  let maxTotal = 40000
+  let rim = 8
+  let pad = 10
+  let gap = 8
+  // Chalk rail: 40 dp of chalk plus 6 dp of padding above and below.
+  let trayH = 52
+
+  // The slate uses the whole tile. Height follows the widget, so a taller
+  // tile is a taller board; the drawing is in thousandths and scales with it.
+  let boardW = max((tileWidth ?? 380) - pad * 2, 80)
+  let boardH = max((tileHeight ?? 320) - pad * 2 - gap - trayH, 64)
+  let maxStamps = 40
+  let stampNames = ["sun", "owl", "smiley", "car", "bike", "shopping\ncart", "soccer", "sausage", "flower", "bee"]
+  let greenW = max(boardW - rim * 2, 1)
+  let greenH = max(boardH - rim * 2, 1)
+  // Small on the slate, still big enough to read. Square in dp, so a taller
+  // board does not stretch them, and a very wide board does not grow them past 56 dp.
+  let stampS = min(min(greenW, greenH) * 0.135, 56)
+  let stampHalfX = stampS / 2 / greenW * 1000
+  let stampHalfY = stampS / 2 / greenH * 1000
+
+  // Worn spots on the board, in the same thousandths as the strokes.
+  let dust = [[90, 160], [240, 520], [610, 140], [860, 470], [430, 780], [170, 880], [740, 300], [520, 90]]
+
+  component Board(bw, bh) {
+    Canvas {
+      width: bw
+      height: bh
+      clip: true
+      radius: 8 * corners
+
+      // A new stroke is a jump away from the last point. Small moves pile up
+      // until the chalk has travelled a little, so a slow line stays smooth
+      // without a point on every finger event.
+      onDrag: {
+        tip = [{
+          px: clamp(round((x - dx - rim) / max(bw - rim * 2, 1) * 1000), 0, 1000),
+          py: clamp(round((y - dy - rim) / max(bh - rim * 2, 1) * 1000), 0, 1000),
+          nx: clamp(round((x - rim) / max(bw - rim * 2, 1) * 1000), 0, 1000),
+          ny: clamp(round((y - rim) / max(bh - rim * 2, 1) * 1000), 0, 1000)
+        }].map(p => {
+          sx: ax < 0 || abs(p.px - ax) + abs(p.py - ay) > 24 ? p.px : ax,
+          sy: ax < 0 || abs(p.px - ax) + abs(p.py - ay) > 24 ? p.py : ay,
+          nx: p.nx,
+          ny: p.ny
+        })[0]
+        marks = len(marks) == 0 || marks[0].p != null ? marks : marks.map(m => {c: m[4], p: [[m[0], m[1]], [m[2], m[3]]]})
+        marks = (mode >= 0 || picker || abs(tip.nx - tip.sx) + abs(tip.ny - tip.sy) < 9) ? marks : (ax >= 0 && tip.sx == ax && len(marks) > 0 && last(marks).c == chalk && len(last(marks).p) < maxPoints
+          ? marks.take(len(marks) - 1) + [{c: chalk, p: last(marks).p + [[tip.nx, tip.ny]]}]
+          : (marks + [{c: chalk, p: [[tip.sx, tip.sy], [tip.nx, tip.ny]]}]).drop(max(0, len(marks) + 1 - maxStrokes)))
+        marks = marks.sum(m => m.p != null ? len(m.p) : 2) > maxTotal ? marks.drop(1) : marks
+        ax = mode >= 0 || picker ? -1 : (abs(tip.nx - tip.sx) + abs(tip.ny - tip.sy) < 9 ? tip.sx : tip.nx)
+        ay = mode >= 0 || picker ? -1 : (abs(tip.nx - tip.sx) + abs(tip.ny - tip.sy) < 9 ? tip.sy : tip.ny)
+      }
+      onTap: {
+        tip = {
+          nx: clamp(round((x - rim) / max(bw - rim * 2, 1) * 1000), 0, 1000),
+          ny: clamp(round((y - rim) / max(bh - rim * 2, 1) * 1000), 0, 1000)
+        }
+        marks = len(marks) == 0 || marks[0].p != null ? marks : marks.map(m => {c: m[4], p: [[m[0], m[1]], [m[2], m[3]]]})
+        marks = mode >= 0 || picker ? marks : (marks + [{c: chalk, p: [[tip.nx, tip.ny], [min(tip.nx + 3, 1000), tip.ny]]}]).drop(max(0, len(marks) + 1 - maxStrokes))
+        marks = marks.sum(m => m.p != null ? len(m.p) : 2) > maxTotal ? marks.drop(1) : marks
+        stamps = mode < 0 || picker ? stamps : (stamps + [{c: chalk, k: mode, x: clamp(tip.nx, stampHalfX, 1000 - stampHalfX), y: clamp(tip.ny, stampHalfY, 1000 - stampHalfY)}]).drop(max(0, len(stamps) + 1 - maxStamps))
+        ax = mode >= 0 || picker ? -1 : tip.nx
+        ay = mode >= 0 || picker ? -1 : tip.ny
+      }
+
+      let gx = rim
+      let gy = rim
+      let gw = width - rim * 2
+      let gh = height - rim * 2
+
+      rect(0, 0, width, height, fill: #6b4428)
+      rect(0, 0, width, 2, fill: alpha(#d7a36a, 0.55))
+      rect(0, height - 3, width, 3, fill: alpha(#000000, 0.28))
+      for i in range(7) {
+        line(0, height * (i + 0.5) / 7, width, height * (i + 0.5) / 7 + 1, stroke: alpha(#3a2414, 0.35), width: 1)
+      }
+      rect(4, 4, width - 8, height - 8, fill: #2a180e)
+      rect(gx, gy, gw, gh, fill: linear(gx, gy, gx, gy + gh, [#1f5644, #14382d]))
+
+      clip(gx, gy, gw, gh) {
+        rect(gx, gy, gw, gh, fill: radial(gx + gw * 0.5, gy + gh * 0.45, max(gw, gh) * 0.72, [#00000000, #00000055]))
+        for i in range(5) {
+          line(gx + 8, gy + gh * (i + 1) / 6, gx + gw - 8, gy + gh * (i + 1) / 6, stroke: alpha(#000000, 0.08), width: 1)
+        }
+        for d in dust {
+          circle(gx + d[0] / 1000 * gw, gy + d[1] / 1000 * gh, 1.4, fill: alpha(#f4f0e6, 0.06))
+        }
+        rect(gx, gy, gw, 5, fill: alpha(#000000, 0.22))
+        rect(gx, gy + gh - 7, gw, 7, fill: alpha(#f4f0e6, 0.05))
+
+        let chalkW = max(min(gw, gh) * 0.02, 2.4)
+        for m in marks {
+          if m.p != null && len(m.p) >= 2 {
+            let pts = m.p.map(q => [gx + q[0] / 1000 * gw, gy + q[1] / 1000 * gh])
+            let col = chalks[m.c % len(chalks)] ?? chalks[0]
+            let w = chalkW * (0.92 + (m.p[0][0] % 5) * 0.03)
+            path(pts, stroke: alpha(col, 0.16), width: w * 1.7, cap: round)
+            path(pts, stroke: alpha(mix(col, #f7f3ea, 0.08), 0.88), width: w, cap: round)
+          } else {
+            let x1 = gx + m[0] / 1000 * gw
+            let y1 = gy + m[1] / 1000 * gh
+            let x2 = gx + m[2] / 1000 * gw
+            let y2 = gy + m[3] / 1000 * gh
+            let col = chalks[m[4] % len(chalks)] ?? chalks[0]
+            line(x1, y1, x2, y2, stroke: alpha(col, 0.16), width: chalkW * 1.7, cap: round)
+            line(x1, y1, x2, y2, stroke: alpha(mix(col, #f7f3ea, 0.08), 0.88), width: chalkW, cap: round)
+          }
+        }
+      }
+    }
+  }
+
+  // Chalk drawing of one stamp, filling whatever box it is given.
+  component Glyph(kind, col) {
+    Canvas {
+      fill: true
+      let s = min(width, height)
+      let cx = width / 2
+      let cy = height / 2
+      let u = s * 0.46
+      let t = max(s * 0.075, 1.4)
+      if kind == 0 {
+        circle(cx, cy, u * 0.34, stroke: col, width: t)
+        circle(cx - u * 0.12, cy - u * 0.06, u * 0.045, fill: col)
+        circle(cx + u * 0.12, cy - u * 0.06, u * 0.045, fill: col)
+        arc(cx, cy + u * 0.02, u * 0.14, 120, 120, stroke: col, width: t * 0.75)
+        for i in range(8) {
+          let a = rad(i * 45)
+          line(cx + cos(a) * u * 0.5, cy + sin(a) * u * 0.5, cx + cos(a) * u * 0.96, cy + sin(a) * u * 0.96, stroke: col, width: t, cap: round)
+        }
+      } else if kind == 1 {
+        circle(cx, cy + u * 0.1, u * 0.58, stroke: col, width: t)
+        path([[cx - u * 0.4, cy - u * 0.22], [cx - u * 0.26, cy - u * 0.92], [cx, cy - u * 0.38]], closed: true, fill: col)
+        path([[cx + u * 0.4, cy - u * 0.22], [cx + u * 0.26, cy - u * 0.92], [cx, cy - u * 0.38]], closed: true, fill: col)
+        circle(cx - u * 0.22, cy - u * 0.02, u * 0.16, stroke: col, width: t * 0.8)
+        circle(cx + u * 0.22, cy - u * 0.02, u * 0.16, stroke: col, width: t * 0.8)
+        circle(cx - u * 0.22, cy - u * 0.02, u * 0.06, fill: col)
+        circle(cx + u * 0.22, cy - u * 0.02, u * 0.06, fill: col)
+        path([[cx, cy + u * 0.16], [cx - u * 0.09, cy + u * 0.32], [cx + u * 0.09, cy + u * 0.32]], closed: true, fill: col)
+        line(cx - u * 0.16, cy + u * 0.62, cx - u * 0.32, cy + u * 0.84, stroke: col, width: t, cap: round)
+        line(cx - u * 0.16, cy + u * 0.62, cx - u * 0.04, cy + u * 0.84, stroke: col, width: t, cap: round)
+        line(cx + u * 0.16, cy + u * 0.62, cx + u * 0.04, cy + u * 0.84, stroke: col, width: t, cap: round)
+        line(cx + u * 0.16, cy + u * 0.62, cx + u * 0.32, cy + u * 0.84, stroke: col, width: t, cap: round)
+      } else if kind == 2 {
+        circle(cx, cy, u * 0.8, stroke: col, width: t)
+        circle(cx - u * 0.28, cy - u * 0.16, u * 0.08, fill: col)
+        circle(cx + u * 0.28, cy - u * 0.16, u * 0.08, fill: col)
+        arc(cx, cy + u * 0.08, u * 0.36, 120, 120, stroke: col, width: t)
+      } else if kind == 3 {
+        path([[cx - u * 0.86, cy + u * 0.02], [cx + u * 0.82, cy + u * 0.02], [cx + u * 0.82, cy - u * 0.24], [cx + u * 0.3, cy - u * 0.24], [cx + u * 0.08, cy - u * 0.58], [cx - u * 0.4, cy - u * 0.58], [cx - u * 0.58, cy - u * 0.24], [cx - u * 0.86, cy - u * 0.24]], closed: true, stroke: col, width: t)
+        circle(cx - u * 0.42, cy + u * 0.22, u * 0.2, stroke: col, width: t)
+        circle(cx + u * 0.46, cy + u * 0.22, u * 0.2, stroke: col, width: t)
+        circle(cx - u * 0.42, cy + u * 0.22, u * 0.07, fill: col)
+        circle(cx + u * 0.46, cy + u * 0.22, u * 0.07, fill: col)
+      } else if kind == 4 {
+        let by = cy + u * 0.22
+        circle(cx - u * 0.46, by, u * 0.3, stroke: col, width: t)
+        circle(cx + u * 0.46, by, u * 0.3, stroke: col, width: t)
+        line(cx - u * 0.46, by, cx - u * 0.08, cy - u * 0.5, stroke: col, width: t, cap: round)
+        line(cx - u * 0.08, cy - u * 0.5, cx + u * 0.02, by, stroke: col, width: t, cap: round)
+        line(cx + u * 0.02, by, cx - u * 0.46, by, stroke: col, width: t, cap: round)
+        line(cx + u * 0.02, by, cx + u * 0.46, by, stroke: col, width: t, cap: round)
+        line(cx + u * 0.46, by, cx + u * 0.28, cy - u * 0.42, stroke: col, width: t, cap: round)
+        line(cx + u * 0.12, cy - u * 0.42, cx + u * 0.46, cy - u * 0.42, stroke: col, width: t, cap: round)
+        line(cx - u * 0.24, cy - u * 0.5, cx + u * 0.04, cy - u * 0.5, stroke: col, width: t, cap: round)
+      } else if kind == 5 {
+        path([[cx - u * 0.5, cy - u * 0.22], [cx + u * 0.38, cy - u * 0.22], [cx + u * 0.55, cy + u * 0.28], [cx - u * 0.68, cy + u * 0.28]], closed: true, stroke: col, width: t)
+        line(cx - u * 0.56, cy, cx + u * 0.44, cy, stroke: col, width: t * 0.7)
+        line(cx - u * 0.62, cy + u * 0.16, cx + u * 0.5, cy + u * 0.16, stroke: col, width: t * 0.7)
+        line(cx + u * 0.38, cy - u * 0.22, cx + u * 0.5, cy - u * 0.62, stroke: col, width: t, cap: round)
+        line(cx + u * 0.5, cy - u * 0.62, cx + u * 0.86, cy - u * 0.62, stroke: col, width: t, cap: round)
+        circle(cx - u * 0.36, cy + u * 0.48, u * 0.12, stroke: col, width: t)
+        circle(cx + u * 0.26, cy + u * 0.48, u * 0.12, stroke: col, width: t)
+      } else if kind == 6 {
+        circle(cx, cy, u * 0.8, stroke: col, width: t)
+        let pent = range(5).map(i => [cx + cos(rad(-90 + i * 72)) * u * 0.32, cy + sin(rad(-90 + i * 72)) * u * 0.32])
+        path(pent, closed: true, stroke: col, width: t * 0.8)
+        for i in range(5) {
+          let a = rad(-90 + i * 72)
+          line(cx + cos(a) * u * 0.32, cy + sin(a) * u * 0.32, cx + cos(a) * u * 0.8, cy + sin(a) * u * 0.8, stroke: col, width: t * 0.8, cap: round)
+        }
+      } else if kind == 7 {
+        rotate(-18, cx, cy) {
+          rect(cx - u * 0.78, cy - u * 0.22, u * 1.56, u * 0.44, radius: u * 0.22, stroke: col, width: t)
+          circle(cx - u * 0.16, cy - u * 0.02, u * 0.05, fill: col)
+          circle(cx + u * 0.18, cy - u * 0.02, u * 0.05, fill: col)
+          arc(cx + u * 0.01, cy + u * 0.04, u * 0.14, 115, 130, stroke: col, width: t * 0.7)
+        }
+      } else if kind == 8 {
+        line(cx, cy + u * 0.2, cx, cy + u * 0.95, stroke: col, width: t, cap: round)
+        path([[cx, cy + u * 0.42], [cx + u * 0.42, cy + u * 0.18], [cx + u * 0.04, cy + u * 0.62]], closed: true, fill: col)
+        path([[cx, cy + u * 0.58], [cx - u * 0.4, cy + u * 0.36], [cx - u * 0.02, cy + u * 0.78]], closed: true, fill: col)
+        for i in range(5) {
+          let a = rad(-90 + i * 72)
+          circle(cx + cos(a) * u * 0.34, cy - u * 0.32 + sin(a) * u * 0.34, u * 0.14, stroke: col, width: t * 0.85)
+        }
+        circle(cx, cy - u * 0.32, u * 0.09, fill: col)
+      } else if kind == 9 {
+        circle(cx - u * 0.02, cy - u * 0.42, u * 0.26, stroke: col, width: t * 0.75)
+        circle(cx + u * 0.34, cy - u * 0.34, u * 0.22, stroke: col, width: t * 0.75)
+        rect(cx - u * 0.2, cy - u * 0.22, u * 0.92, u * 0.48, radius: u * 0.24, stroke: col, width: t)
+        line(cx + u * 0.05, cy - u * 0.2, cx + u * 0.05, cy + u * 0.24, stroke: col, width: t * 0.8)
+        line(cx + u * 0.28, cy - u * 0.2, cx + u * 0.28, cy + u * 0.24, stroke: col, width: t * 0.8)
+        line(cx + u * 0.5, cy - u * 0.12, cx + u * 0.5, cy + u * 0.16, stroke: col, width: t * 0.8)
+        circle(cx - u * 0.46, cy + u * 0.02, u * 0.2, stroke: col, width: t)
+        circle(cx - u * 0.52, cy - u * 0.02, u * 0.04, fill: col)
+        line(cx - u * 0.56, cy - u * 0.14, cx - u * 0.74, cy - u * 0.46, stroke: col, width: t * 0.7, cap: round)
+        line(cx - u * 0.38, cy - u * 0.14, cx - u * 0.24, cy - u * 0.48, stroke: col, width: t * 0.7, cap: round)
+        circle(cx - u * 0.74, cy - u * 0.46, u * 0.055, fill: col)
+        circle(cx - u * 0.24, cy - u * 0.48, u * 0.055, fill: col)
+        path([[cx + u * 0.68, cy - u * 0.05], [cx + u * 0.92, cy + u * 0.02], [cx + u * 0.68, cy + u * 0.09]], closed: true, fill: col)
+      }
+    }
+  }
+
+  component Tray() {
+    Row {
+      gap: 8
+      align: bottom
+      fill: width
+      padding: [8, 6]
+      background: #4a301c
+      radius: 4 * corners
+      for c, i in chalks {
+        Box {
+          width: 28
+          height: 40
+          align: bottom
+          onTap: { chalk = i; ax = -1; ay = -1; haptic() }
+          Box {
+            width: 18
+            height: chalk == i ? 34 : 26
+            radius: 2
+            background: c
+            border: 1
+            borderColor: chalk == i ? #f4f0e6 : #1a100a
+            offset: [0, chalk == i ? -4 : 0]
+            Box {
+              width: 18
+              height: 5
+              background: alpha(#fffaf2, 0.8)
+              offset: [0, 7]
+            }
+          }
+        }
+      }
+      Box {
+        width: 36
+        height: 40
+        align: center
+        radius: 6
+        background: mode < 0 && !picker ? alpha(#f4f0e6, 0.16) : #00000000
+        onTap: { mode = -1; picker = false; ax = -1; ay = -1; haptic() }
+        Canvas {
+          let cx = width / 2
+          let cy = height / 2 + 1
+          let ink = chalks[chalk % len(chalks)] ?? chalks[0]
+          rotate(22, cx, cy) {
+            path([[cx, cy + 15], [cx - 3.4, cy + 7.5], [cx + 3.4, cy + 7.5]], closed: true, fill: ink)
+            path([[cx - 4.4, cy + 8.2], [cx + 4.4, cy + 8.2], [cx + 3.4, cy + 3.2], [cx - 3.4, cy + 3.2]], closed: true, fill: #e7d3b0)
+            rect(cx - 3.5, cy - 10, 7, 14, fill: #f2d34e)
+            rect(cx - 3.5, cy - 13.2, 7, 3.4, fill: #c9a36a)
+            rect(cx - 3.3, cy - 16.6, 6.6, 4, radius: 1.5, fill: #f2a3b5)
+          }
+        }
+      }
+      Box {
+        width: 36
+        height: 40
+        align: center
+        radius: 6
+        background: mode >= 0 || picker ? alpha(#f4f0e6, 0.16) : #00000000
+        onTap: { picker = !picker; haptic() }
+        Canvas {
+          let cx = width / 2
+          let cy = height / 2 + 1
+          rotate(-18, cx, cy) {
+            rect(cx - 3.5, cy - 15, 7, 9, radius: 2, fill: #e7d3b0)
+            rect(cx - 6, cy - 7, 12, 3.5, radius: 1, fill: #c9a36a)
+            rect(cx - 12, cy - 4.5, 24, 11, radius: 2, fill: #f4f0e6)
+            rect(cx - 12, cy + 4, 24, 3.5, radius: 1, fill: chalks[chalk % len(chalks)] ?? chalks[0])
+          }
+        }
+      }
+      Spacer { weight: 1 }
+      Box {
+        width: 48
+        height: 40
+        align: center
+        onTap: { marks = []; stamps = []; mode = -1; picker = false; ax = -1; ay = -1; haptic() }
+        Canvas {
+          let w = 36
+          let h = 24
+          let x = (width - w) / 2
+          let y = (height - h) / 2 + 1
+          rect(x, y + 2, w, h, radius: 5, fill: alpha(#1a100a, 0.45))
+          rect(x, y, w, h, radius: 5, fill: #f0c84b)
+          rect(x + 2, y + 2, w - 8, 3, radius: 1.5, fill: alpha(#fff6c8, 0.75))
+          rect(x, y + h - 8, w, 8, radius: 5, fill: #2f9d6e)
+          rect(x, y + h - 8, w, 3, fill: #2f9d6e)
+          circle(x + 9, y + 8, 2.2, fill: #c4922e)
+          circle(x + 18, y + 6.5, 1.7, fill: #c4922e)
+          circle(x + 26, y + 9, 2.0, fill: #b88828)
+          circle(x + 14, y + 12.5, 1.4, fill: #d0a44a)
+        }
+      }
+    }
+  }
+
+  Column {
+    fill: true
+    align: center
+    gap: gap
+    Box {
+      width: boardW
+      height: boardH
+      Board { bw: boardW; bh: boardH }
+      Box {
+        width: greenW
+        height: greenH
+        offset: [rim, rim]
+        clip: true
+        for s in stamps {
+          Glyph {
+            kind: s.k
+            col: chalks[s.c % len(chalks)] ?? chalks[0]
+            width: stampS
+            height: stampS
+            offset: [s.x / 1000 * greenW - stampS / 2, s.y / 1000 * greenH - stampS / 2]
+          }
+        }
+      }
+      if picker {
+        Box {
+          width: boardW
+          height: boardH
+          align: bottom
+          padding: [6, 4, 6, 6]
+          Column {
+            background: #102820
+            radius: 8
+            border: 1
+            borderColor: #6b4428
+            padding: [4, 4]
+            gap: 2
+            Text { text: "tap the board"; fontSize: 11; color: alpha(#f4f0e6, 0.7); align: center }
+            Grid {
+              columns: 5
+              gap: 2
+              for name, i in stampNames {
+                Column {
+                  align: center
+                  gap: 0
+                  onTap: { mode = i; picker = false; ax = -1; ay = -1; haptic() }
+                  Glyph {
+                    kind: i
+                    col: chalks[chalk % len(chalks)] ?? chalks[0]
+                    width: 52
+                    height: 34
+                    radius: 4
+                    background: mode == i ? alpha(#f4f0e6, 0.16) : #00000000
+                  }
+                  Text { text: name; fontSize: 9; color: #f4f0e6; width: 64; align: center; maxLines: 2 }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    Tray { }
+  }
+}

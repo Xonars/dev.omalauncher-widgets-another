@@ -1,0 +1,582 @@
+widget "yandex weather" {
+  size: 3x3
+  minSize: 3x2
+  meta { description: "The date and the weather from Yandex Weather, where you are or in a city you pick. Tap it for 24 hours, 10 days, wind, UV, sun and moon"; version: "1.0.2"; license: "MIT"; category: "world"; owl: 6 }
+  requires { pacman: ["python"] }
+
+  source now = clock every 1m
+  let short = tileHeight != null && tileHeight < 190
+  // {name, lat, lon} of a picked place; empty means wherever Yandex locates you by IP.
+  state loc = {} persist
+  state recent = [] persist
+  state picking = false
+  // The search's JSON, "searching" while it runs, or "".
+  state found = ""
+  // Reads the public yandex.com/weather page (Yandex's keyed API isn't open to new users) and
+  // searches places with OpenStreetMap Nominatim. Prints one line of JSON.
+  let script = """
+# Weather from Yandex Weather, run as python3 -c with:
+#   (no args) or "" ""   weather where Yandex locates you (by IP)
+#   LAT LON              weather at a point
+#   --search TEXT        places matching TEXT (OpenStreetMap Nominatim)
+# Prints one line of JSON.
+import html
+import json
+import re
+import sys
+import urllib.parse
+import urllib.request
+
+UA = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36"
+
+
+def get(url, headers=None):
+    req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept-Language": "en", **(headers or {})})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return r.read().decode("utf-8", "replace")
+
+
+def text(s):
+    s = re.sub(r"<br\s*/?>", "\n", s)
+    s = re.sub(r"<[^>]+>", "", s)
+    return html.unescape(s).replace("⁠", "").replace("\xa0", " ").strip()
+
+
+def num(s):
+    m = re.search(r"[-+−]?\d+(?:[.,]\d+)?", s or "")
+    return None if m is None else float(m.group(0).replace("−", "-").replace(",", "."))
+
+
+def deg(s):
+    n = num(s)
+    return None if n is None else int(n)
+
+
+# Yandex's condition text -> the wttr.in weatherCode omarchy's weatherIcon() draws.
+CODES = [
+    ("thunder", 389), ("hail", 350), ("sleet", 317), ("wet snow", 317), ("snow and rain", 317),
+    ("heavy snow", 338), ("snowfall", 338), ("blizzard", 230), ("light snow", 326), ("snow", 332),
+    ("heavy rain", 308), ("downpour", 308), ("shower", 356), ("drizzle", 266), ("light rain", 296),
+    ("rain", 302), ("fog", 248), ("mist", 143), ("haze", 143), ("overcast", 122), ("mostly cloudy", 119),
+    ("cloudy with clear", 116), ("partly cloudy", 116), ("mostly clear", 116), ("cloudy", 119), ("clear", 113),
+]
+
+
+def code(cond):
+    c = (cond or "").lower()
+    return next((v for k, v in CODES if k in c), 116)
+
+
+def clock(s):
+    # '7:32 am' -> '07:32'.
+    m = re.search(r"(\d+):(\d+)\s*([ap])\.?m", s or "", re.I)
+    if not m:
+        m = re.search(r"(\d+):(\d+)", s or "")
+        return None if not m else f"{int(m.group(1)):02d}:{m.group(2)}"
+    h = int(m.group(1)) % 12 + (12 if m.group(3).lower() == "p" else 0)
+    return f"{h:02d}:{m.group(2)}"
+
+
+def hour(s):
+    # '2 pm' -> '14', 'sunset 5:57 pm' -> '17:57'.
+    if ":" in s:
+        return clock(s)
+    m = re.search(r"(\d+)\s*([ap])", s, re.I)
+    return s if not m else f"{int(m.group(1)) % 12 + (12 if m.group(2).lower() == 'p' else 0):02d}"
+
+
+def flight(page):
+    # The Next.js data the page embeds, as one string.
+    parts = re.findall(r'self\.__next_f\.push\(\[1,("(?:[^"\\]|\\.)*")\]\)', page)
+    return "".join(json.loads(p) for p in parts)
+
+
+def weather(lat=None, lon=None):
+    q = f"?lat={lat}&lon={lon}" if lat is not None else ""
+    page = get("https://yandex.com/weather/en" + q)
+    data = flight(page)
+
+    m = re.search(r'"fact":(\{[^{}]*\})', data)
+    # No fact means a captcha or a new page, not weather: fail so the tile says offline.
+    if not m:
+        sys.exit("no weather on the yandex page")
+    f = json.loads(m.group(1))
+    m = re.search(r'"point":\{"lon":([-\d.]+),"lat":([-\d.]+)\}', data)
+    point = {"lat": float(m.group(2)), "lon": float(m.group(1))} if m else {"lat": lat, "lon": lon}
+    m = re.search(r"<title>Weather in (.*?) —", page)
+    place = text(m.group(1)) if m else None
+
+    m = re.search(r'class="AppFact_warning[^"]*"[^>]*data-has-dot[^>]*>([^<]*)<', page)
+    cond = text(m.group(1)) if m else (f.get("condition") or "").replace("_", " ").lower()
+    m = re.search(r'class="AppFact_warning[^"]*" aria-hidden="true">([^<]*)<', page)
+    note = text(m.group(1)) if m else None
+    m = re.search(r"Yesterday[^<]*?([-+−]?\d+)°", page)
+    yesterday = deg(m.group(1)) if m else None
+    m = re.search(r"m/s, ([A-Z]+)<", page)
+    wind_dir = m.group(1) if m else None
+
+    # Hourly: the page renders the list twice (mobile and desktop); keep the first.
+    hours, seen = [], set()
+    for li in re.findall(r'<li class="AppHourlyItem_container.*?</li>', page, re.S):
+        t = re.search(r'dateTime="([^"]+)"[^>]*>([^<]*)<', li)
+        main = re.search(r'AppHourlyItem_main[^>]*>([^<]*)<', li)
+        a11y = re.search(r'A11Y_visuallyHidden[^>]*>([^<]*)<', li)
+        # Sunrise and sunset sit in the list too, without a temperature.
+        if not (t and main and a11y) or t.group(1) in seen or "°" not in main.group(1):
+            continue
+        seen.add(t.group(1))
+        desc = text(a11y.group(1))
+        rain = re.search(r"precipitation (\d+)%", desc)
+        m = re.search(r"°, ([^,.]+)", desc)
+        cond_h = m.group(1).strip() if m else ""
+        hours.append({
+            "time": t.group(1),
+            "label": hour(text(t.group(2))),
+            "temp": deg(text(main.group(1))),
+            "cond": cond_h,
+            "code": code(cond_h),
+            "rain": int(rain.group(1)) if rain else 0,
+        })
+
+    # Days: one <article data-day> card each, again rendered twice.
+    days, seen = [], set()
+    cards = re.split(r'(?=<article [^>]*data-day=")', page)[1:]
+    for card in cards:
+        card = card.split("</article>")[0]
+        did = re.search(r'data-day="([^"]+)"', card).group(1)
+        if did in seen:
+            continue
+        seen.add(did)
+        title = re.search(r'AppForecastDayHeader_dayTitle[^>]*>(.*?)</h3>', card, re.S)
+
+        def area(name):
+            m = re.search(r'grid-area:' + name + r'"[^>]*>(.*?)</div>', card, re.S)
+            return text(m.group(1)) if m else None
+
+        def wind(card, p):
+            m = re.search(r'grid-area:' + p + r'-dir".*?</span><div class="AppForecastDayPart_direction[^>]*>([^<]*)<', card, re.S)
+            return text(m.group(1)) if m else None
+
+        parts = []
+        for p, label in (("m", "morning"), ("d", "day"), ("e", "evening"), ("n", "night")):
+            cond_p = area(p + "-text")
+            parts.append({
+                "part": label,
+                "temp": deg(area(p + "-temp")),
+                "feels": deg(area(p + "-feels")),
+                "cond": cond_p,
+                "code": code(cond_p),
+                "wind": num(area(p + "-wind")),
+                "dir": wind(card, p),
+                "humidity": deg(area(p + "-hum")),
+                "pressure": deg(area(p + "-press")),
+            })
+        dur = [text(x) for x in re.findall(r'AppForecastDayDuration_text[^>]*>(.*?)</div>', card, re.S)]
+        info = dict(
+            (text(k).lower(), text(v))
+            for k, v in re.findall(r'AppForecastDayDuration_caption[^>]*>([^<]*)</div><div class="AppForecastDayDuration_value[^>]*>(.*?)</div></div>(?=<div class="AppForecastDayDuration_item|</div></div>)', card, re.S)
+        )
+        moon = re.search(r'media/([a-z-]+)\.[0-9a-f]+\.svg', card)
+        uv = info.get("uv index")
+        temps = [p["temp"] for p in parts if p["temp"] is not None]
+        days.append({
+            "title": text(title.group(1)) if title else did,
+            "min": min(temps) if temps else None,
+            "max": max(temps) if temps else None,
+            "code": parts[1]["code"],
+            "cond": parts[1]["cond"],
+            "parts": parts,
+            "sunrise": clock(dur[0]) if len(dur) > 0 else None,
+            "daylight": dur[1] if len(dur) > 1 else None,
+            "sunset": clock(dur[2]) if len(dur) > 2 else None,
+            "water": deg(info.get("water t°")),
+            "moon": moon.group(1).replace("-", " ") if moon else None,
+            "uv": deg(uv),
+            "uvText": uv.split(",", 1)[1].strip() if uv and "," in uv else None,
+            "magnetic": info.get("magnetic field"),
+        })
+
+    return {
+        "place": place,
+        "lat": point["lat"],
+        "lon": point["lon"],
+        "url": "https://yandex.com/weather/en" + q,
+        "now": {
+            "temp": f.get("temperature"),
+            "feels": f.get("feelsLike"),
+            "cond": cond,
+            "code": code(cond),
+            "night": f.get("daytime") == "NIGHT",
+            "note": note,
+            "yesterday": yesterday,
+            "wind": f.get("windSpeed"),
+            "gust": f.get("windGust"),
+            "windDir": wind_dir,
+            "pressure": f.get("pressure"),
+            "humidity": f.get("humidity"),
+            "visibility": f.get("visibility"),
+            "uv": f.get("uvIndex"),
+            "water": f.get("waterTemperature"),
+        },
+        "hours": hours,
+        "days": days,
+    }
+
+
+def search(query):
+    url = "https://nominatim.openstreetmap.org/search?" + urllib.parse.urlencode(
+        {"q": query, "format": "jsonv2", "limit": 6, "accept-language": "en", "addressdetails": 1})
+    out = []
+    for r in json.loads(get(url, {"User-Agent": "omalauncher-yandex-weather/1.0"})):
+        a = r.get("address", {})
+        name = r.get("name") or r["display_name"].split(",")[0]
+        region = ", ".join(x for x in (a.get("state"), a.get("country")) if x and x != name)
+        out.append({"name": name, "region": region, "lat": round(float(r["lat"]), 4), "lon": round(float(r["lon"]), 4)})
+    return out
+
+
+if __name__ == "__main__":
+    args = sys.argv[1:]
+    if args[:1] == ["--search"]:
+        print(json.dumps(search(" ".join(args[1:])), ensure_ascii=False))
+    elif len(args) >= 2 and args[0] not in ("", "null"):
+        print(json.dumps(weather(float(args[0]), float(args[1])), ensure_ascii=False))
+    else:
+        print(json.dumps(weather(), ensure_ascii=False))
+"""
+  source wx = cmd("python3 -c ${sh(script)} ${sh(loc.lat ?? "")} ${sh(loc.lon ?? "")}") every 30m timeout 30s json status
+  let w = wx.out
+  let cur = w.now
+  let day = w.days[0]
+  let place = lower(loc.name ?? w.place ?? "")
+  let results = found == "" || found == "searching" ? [] : parseJson(found) ?? []
+  // Clear or partly cloudy gets a warm sun or a cool moon; everything else stays neutral.
+  let sky = contains([113, 116], cur.code) ? (cur.night ? blue : yellow) : foreground
+  let sunHours = [num(sub(day.sunrise ?? "07", 0, 2)), num(sub(day.sunset ?? "19", 0, 2))]
+  // The next 24 hours in 3-hour steps, as in the today widget.
+  let steps = range(0, 24, 3).map(i => w.hours[i]).filter(h => h != null)
+  let lowest = min((w.days ?? []).map(d => d.min))
+  let highest = max((w.days ?? []).map(d => d.max))
+  let moonIcons = {
+    "new moon": "", "waxing crescent": "", "first quarter": "", "waxing gibbous": "",
+    "full moon": "", "waning gibbous": "", "last quarter": "", "third quarter": "", "waning crescent": ""
+  }
+  let uv = day.uv ?? cur.uv
+  let rainSoon = max((w.hours ?? []).take(12).map(h => h.rain))
+  state openDay = -1
+
+  onTap: screen()
+
+  component Rule() {
+    Spacer { height: 1; fill: width; background: alpha(muted, 0.25) }
+  }
+
+  component Stat(glyph, label, value, tint = foreground) {
+    Row {
+      gap: 10
+      align: center
+      padding: [10, 8]
+      border: 1
+      borderColor: alpha(muted, 0.3)
+      Text { text: glyph; font: icon; fontSize: 22; color: tint; width: 28; align: center }
+      Column {
+        gap: 0
+        weight: 1
+        Text { text: label; style: label; color: muted; maxLines: 1 }
+        Text { text: value; style: body; maxLines: 1 }
+      }
+    }
+  }
+
+  // "Wednesday, 14 October" -> "wed 14"; today and tomorrow keep their names.
+  component DayName(title, i) {
+    let name = lower(split(title, ",")[0])
+    Text { text: i < 2 ? name : "${sub(name, 0, 3)} ${words(trim(split(title, ",")[1]))[0]}"; style: body; maxLines: 1 }
+  }
+
+  Column {
+    gap: 0
+    // A short tile (a 3x3 on the landscape home screen) gets the date on one line, so the forecast row still fits.
+    if short {
+      Row {
+        gap: 6
+        align: center
+        Text { text: fmtTime(now, "d"); fontSize: 20; width: 28; maxLines: 1 }
+        Text { text: lower(fmtTime(now, "EEEE")); style: label; color: accent; weight: 1; maxLines: 1 }
+        Text { text: lower(fmtTime(now, "MMMM")); style: small; color: muted; width: 76; align: end; maxLines: 1 }
+      }
+    } else {
+      Row {
+        gap: 10
+        align: center
+        Text { text: fmtTime(now, "d"); style: huge; width: 60 }
+        Column {
+          gap: 0
+          weight: 1
+          Text { text: lower(fmtTime(now, "EEEE")); style: label; color: accent; maxLines: 1 }
+          Text { text: lower(fmtTime(now, "MMMM yyyy")); style: small; color: muted; maxLines: 1 }
+        }
+      }
+    }
+    Spacer { weight: 1 }
+    Rule { }
+    Spacer { height: 8 }
+    if cur != null {
+      Row {
+        gap: 6
+        align: bottom
+        Text { text: weatherIcon(cur.code, cur.night); font: icon; fontSize: 32; color: sky; width: 26; padding: [0, 0, 0, 3] }
+        Text { text: "${cur.temp}°"; fontSize: 28; color: cyan; width: 68; maxLines: 1 }
+        Column {
+          gap: 0
+          weight: 1
+          Text { text: lower(cur.cond); style: small; align: end; maxLines: 1 }
+          Text { text: "↑${day.max}° ↓${day.min}°"; style: small; color: muted; align: end; maxLines: 1; padding: [0, 0, 0, 5] }
+        }
+      }
+      Text { text: "feels ${cur.feels}° · ${place}"; style: small; color: muted; maxLines: 1 }
+      Spacer { weight: 1 }
+      Rule { }
+      Spacer { height: 8 }
+      // The next two days (daytime icon), then sunrise and sunset.
+      Row {
+        gap: 4
+        align: center
+        for d, i in w.days.drop(1).take(2) key d.title {
+          Column {
+            gap: 0
+            weight: 1
+            align: center
+            Text { text: lower(fmtTime(now + 86400 * (i + 1), "EEE")); style: label; color: muted; align: center }
+            Text { text: weatherIcon(d.code, false); font: icon; fontSize: 18; align: center }
+            Text { text: "${d.max}° ${d.min}°"; style: small; align: center; maxLines: 1 }
+          }
+        }
+        Column {
+          gap: 4
+          weight: 1.2
+          Row {
+            gap: 4
+            align: center
+            Text { text: ""; font: icon; fontSize: 14; color: yellow; width: 20 }
+            Text { text: day.sunrise; style: small; maxLines: 1; weight: 1 }
+          }
+          Row {
+            gap: 4
+            align: center
+            Text { text: ""; font: icon; fontSize: 14; color: orange; width: 20 }
+            Text { text: day.sunset; style: small; maxLines: 1; weight: 1 }
+          }
+        }
+      }
+    } else {
+      Text { text: wx == null ? "weather…" : "yandex weather offline"; style: small; color: muted }
+    }
+  }
+
+  screen {
+    title: "yandex weather"
+    Column {
+      scroll: true
+      gap: 14
+      // Where: the picked place or "located by IP", and the picker.
+      Row {
+        gap: 8
+        align: center
+        Text { text: "◎"; fontSize: 18; color: accent; width: 22; align: center }
+        Column {
+          gap: 0
+          weight: 1
+          Text { text: place == "" ? "…" : place; style: body; maxLines: 1 }
+          Text { text: loc.name == null ? "located by ip" : "picked · ${loc.lat}, ${loc.lon}"; style: label; color: muted; maxLines: 1 }
+        }
+        Button { text: picking ? "done" : "change"; color: accent; onTap: { picking = !picking; found = "" } }
+      }
+      if picking {
+        Column {
+          gap: 8
+          Input {
+            placeholder: "search a city…"
+            onSubmit: { found = "searching"; found = run("python3 -c ${sh(script)} --search ${sh(value)}") }
+          }
+          if found == "searching" {
+            Text { text: "searching…"; style: small; color: muted }
+          } else if found != "" && len(results) == 0 {
+            Text { text: "nothing found"; style: small; color: muted }
+          }
+          for r in results key "${r.lat},${r.lon}" {
+            Row {
+              gap: 8
+              align: center
+              padding: [10, 8]
+              border: 1
+              borderColor: alpha(muted, 0.3)
+              onTap: { loc = r; recent = flatten([[r], recent.filter(x => x.name != r.name)]).take(5); picking = false; found = "" }
+              Column {
+                gap: 0
+                weight: 1
+                Text { text: r.name; style: body; maxLines: 1 }
+                Text { text: r.region; style: label; color: muted; maxLines: 1 }
+              }
+            }
+          }
+          Text { text: "quick picks"; style: label; color: accent }
+          Flow {
+            gap: 8
+            Button { text: "◎ my location"; color: loc.name == null ? accent : muted; onTap: { loc = {}; picking = false; found = "" } }
+            for r in recent key r.name {
+              Button { text: lower(r.name); color: loc.name == r.name ? accent : muted; onTap: { loc = r; picking = false; found = "" } }
+            }
+          }
+        }
+      }
+      Rule { }
+      if cur == null {
+        Text { text: wx == null ? "weather…" : "yandex weather offline${wx.err ? ": " + last(lines(wx.err)) : ""}"; style: body; color: muted }
+      } else {
+        // Now.
+        Row {
+          gap: 16
+          align: center
+          Text { text: weatherIcon(cur.code, cur.night); font: icon; fontSize: 64; color: sky; width: 80; align: center }
+          Column {
+            gap: 0
+            weight: 1
+            Text { text: "${cur.temp}°C"; fontSize: 44; color: cyan; maxLines: 1 }
+            Text { text: lower(cur.cond); style: body; maxLines: 2 }
+          }
+        }
+        Text {
+          text: "feels ${cur.feels}° · ↑${day.max}° ↓${day.min}°${cur.yesterday != null ? " · yesterday ${cur.yesterday}°" : ""}"
+          style: small
+          color: muted
+        }
+        if cur.note {
+          Text { text: lower(cur.note); style: small; color: rainSoon >= 30 ? blue : muted }
+        }
+        Rule { }
+        Grid {
+          columns: 2
+          gap: 8
+          Stat { glyph: ""; label: "wind ${cur.windDir ?? ""}"; value: "${cur.wind} m/s · gusts ${cur.gust}"; tint: cyan }
+          Stat { glyph: ""; label: "humidity"; value: "${cur.humidity}%"; tint: blue }
+          Stat { glyph: ""; label: "rain next 12h"; value: "${rainSoon}%"; tint: blue }
+          Stat { glyph: ""; label: "uv index"; value: "${uv} ${day.uvText ?? ""}"; tint: uv >= 6 ? red : uv >= 3 ? yellow : green }
+          Stat { glyph: ""; label: "pressure"; value: "${cur.pressure} mmHg" }
+          if cur.water != null {
+            Stat { glyph: ""; label: "water"; value: "${cur.water}°"; tint: cyan }
+          } else {
+            Stat { glyph: ""; label: "visibility"; value: "${round(cur.visibility / 1000)} km" }
+          }
+        }
+        Rule { }
+        // The next 24 hours: time, icon and rain chance per step, with the temperature curve under them.
+        Text { text: "next 24 hours"; style: label; color: accent }
+        Column {
+          gap: 4
+          Row {
+            gap: 0
+            for s, i in steps key s.time {
+              Column {
+                gap: 2
+                weight: 1
+                align: center
+                Text { text: i == 0 ? "now" : s.label; style: label; color: muted; align: center }
+                Text { text: weatherIcon(s.code, num(s.label) < sunHours[0] || num(s.label) >= sunHours[1]); font: icon; fontSize: 20; align: center }
+              }
+            }
+          }
+          Canvas {
+            height: 84
+            fill: width
+            let n = max(len(steps), 1)
+            let temps = steps.map(s => s.temp)
+            let lo = min(temps)
+            let hi = max(temps)
+            let ys = temps.map(t => 22 + (hi - t) / max(hi - lo, 1) * 26)
+            let xs = range(n).map(i => (i + 0.5) * width / n)
+            path(range(n).map(i => [xs[i], ys[i]]), stroke: accent, width: 2)
+            for s, i in steps {
+              circle(xs[i], ys[i], 3, fill: accent)
+              text("${s.temp}°", xs[i], ys[i] - 13, size: 12, align: center, color: foreground)
+              rect(xs[i] - 10, height - 12, 20, 4, radius: 2, fill: alpha(muted, 0.2))
+              rect(xs[i] - 10, height - 12, 20 * s.rain / 100, 4, radius: 2, fill: blue)
+              text("${s.rain}%", xs[i], height - 24, size: 10, align: center, color: s.rain >= 30 ? blue : muted)
+            }
+          }
+        }
+        Rule { }
+        // Ten days: icon and the day's low to high on a shared scale; tap one for morning to night.
+        Text { text: "10 days · tap a day for details"; style: label; color: accent }
+        for d, i in w.days key d.title {
+          Column {
+            gap: 6
+            onTap: openDay = openDay == i ? -1 : i
+            Row {
+              gap: 8
+              align: center
+              DayName { title: d.title; i: i; width: 72 }
+              Text { text: weatherIcon(d.code, false); font: icon; fontSize: 20; width: 26; align: center }
+              Text { text: "${d.min}°"; style: small; color: muted; width: 36; align: end; maxLines: 1 }
+              Canvas {
+                height: 6
+                weight: 1
+                let span = max(highest - lowest, 1)
+                let x0 = (d.min - lowest) / span * width
+                let x1 = (d.max - lowest) / span * width
+                rect(0, 0, width, height, radius: 3, fill: alpha(muted, 0.2))
+                rect(x0, 0, max(x1 - x0, 6), height, radius: 3, fill: linear(0, 0, width, 0, [cyan, orange]))
+              }
+              Text { text: "${d.max}°"; style: small; width: 36; maxLines: 1 }
+            }
+            if openDay == i {
+              Column {
+                gap: 6
+                padding: [8, 8]
+                border: 1
+                borderColor: alpha(muted, 0.3)
+                Row {
+                  gap: 4
+                  for p in d.parts key p.part {
+                    Column {
+                      gap: 0
+                      weight: 1
+                      align: center
+                      Text { text: p.part; style: label; color: muted; align: center }
+                      Text { text: weatherIcon(p.code, p.part == "night"); font: icon; fontSize: 20; align: center }
+                      Text { text: "${p.temp}°"; style: body; align: center }
+                      Text { text: "feels ${p.feels}°"; style: label; color: muted; align: center; maxLines: 1 }
+                      Text { text: "${p.wind} m/s ${p.dir ?? ""}"; style: label; color: muted; align: center; maxLines: 1 }
+                    }
+                  }
+                }
+                Text {
+                  text: "${lower(d.cond)} · sun ${d.sunrise}–${d.sunset} · uv ${d.uv}${d.water != null ? " · water ${d.water}°" : ""}"
+                  style: small
+                  color: muted
+                }
+              }
+            }
+          }
+        }
+        Rule { }
+        // Sun and moon.
+        Row {
+          gap: 8
+          Stat { glyph: ""; label: "sunrise"; value: day.sunrise; tint: yellow; weight: 1 }
+          Stat { glyph: ""; label: "sunset"; value: day.sunset; tint: orange; weight: 1 }
+        }
+        Stat {
+          glyph: get(moonIcons, day.moon, "")
+          label: "moon · day length ${day.daylight}"
+          value: day.moon ?? "…"
+          tint: foreground
+        }
+        Row {
+          justify: end
+          Button { text: "open yandex weather ↗"; color: muted; onTap: url(w.url) }
+        }
+      }
+    }
+  }
+}

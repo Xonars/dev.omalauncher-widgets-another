@@ -1,0 +1,644 @@
+app "pixel park" {
+  // A theme park tycoon in pixel art, seen from above. Lay paths from the gate, build rides and
+  // food stalls beside them and plant gardens around them. Rides draw guests, every guest pays at
+  // the gate and spends at the stalls, and a flower bed or a tree next to a ride or stall makes it
+  // earn more. Buy more land as the park grows.
+  //
+  // There's no game loop. The coins are `bank` plus what the park has made since `since`, so it
+  // keeps earning while the app is closed; building, upgrading or selling settles them into
+  // `bank`. The guests walking about are worked out from the clock: each one picks a ride for
+  // every round of 22 seconds and walks there along the paths and back.
+
+  meta { owl: 12; description: "A pixel art theme park tycoon: lay paths, build carousels, teacups, a ferris wheel and a roller coaster, open food stalls, plant gardens and watch the guests come"; version: "1.0"; license: "MIT"; category: "games" }
+
+  title: ""
+  statusBar: false
+  edge: true
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="24" cy="21" r="17"/><circle cx="24" cy="21" r="3"/><path d="M24 4v14m0 6v14M7 21h14m6 0h14M12 9l10 10m4 4 10 10M36 9 26 19m-4 4L12 33M24 24 14 44m10-20 10 20M9 44h30"/></svg>"""
+
+  source now = clock every 1s
+
+  state bank = 400 persist
+  state since = 0 persist
+  // the open cells with path on them; the two at the gate are always there
+  state paths = [91, 92] persist
+  // every ride, stall and garden: its top left cell, kind, level and the coins spent on it
+  state items = [] persist
+  // how many rows of the park, from the gate up, are open
+  state land = 6 persist
+  // when the app last ran, for the welcome back
+  state last = 0 persist
+  state greeted = false
+  // -1, or the kind being built (12 is path)
+  state tool = -1
+  state tab = 0
+  // the top left cell of the selected ride, stall or garden; -2 is the land for sale
+  state sel = -1
+  state msg = ""
+  state msgT = -99
+
+  every 15s { last = now ?? last }
+  when now != null && !greeted {
+    greeted = true
+    if last > 0 && now - last > 120 && rate > 0 {
+      msg = "WELCOME BACK +${[rate * (now - last)].map(fmt)[0]}"
+      msgT = time
+    }
+    last = now
+  }
+
+  // ---- what there is to build -------------------------------------------------------------------
+  // t: 0 ride, 1 stall, 2 garden; w: 1 or 2 cells square. A ride earns r a second and draws
+  // pull guests; a stall earns r for every 10 guests in the park; a garden adds b tenths to what the
+  // rides and stalls around it earn.
+  let KD = [
+    {n: "CAROUSEL", t: 0, w: 1, cost: 100, r: 1.5, pull: 8},
+    {n: "TEACUPS", t: 0, w: 1, cost: 800, r: 9, pull: 14},
+    {n: "BUMPER CARS", t: 0, w: 2, cost: 6000, r: 50, pull: 30},
+    {n: "FERRIS WHEEL", t: 0, w: 2, cost: 40000, r: 280, pull: 55},
+    {n: "LOG FLUME", t: 0, w: 2, cost: 300000, r: 1700, pull: 90},
+    {n: "ROLLER COASTER", t: 0, w: 2, cost: 2500000, r: 11000, pull: 150},
+    {n: "ICE CREAM", t: 1, w: 1, cost: 150, r: 1},
+    {n: "BURGERS", t: 1, w: 1, cost: 5000, r: 10},
+    {n: "GIFT SHOP", t: 1, w: 1, cost: 60000, r: 90},
+    {n: "TREE", t: 2, w: 1, cost: 40, b: 1},
+    {n: "FLOWERS", t: 2, w: 1, cost: 150, b: 2},
+    {n: "FOUNTAIN", t: 2, w: 1, cost: 3000, b: 4}
+  ]
+  let TABS = [[0, 1, 2, 3, 4, 5], [6, 7, 8], [9, 10, 11]]
+  let LANDCOST = [3000, 50000, 900000]
+
+  // ---- the park, 8 cells across and 12 down, the gate below the bottom row -----------------------
+  let nbs = range(96).map(c => [c >= 8 ? c - 8 : -1, c < 88 ? c + 8 : -1, c % 8 > 0 ? c - 1 : -1, c % 8 < 7 ? c + 1 : -1].filter(n => n >= 0))
+  let foot = it => KD[it.k].w == 2 ? [it.c, it.c + 1, it.c + 8, it.c + 9] : [it.c]
+  // which item is on each cell, or -1
+  let own = reduce(range(len(items)), (A, i) => reduce([items[i]].map(foot)[0], (B, c) => set(B, c, i), A), range(96).map(c => -1))
+  let isP = reduce(paths, (A, c) => set(A, c, true), range(96).map(c => false))
+  // how many steps along the paths each cell is from the gate, -1 for none
+  let dist = reduce(range(96), (A, s) => len(A.f) == 0 ? A : [unique(flatten(A.f.map(c => nbs[c]))).filter(n => isP[n] && A.d[n] < 0)].map(nf => {d: reduce(nf, (D, n) => set(D, n, s + 1), A.d), f: nf})[0], {d: set(set(range(96).map(c => -1), 91, 0), 92, 0), f: [91, 92]}).d
+  // For each item: the path cell nearest the gate beside it (its door, -1 if none), and the
+  // gardens around it.
+  let info = range(len(items)).map(i => [items[i]].map(it => [[KD[it.k], it.c % 8, floor(it.c / 8)]].map(z => {
+    k: it.k, c: it.c, l: it.l, t: z[0].t, w: z[0].w,
+    door: first(unique(flatten([it].map(foot)[0].map(c => nbs[c]))).filter(n => own[n] != i && dist[n] >= 0).sortBy(n => dist[n])) ?? -1,
+    beauty: z[0].t == 2 ? 0 : sum(flatten(range(-1, z[0].w + 1).map(dy => range(-1, z[0].w + 1).map(dx => [z[1] + dx, z[2] + dy]))).filter(p => p[0] >= 0 && p[0] < 8 && p[1] >= 0 && p[1] < 12).map(p => own[p[1] * 8 + p[0]]).filter(o => o >= 0 && o != i).map(o => KD[items[o].k].b ?? 0))
+  })[0])[0])
+  let conn = info.map(f => f.door >= 0)
+  let boost = info.map(f => 1 + min(0.6, 0.1 * f.beauty))
+  let lvm = l => l * (l >= 10 ? 2 : 1) * (l >= 25 ? 2 : 1) * (l >= 50 ? 2 : 1)
+  let rideKinds = len(unique(range(len(info)).filter(i => info[i].t == 0 && conn[i]).map(i => info[i].k)))
+  let stallKinds = len(unique(range(len(info)).filter(i => info[i].t == 1 && conn[i]).map(i => info[i].k)))
+  let beauty = sum(info.filter(f => f.t == 2).map(f => KD[f.k].b))
+  let stars = clamp(floor(1 + rideKinds * 0.6 + stallKinds * 0.5 + min(beauty, 24) / 8), 1, 5)
+  let pull = sum(range(len(info)).map(i => info[i].t == 0 && conn[i] ? KD[info[i].k].pull * (1 + 0.15 * (info[i].l - 1)) * boost[i] : 0))
+  let guests = floor(pull * (0.6 + 0.2 * stars))
+  let earn = range(len(info)).map(i => !conn[i] || info[i].t == 2 ? 0 : KD[info[i].k].r * [info[i].l].map(lvm)[0] * boost[i] * (info[i].t == 1 ? guests / 10 : 1))
+  let gate = guests * 0.25
+  let rate = sum(earn) + gate
+  let tnow = now ?? since
+  let coins = bank + rate * max(0, tnow - since)
+  // what the next of a kind costs: each one more than the last
+  let price = range(12).map(k => floor(KD[k].cost * pow(KD[k].t == 2 ? 1.08 : 1.6, count(items, it => it.k == k))))
+  let upCost = items.map(it => floor(KD[it.k].cost * 0.5 * pow(1.16, it.l - 1)))
+  let si = indexOf(items.map(it => it.c), sel)
+
+  // The way to each ride and stall: from below the gate, cell by cell to its door, then a step
+  // towards it. In cells, centre to centre.
+  let routes = info.map(f => f.door < 0 || f.t == 2 ? [] : [reverse(reduce(range(dist[f.door]), (R, s) => R + [first(nbs[last(R)].filter(n => dist[n] == dist[last(R)] - 1))], [f.door]))].map(R => [[R[0] % 8 + 0.5, 12.9]] + R.map(c => [c % 8 + 0.5, floor(c / 8) + 0.5]) + [[f.door % 8 + 0.5 + 0.3 * sign(f.c % 8 + f.w / 2 - 0.5 - f.door % 8), floor(f.door / 8) + 0.5 + 0.3 * sign(floor(f.c / 8) + f.w / 2 - 0.5 - floor(f.door / 8))]])[0])
+  let dest = range(len(info)).filter(i => len(routes[i]) > 0)
+  let hasGifts = any(range(len(info)), i => info[i].k == 8 && conn[i])
+
+  let fmt = n => n < 1000 ? str(floor(n))
+    : n < 1000000 ? "${fixed(n / 1000, n < 100000 ? 1 : 0)}K"
+    : n < 1000000000 ? "${fixed(n / 1000000, n < 100000000 ? 1 : 0)}M"
+    : n < 1000000000000 ? "${fixed(n / 1000000000, n < 100000000000 ? 1 : 0)}B"
+    : "${fixed(n / 1000000000000, 1)}T"
+  let fmtRate = n => n < 10 && n != floor(n) ? fixed(n, 1) : [n].map(fmt)[0]
+
+  // ---- the screen, in dp ------------------------------------------------------------------------
+  // The park on top and the build panel below it, or in landscape the panel to the right.
+  let SW = screenWidth ?? 400
+  let SH = screenHeight ?? 800
+  let LS = SW > SH
+  let TOP = max(screenTop ?? 0, 12)
+  let INS = max(screenInset ?? 0, 16)
+  let HUD = 40
+  let C = floor(LS ? min((SH - TOP - HUD - INS - 4) / 12.8, (SW - 320) / 8) : min((SW - 8) / 8, (SH - TOP - HUD - INS - 214) / 12.8))
+  let q = C / 16
+  let MW = 8 * C
+  let MH = 12 * C
+  let GH = floor(0.8 * C)
+  let MX = LS ? 12 : floor((SW - MW) / 2)
+  let MY = TOP + HUD
+  let PX = LS ? MX + MW + 16 : 10
+  let PY = LS ? TOP + HUD : MY + MH + GH + 10
+  let PW = LS ? SW - PX - 16 : SW - 20
+  let PH = SH - INS - PY
+  let TH = 30
+  let CC = 3
+  let CW = (PW - (CC - 1) * 6) / CC
+  let CY = PY + TH + 8
+  let CH = min(84, (PH - TH - 14) / 2)
+  // the item panel's buttons
+  let BH = min(48, (PH - 20) / 3)
+  let BY = PY + PH - BH - 4
+  let UW = floor((PW - 8) * 0.6)
+  // ---- the art ----------------------------------------------------------------------------------
+  let PAL = {o: "#2a1e30", K: "#2a2236", W: "#fff6e8", w: "#d8ccc0", R: "#e04848", r: "#a02838", Y: "#ffd36a", y: "#d8962a", B: "#4a90e0", b: "#2a5aa0", C: "#a8e8ff", c: "#3a9ad8", G: "#5fb048", g: "#3a8a3a", L: "#8ad860", P: "#ff8ab0", p: "#d05a88", T: "#b07a45", t: "#6a4428", S: "#c0b8d0", s: "#7a7490", O: "#ff9a48", M: "#9a5ad8", m: "#6038a0", U: "#f0d8b0", N: "#4a4458", n: "#5e5870", F: "#f4c8a0"}
+  let BRIGHT = ["#e04848", "#4a90e0", "#ffd36a", "#5fb048", "#ff8ab0", "#9a5ad8", "#ff9a48", "#a8e8ff"]
+  let DARK = ["#a02838", "#2a5aa0", "#d8962a", "#3a8a3a", "#d05a88", "#6038a0", "#c06a28", "#3a9ad8"]
+  // the panel and the numbers above the park, in colours of their own rather than the theme's,
+  // whose red or green would say more than they mean here
+  let UI = {bg: "#1d1838", card: "#2a2348", text: "#fff4e0", dim: "#a8a0d0", gold: "#ffd36a", go: "#5fa048", warn: "#ff7a5a"}
+  let tint = range(8).map(j => merge(PAL, {X: BRIGHT[j], x: DARK[j]}))
+  // What doesn't move, worked out once and not every frame: the darker squares of the grass, its
+  // tufts and flowers, the pines on the land for sale, and the paths' edges and pebbles.
+  let OPEN0 = (12 - land) * 8
+  let checker = range(OPEN0, 96).filter(c => (c % 8 + floor(c / 8)) % 2 == 0).map(c => [MX + c % 8 * C, MY + floor(c / 8) * C])
+  let tufts = range(OPEN0, 96).filter(c => own[c] < 0 && !isP[c] && hash(c, 1) < 0.7).map(c => [MX + (c % 8 + 0.15 + hash(c, 2) * 0.6) * C, MY + (floor(c / 8) + 0.2 + hash(c, 3) * 0.6) * C, hash(c, 4) < 0.2 ? ["#fff6e8", "#ff8ab0", "#ffd36a"][floor(hash(c, 5) * 3)] : "#8ad860"])
+  let pines = range(OPEN0).filter(c => hash(c, 9) < 0.7).map(c => [MX + (c % 8 + 0.1 + hash(c, 10) * 0.35) * C, MY + (floor(c / 8) + hash(c, 11) * 0.3) * C])
+  let edges = flatten(paths.map(c => [[MX + c % 8 * C, MY + floor(c / 8) * C]].map(o => [
+    c < 8 || !isP[c - 8] ? [o[0], o[1], C, 1.5 * q] : null,
+    c < 88 && !isP[c + 8] ? [o[0], o[1] + C - 1.5 * q, C, 1.5 * q] : null,
+    c % 8 == 0 || !isP[c - 1] ? [o[0], o[1], 1.5 * q, C] : null,
+    c % 8 == 7 || !isP[c + 1] ? [o[0] + C - 1.5 * q, o[1], 1.5 * q, C] : null,
+    [o[0] + (3 + floor(hash(c, 6) * 9)) * q, o[1] + (3 + floor(hash(c, 7) * 9)) * q, 2 * q, q, 1]
+  ].filter(r => r != null))[0]))
+  let free = range(OPEN0, 96).filter(c => own[c] < 0 && !isP[c])
+  // back row first, so what stands in front covers what's behind
+  let order = range(len(items)).sortBy(i => (floor(items[i].c / 8) + KD[items[i].k].w) * 8 + items[i].c % 8)
+  // each guest's looks, and where on the path they walk
+  let crowd = range(len(dest) > 0 ? min(guests, 28) : 0).map(k => {o: hash(k, 1), dx: (hash(k, 3) - 0.5) * 0.4, dy: (hash(k, 4) - 0.5) * 0.3, ball: hasGifts && hash(k, 5) < 0.3, bc: BRIGHT[floor(hash(k, 6) * 8)], hair: DARK[floor(hash(k, 7) * 8)], shirt: BRIGHT[floor(hash(k, 8) * 8)]})
+  let press = "https://raw.githubusercontent.com/google/fonts/main/ofl/pressstart2p/PressStart2P-Regular.ttf"
+
+  let carouselArt = [["......oYo.......", ".....ooYYoo.....", "...ooWWYYRRoo...", "..oWWWWWRRRRRo..", ".oRRRWWWRRRWWWo.", "oRRRRRWWRRWWWWWo", "oRRRRRRRRRRRRRRo", "oWWWWWRRWWRRRRRo", ".oWWWRRRWWWRRRo.", ".oyRRRRRWWWWWyo.", ".oWRKRWRWRWRWyo.", "oCCCKKKYYPKKWWWo", "oCCCKKKYYPKKWWWo", "oyTTTTTYYTTTTTyo", "oyTTTTTTTTTTTTyo", "oyyTTTTTTTTTTyyo", ".ooyyyyyyyyyyoo.", "...oooooooooo..."], ["......oYo.......", ".....ooYYoo.....", "...ooRRYYRRoo...", "..oWWWRRRRWWWo..", ".oWWWWWRRWWWWWo.", "oRRRWWWRRWWWRRRo", "oRRRRRRRRRRRRRRo", "oRRRWWWRRWWWRRRo", ".oWWWWWRRWWWWWo.", ".oKWWWRRRRWWWKo.", ".oWRKRWRWRRRWKo.", ".oKKKPPYYKKWWWo.", ".oKKKPPYYKKWWWo.", "oyTTTTTYYTTTTTyo", "oyTTTTTTTTTTTTyo", "oyyTTTTTTTTTTyyo", ".ooyyyyyyyyyyoo.", "...oooooooooo..."], ["......oYo.......", ".....ooYYoo.....", "...ooRRYYWWoo...", "..oRRRRRWWWWWo..", ".oWWWRRRWWWRRRo.", "oWWWWWRRWWRRRRRo", "oWWWWWWWWWWWWWWo", "oRRRRRWWRRWWWWWo", ".oRRRWWWRRRWWWo.", ".oKWWWWWRRRRRKo.", ".oWRyRWWWRRRWKo.", ".oKPPPKYYKWWWKo.", ".oKPPPKYYKWWWKo.", "oyTTTTTYYTTTTTyo", "oyTTTTTTTTTTTTyo", "oyyTTTTTTTTTTyyo", ".ooyyyyyyyyyyoo.", "...oooooooooo..."], ["......oYo.......", ".....ooYYoo.....", "...ooWWYYWWoo...", "..oRRRWWWWRRRo..", ".oRRRRRWWRRRRRo.", "oWWWRRRWWRRRWWWo", "oWWWWWWWWWWWWWWo", "oWWWRRRWWRRRWWWo", ".oRRRRRWWRRRRRo.", ".oKRRRWWWWRRRKo.", ".oWRPRWWWRWRWKo.", ".oPPPKKYYWWKKKo.", ".oPPPKKYYWWKKKo.", "oyTTTTTYYTTTTTyo", "oyTTTTTTTTTTTTyo", "oyyTTTTTTTTTTyyo", ".ooyyyyyyyyyyoo.", "...oooooooooo..."]]
+  let teaBaseArt = ["................", ".......oo.......", "......oRRo......", ".....oRRRRo.....", "...oopRRRRpoo...", "..oPPPPRRPPPPo..", ".oPPPWWYYWWPPPo.", "oPPPWPPYYPPWPPPo", "oPPWPPPYYPPPWPPo", "pPPWPPPPPPPPWPPp", "oPPPWPPPPPPWPPPo", "opPPPWWWWWWPPPpo", ".opPPPPPPPPPPpo.", "..opppPPPPpppo..", "...ooppppppoo...", ".....oooooo....."]
+  let cupArt = ["oXXXo", "XxxxX", "XXXXX", "oXXXo"]
+  let bumperArt = [[1, 0, 3, 1, "#ffd36a"], [28, 0, 3, 1, "#ffd36a"], [1, 1, 2, 4, "#c0b8d0"], [3, 1, 1, 4, "#7a7490"], [28, 1, 2, 4, "#c0b8d0"], [30, 1, 1, 4, "#7a7490"], [4, 3, 4, 2, "#e04848"], [8, 3, 2, 2, "#ffd36a"], [10, 3, 6, 2, "#e04848"], [16, 3, 2, 2, "#ffd36a"], [18, 3, 6, 2, "#e04848"], [24, 3, 2, 2, "#ffd36a"], [26, 3, 2, 2, "#e04848"], [1, 5, 2, 21, "#e04848"], [3, 5, 26, 1, "#5e5870"], [29, 5, 2, 21, "#e04848"], [3, 6, 26, 20, "#4a4458"], [1, 26, 3, 1, "#ffd36a"], [4, 26, 24, 3, "#4a4458"], [28, 26, 3, 1, "#ffd36a"], [1, 27, 2, 4, "#c0b8d0"], [3, 27, 1, 4, "#7a7490"], [28, 27, 2, 4, "#c0b8d0"], [30, 27, 1, 4, "#7a7490"], [4, 29, 4, 2, "#a02838"], [8, 29, 2, 2, "#ffd36a"], [10, 29, 6, 2, "#a02838"], [16, 29, 2, 2, "#ffd36a"], [18, 29, 6, 2, "#a02838"], [24, 29, 2, 2, "#ffd36a"], [26, 29, 2, 2, "#a02838"]]
+  let carArt = ["oXXXXo", "XXWXXX", "XxFFxX", "XxFFxX", "XXXXXX", "oXXXXo"]
+  let wheelArt = [["................................", ".............WWWWWW.............", "..........WWWWWWWWWWWW..........", ".........WWWSSSSSSSSWWW.........", ".......WWWSS...w....SSWWW.......", "......WWWS.....w......SWWW......", "......WWS......w.......SWW......", ".....WWS.w.....w......w.SWW.....", "....WWS...w.....w....w...SWW....", "....WWS....w....w...w....SWW....", "....WS......w...w..w......SW....", "...WWS.......w..w.w.......SWW...", "...WWS........YYYY........SWW...", "...WWS........YyyY........SWW...", "...WWSwwwwwwwwYyyYwwwwwwwwSWW...", "...WWS........YYYY........SWW...", "...WWS.......wSSwsw.......SWW...", "....WS......wSS.wssw......SW....", "....WWS....wSSS.wsssw....SWW....", "....WWS...w.SS..w.ss.w...SWW....", ".....WWS.w.SSS..w.sss.w.SWW.....", "......WWS..SS...w..ss..SWW......", "......WWWSSSS...w..sssSWWW......", ".......WWWSS....w...SSWWW.......", ".........WWWSSSSSSSSWWW.........", ".........SWWWWWWWWWWWWs.........", "........SSS..WWWWWW..sss........", "........SS...BBBBBB...ss........", ".......SSS...BBBBBB...sss.......", ".......SS....BBBBBB....ss.......", "....TTTSSTTTTTTTTTTTTTTsssTT....", "....TTTSSTTTTTTTTTTTTTTTssTT....", "....TTTTTTTTTTTTTTTTTTTTTTTT....", "....tttttttttttttttttttttttt...."], ["................................", ".............WWWWWW.............", "..........WWWWWWWWWWWW..........", ".........WWWSSSSSSSSWWW.........", ".......WWWSS.....w..SSWWW.......", "......WWWSw......w....SWWW......", "......WWS.ww.....w.....SWW......", ".....WWS...w.....w......SWW.....", "....WWS.....w....w.....wwSWW....", "....WWS.....ww..w.....ww.SWW....", "....WS.......w..w...ww....SW....", "...WWS........w.w..ww.....SWW...", "...WWSwwwww...YYYYw.......SWW...", "...WWS.....wwwYyyY........SWW...", "...WWS........YyyYwww.....SWW...", "...WWS.......wYYYY...wwwwwSWW...", "...WWS.....wwSSwsws.......SWW...", "....WS....ww.SSw.sw.......SW....", "....WWS.ww..SSSw.sww.....SWW....", "....WWSww...SSw...sw.....SWW....", ".....WWS...SSSw...ssw...SWW.....", "......WWS..SS.w....sww.SWW......", "......WWWSSSS.w....sswSWWW......", ".......WWWSS..w.....SSWWW.......", ".........WWWSSSSSSSSWWW.........", ".........SWWWWWWWWWWWWs.........", "........SSS..WWWWWW..sss........", "........SS...BBBBBB...ss........", ".......SSS...BBBBBB...sss.......", ".......SS....BBBBBB....ss.......", "....TTTSSTTTTTTTTTTTTTTsssTT....", "....TTTSSTTTTTTTTTTTTTTTssTT....", "....TTTTTTTTTTTTTTTTTTTTTTTT....", "....tttttttttttttttttttttttt...."], ["................................", ".............WWWWWW.............", "..........WWWWWWWWWWWW..........", ".........WWWSSSSSSSSWWW.........", ".......WWWSSw......wSSWWW.......", "......WWWS..w......w..SWWW......", "......WWS...w......w...SWW......", ".....WWS.....w....w.....SWW.....", "....WWS......w....w......SWW....", "....WWS......ww..ww......SWW....", "....WSwww.....w..w.....wwwSW....", "...WWS...www..w..w..www...SWW...", "...WWS.....wwwYYYYwww.....SWW...", "...WWS........YyyY........SWW...", "...WWS........YyyY........SWW...", "...WWS.....wwwYYYYwww.....SWW...", "...WWS...www.SwSsws.www...SWW...", "....WSwww....Sw..ws....wwwSW....", "....WWS.....Sww..wws.....SWW....", "....WWS.....Sw....ws.....SWW....", ".....WWS...SSw....wss...SWW.....", "......WWS..Sw......ws..SWW......", "......WWWSSSw......wssSWWW......", ".......WWWSSw......wSSWWW.......", ".........WWWSSSSSSSSWWW.........", ".........SWWWWWWWWWWWWs.........", "........SSS..WWWWWW..sss........", "........SS...BBBBBB...ss........", ".......SSS...BBBBBB...sss.......", ".......SS....BBBBBB....ss.......", "....TTTSSTTTTTTTTTTTTTTsssTT....", "....TTTSSTTTTTTTTTTTTTTTssTT....", "....TTTTTTTTTTTTTTTTTTTTTTTT....", "....tttttttttttttttttttttttt...."], ["................................", ".............WWWWWW.............", "..........WWWWWWWWWWWW..........", ".........WWWSSSSSSSSWWW.........", ".......WWWSS..w.....SSWWW.......", "......WWWS....w......wSWWW......", "......WWS.....w.....ww.SWW......", ".....WWS......w.....w...SWW.....", "....WWSww.....w....w.....SWW....", "....WWS.ww.....w..ww.....SWW....", "....WS....ww...w..w.......SW....", "...WWS.....ww..w.w........SWW...", "...WWS.......wYYYY...wwwwwSWW...", "...WWS........YyyYwww.....SWW...", "...WWS.....wwwYyyY........SWW...", "...WWSwwwww...YYYYw.......SWW...", "...WWS.......SwSwssww.....SWW...", "....WS.......wS.wss.ww....SW....", "....WWS.....wwS.wsss..ww.SWW....", "....WWS.....wS...wss...wwSWW....", ".....WWS...wSS...wsss...SWW.....", "......WWS.wwS....w.ss..SWW......", "......WWWSwSS....w.sssSWWW......", ".......WWWSS.....w..SSWWW.......", ".........WWWSSSSSSSSWWW.........", ".........SWWWWWWWWWWWWs.........", "........SSS..WWWWWW..sss........", "........SS...BBBBBB...ss........", ".......SSS...BBBBBB...sss.......", ".......SS....BBBBBB....ss.......", "....TTTSSTTTTTTTTTTTTTTsssTT....", "....TTTSSTTTTTTTTTTTTTTTssTT....", "....TTTTTTTTTTTTTTTTTTTTTTTT....", "....tttttttttttttttttttttttt...."]]
+  let flumeArt = ["................................", "................................", "................................", "......ttttttttttttttttttt.......", ".....ttTTTTTTTTTTTTTTTTTTt......", "....ttTTccccccccccccccccTTt.....", "...ttTTcccccCcccccCccccccTTt....", "..ttTTccccccccccccccccccccTTt...", "..tTTccccccTTTTTTTTTTcccCccTT...", "..tTccCcccTT.GGGGGGtTTccccWWWWW.", "..tTcccccTTGGGGGGGGGtTTcccWWWWW.", "..tTccccTTGGGGGGGGGGgtTTccccT...", "..tTcccTTGGGGGGGGGGGgGtTTcccT...", "..tTcccTGGGSSSSGGGGgggGtTcWWWWW.", "..tTcccTGGSSWWSSGGGgggGtTcCcT...", "..tTcCcTGGSSSSSSGGgggggtTcccT...", "..tTcccTGGGSSSSggggggggtTcccT...", "..tTcccTGGGGGGgggggggggtTcccT...", "..tTcccTGGGGGgggggggggGtTcccT...", "..tTcccTtGGGGGggggggtGttTcccT...", "..tTcccTTtGGGGGggggGtttTTcccT...", "..tTccccTTtGGGGGGGGGttTTccCcT...", "..tTccCccTTtGGGGGGGttTTcccccT...", "..tTccccccTTttttttttTTccccccT...", "..tTTccccccTTTTTTTTTTccccccTT...", "...tTTccccccccccccccccCcccTT....", "....tTTcccCcccccCccccccccTT.....", ".....tTTccccccccccccccccTT......", "......tTTTTTTTTTTTTTTTTTT.......", "................................", "................................", "................................"]
+  let flumePath = [[16.0, 26.5], [17.5, 26.5], [18.9, 26.5], [20.4, 26.4], [21.8, 26.1], [23.1, 25.5], [24.3, 24.6], [25.2, 23.5], [25.9, 22.3], [26.4, 20.9], [26.5, 19.4], [26.5, 18.0], [26.5, 16.5], [26.5, 15.0], [26.5, 13.6], [26.4, 12.1], [25.9, 10.7], [25.2, 9.5], [24.3, 8.4], [23.1, 7.5], [21.8, 6.9], [20.4, 6.6], [18.9, 6.5], [17.5, 6.5], [16.0, 6.5], [14.5, 6.5], [13.1, 6.5], [11.6, 6.6], [10.2, 6.9], [8.9, 7.5], [7.7, 8.4], [6.8, 9.5], [6.1, 10.7], [5.6, 12.1], [5.5, 13.6], [5.5, 15.0], [5.5, 16.5], [5.5, 18.0], [5.5, 19.4], [5.6, 20.9], [6.1, 22.3], [6.8, 23.5], [7.7, 24.6], [8.9, 25.5], [10.2, 26.1], [11.6, 26.4], [13.1, 26.5], [14.5, 26.5]]
+  let logArt = [["UUUUUU", "TTFFTT", "TTFFTT", "tttttt"], ["UTTt", "UTTt", "UFFt", "UFFt", "UTTt", "UTTt"]]
+  let coasterArt = ["................................", "................................", "................................", ".........RRRRRRRRR..............", "........RRRrrrrrRRR.............", ".......RRrrs...srrRR............", "......RRR..s...s..RRR...........", "......RRr..s...s..rRR...........", "......RR...........RR...........", "......RR...........RR...........", "......RR...........RR...........", "......RR...........RR...........", "......RRSS.......S.RR...........", "......RRR........SRRR...........", "......rRRR.......RRRr...........", ".......rRRRRR.RRRRRr............", ".....RRRRRRRR.RRRRRRRRRRRRRR....", "....RRrrrrrrr.rrrrrrrrrrrrrRR...", "...RRrSs...s..s..s.sS...s..rRR..", "...RR..s...s..s....s....s...RR..", "...RR..s......s....s....s...RR..", "...RR.......................rRR.", "...RR.....bbbbbbbbbbbb......sRR.", "...RR.....bbbbbbbbbbbb.......RR.", "...RR.....BBBBBBBBBBBB.......RR.", "...RR.....BBBBBBBBBBBB......RRr.", "...RR.....BBKKKKKKKKBB......RR..", "...RR.....BBKKKKKKKKBB......RR..", "...rRR....BBUUUUUUUUBB.....RRr..", "...srRRRR...............RRRRr...", "...s.rrrRRRRRRRRRRRRRRRRRrrrs...", "...s....rrrrrrrrrrrrrrrrr...s...", "................................", "................................"]
+  let coasterPath = [[16.0, 30.0], [17.7, 30.0], [19.4, 30.0], [21.2, 30.0], [22.9, 30.0], [24.6, 30.0], [26.2, 29.5], [27.6, 28.4], [28.6, 27.0], [29.0, 25.3], [29.0, 23.6], [29.0, 21.9], [28.9, 20.2], [28.4, 18.6], [27.3, 17.2], [25.8, 16.3], [24.1, 16.0], [22.4, 16.0], [20.7, 16.0], [19.0, 16.0], [17.3, 16.0], [15.5, 16.0], [14.2, 16.0], [15.9, 15.7], [17.4, 14.9], [18.6, 13.7], [19.5, 12.2], [20.0, 10.6], [19.9, 8.9], [19.5, 7.2], [18.6, 5.7], [17.4, 4.5], [15.9, 3.6], [14.3, 3.1], [12.6, 3.0], [10.9, 3.3], [9.3, 4.1], [8.0, 5.1], [6.9, 6.5], [6.3, 8.1], [6.0, 9.8], [6.2, 11.5], [6.9, 13.0], [8.0, 14.4], [9.4, 15.4], [11.0, 15.9], [11.3, 16.0], [9.6, 16.0], [7.9, 16.0], [6.2, 16.3], [4.7, 17.2], [3.6, 18.6], [3.1, 20.2], [3.0, 21.9], [3.0, 23.6], [3.0, 25.3], [3.4, 27.0], [4.4, 28.4], [5.8, 29.5], [7.4, 30.0], [9.1, 30.0], [10.8, 30.0], [12.6, 30.0], [14.3, 30.0]]
+  let stallArt = [[[5, 0, 1, 1, "#2a1e30"], [6, 0, 1, 1, "#fff6e8"], [7, 0, 3, 3, "#ff8ab0"], [10, 0, 1, 1, "#2a1e30"], [4, 1, 1, 2, "#2a1e30"], [5, 1, 2, 2, "#ff8ab0"], [10, 1, 1, 2, "#ff8ab0"], [11, 1, 1, 2, "#2a1e30"], [2, 3, 1, 1, "#2a1e30"], [5, 3, 1, 1, "#2a1e30"], [6, 3, 1, 1, "#d8962a"], [7, 3, 1, 1, "#ffd36a"], [8, 3, 2, 1, "#d8962a"], [10, 3, 1, 1, "#2a1e30"], [13, 3, 1, 1, "#2a1e30"], [1, 4, 1, 3, "#2a1e30"], [2, 4, 1, 3, "#6a4428"], [3, 4, 1, 3, "#2a1e30"], [6, 4, 1, 3, "#2a1e30"], [7, 4, 2, 2, "#d8962a"], [9, 4, 1, 3, "#2a1e30"], [12, 4, 1, 3, "#2a1e30"], [13, 4, 1, 3, "#6a4428"], [14, 4, 1, 3, "#2a1e30"], [4, 6, 2, 1, "#2a1e30"], [7, 6, 2, 1, "#2a1e30"], [10, 6, 2, 1, "#2a1e30"], [0, 7, 1, 3, "#2a1e30"], [1, 7, 3, 3, "#ff8ab0"], [4, 7, 3, 3, "#fff6e8"], [7, 7, 3, 3, "#ff8ab0"], [10, 7, 3, 3, "#fff6e8"], [13, 7, 2, 3, "#ff8ab0"], [15, 7, 1, 4, "#2a1e30"], [1, 10, 1, 7, "#2a1e30"], [2, 10, 1, 1, "#ff8ab0"], [3, 10, 2, 2, "#f0d8b0"], [5, 10, 1, 1, "#fff6e8"], [6, 10, 2, 2, "#f0d8b0"], [8, 10, 1, 1, "#ff8ab0"], [9, 10, 2, 2, "#f0d8b0"], [11, 10, 1, 1, "#fff6e8"], [12, 10, 2, 5, "#f0d8b0"], [14, 10, 1, 1, "#ff8ab0"], [2, 11, 1, 5, "#f0d8b0"], [5, 11, 1, 1, "#f0d8b0"], [8, 11, 1, 1, "#f0d8b0"], [11, 11, 1, 1, "#f0d8b0"], [14, 11, 1, 6, "#2a1e30"], [3, 12, 1, 3, "#f0d8b0"], [4, 12, 8, 3, "#2a2236"], [3, 15, 10, 1, "#b07a45"], [13, 15, 1, 1, "#f0d8b0"], [2, 16, 12, 1, "#6a4428"], [2, 17, 12, 1, "#2a1e30"]], [[4, 0, 1, 1, "#2a1e30"], [5, 0, 1, 2, "#ff9a48"], [6, 0, 1, 1, "#f0d8b0"], [7, 0, 4, 2, "#ff9a48"], [11, 0, 1, 1, "#2a1e30"], [3, 1, 1, 6, "#2a1e30"], [4, 1, 1, 1, "#ff9a48"], [6, 1, 1, 1, "#ff9a48"], [11, 1, 1, 1, "#ff9a48"], [12, 1, 1, 6, "#2a1e30"], [4, 2, 8, 1, "#5fb048"], [2, 3, 1, 1, "#2a1e30"], [4, 3, 8, 1, "#6a4428"], [13, 3, 1, 1, "#2a1e30"], [1, 4, 1, 3, "#2a1e30"], [2, 4, 1, 3, "#6a4428"], [4, 4, 1, 1, "#2a1e30"], [5, 4, 6, 1, "#ff9a48"], [11, 4, 1, 1, "#2a1e30"], [13, 4, 1, 3, "#6a4428"], [14, 4, 1, 3, "#2a1e30"], [5, 5, 6, 2, "#2a1e30"], [4, 6, 1, 1, "#2a1e30"], [11, 6, 1, 1, "#2a1e30"], [0, 7, 1, 3, "#2a1e30"], [1, 7, 3, 3, "#e04848"], [4, 7, 3, 3, "#ffd36a"], [7, 7, 3, 3, "#e04848"], [10, 7, 3, 3, "#ffd36a"], [13, 7, 2, 3, "#e04848"], [15, 7, 1, 4, "#2a1e30"], [1, 10, 1, 7, "#2a1e30"], [2, 10, 1, 1, "#e04848"], [3, 10, 2, 2, "#fff6e8"], [5, 10, 1, 1, "#ffd36a"], [6, 10, 2, 2, "#fff6e8"], [8, 10, 1, 1, "#e04848"], [9, 10, 2, 2, "#fff6e8"], [11, 10, 1, 1, "#ffd36a"], [12, 10, 2, 5, "#fff6e8"], [14, 10, 1, 1, "#e04848"], [2, 11, 1, 5, "#fff6e8"], [5, 11, 1, 1, "#fff6e8"], [8, 11, 1, 1, "#fff6e8"], [11, 11, 1, 1, "#fff6e8"], [14, 11, 1, 6, "#2a1e30"], [3, 12, 1, 3, "#fff6e8"], [4, 12, 8, 3, "#2a2236"], [3, 15, 10, 1, "#b07a45"], [13, 15, 1, 1, "#fff6e8"], [2, 16, 12, 1, "#6a4428"], [2, 17, 12, 1, "#2a1e30"]], [[8, 0, 4, 1, "#2a1e30"], [4, 1, 4, 1, "#2a1e30"], [8, 1, 1, 4, "#4a90e0"], [9, 1, 1, 4, "#fff6e8"], [10, 1, 2, 4, "#4a90e0"], [12, 1, 1, 6, "#2a1e30"], [3, 2, 1, 5, "#2a1e30"], [4, 2, 1, 1, "#9a5ad8"], [5, 2, 1, 3, "#ffd36a"], [6, 2, 2, 1, "#9a5ad8"], [2, 3, 1, 1, "#2a1e30"], [4, 3, 1, 1, "#ffd36a"], [6, 3, 2, 1, "#ffd36a"], [13, 3, 1, 1, "#2a1e30"], [1, 4, 1, 3, "#2a1e30"], [2, 4, 1, 3, "#6a4428"], [4, 4, 1, 1, "#9a5ad8"], [6, 4, 2, 1, "#9a5ad8"], [13, 4, 1, 3, "#6a4428"], [14, 4, 1, 3, "#2a1e30"], [4, 5, 8, 2, "#2a1e30"], [0, 7, 1, 3, "#2a1e30"], [1, 7, 3, 3, "#4a90e0"], [4, 7, 3, 3, "#fff6e8"], [7, 7, 3, 3, "#4a90e0"], [10, 7, 3, 3, "#fff6e8"], [13, 7, 2, 3, "#4a90e0"], [15, 7, 1, 4, "#2a1e30"], [1, 10, 1, 7, "#2a1e30"], [2, 10, 1, 1, "#4a90e0"], [3, 10, 2, 2, "#f0d8b0"], [5, 10, 1, 1, "#fff6e8"], [6, 10, 2, 2, "#f0d8b0"], [8, 10, 1, 1, "#4a90e0"], [9, 10, 2, 2, "#f0d8b0"], [11, 10, 1, 1, "#fff6e8"], [12, 10, 2, 5, "#f0d8b0"], [14, 10, 1, 1, "#4a90e0"], [2, 11, 1, 5, "#f0d8b0"], [5, 11, 1, 1, "#f0d8b0"], [8, 11, 1, 1, "#f0d8b0"], [11, 11, 1, 1, "#f0d8b0"], [14, 11, 1, 6, "#2a1e30"], [3, 12, 1, 3, "#f0d8b0"], [4, 12, 8, 3, "#2a2236"], [3, 15, 10, 1, "#b07a45"], [13, 15, 1, 1, "#f0d8b0"], [2, 16, 12, 1, "#6a4428"], [2, 17, 12, 1, "#2a1e30"]]]
+  let icons = [[[6, 0, 1, 1, "#ffd36a"], [3, 1, 1, 6, "#fff6e8"], [4, 1, 2, 6, "#e04848"], [6, 1, 2, 6, "#fff6e8"], [8, 1, 1, 6, "#e04848"], [1, 2, 1, 5, "#e04848"], [2, 2, 1, 5, "#fff6e8"], [9, 2, 1, 5, "#e04848"], [10, 2, 1, 5, "#fff6e8"], [0, 4, 1, 1, "#e04848"], [11, 4, 1, 1, "#fff6e8"], [1, 7, 4, 1, "#2a2236"], [5, 7, 2, 3, "#ffd36a"], [7, 7, 4, 1, "#2a2236"], [1, 8, 1, 1, "#2a2236"], [2, 8, 2, 1, "#fff6e8"], [4, 8, 1, 1, "#2a2236"], [7, 8, 1, 1, "#2a2236"], [8, 8, 2, 1, "#ff8ab0"], [10, 8, 1, 1, "#2a2236"], [1, 10, 10, 1, "#d8962a"]], [[2, 4, 3, 3, "#4a90e0"], [7, 4, 3, 3, "#ffd36a"], [1, 5, 1, 2, "#4a90e0"], [5, 5, 1, 2, "#4a90e0"], [6, 5, 1, 2, "#ffd36a"], [10, 5, 1, 2, "#ffd36a"], [1, 7, 1, 3, "#ff8ab0"], [2, 7, 2, 1, "#4a90e0"], [4, 7, 4, 4, "#5fb048"], [8, 7, 2, 1, "#ffd36a"], [10, 7, 1, 3, "#ff8ab0"], [2, 8, 2, 3, "#ff8ab0"], [8, 8, 2, 3, "#ff8ab0"]], [[0, 1, 12, 1, "#ffd36a"], [0, 2, 1, 9, "#ffd36a"], [1, 2, 10, 1, "#4a4458"], [11, 2, 1, 9, "#ffd36a"], [1, 3, 1, 7, "#4a4458"], [2, 3, 4, 1, "#e04848"], [6, 3, 5, 3, "#4a4458"], [2, 4, 1, 2, "#e04848"], [3, 4, 1, 1, "#f4c8a0"], [4, 4, 2, 2, "#e04848"], [3, 5, 1, 1, "#e04848"], [2, 6, 4, 4, "#4a4458"], [6, 6, 4, 1, "#4a90e0"], [10, 6, 1, 4, "#4a4458"], [6, 7, 2, 2, "#4a90e0"], [8, 7, 1, 1, "#f4c8a0"], [9, 7, 1, 2, "#4a90e0"], [8, 8, 1, 1, "#4a90e0"], [6, 9, 4, 1, "#4a4458"], [1, 10, 10, 1, "#ffd36a"]], [[4, 0, 1, 2, "#fff6e8"], [5, 0, 2, 2, "#5fb048"], [7, 0, 1, 2, "#fff6e8"], [2, 1, 2, 1, "#fff6e8"], [8, 1, 2, 1, "#fff6e8"], [2, 2, 1, 2, "#fff6e8"], [6, 2, 1, 2, "#d8ccc0"], [9, 2, 1, 2, "#fff6e8"], [1, 3, 1, 1, "#fff6e8"], [10, 3, 1, 1, "#fff6e8"], [1, 4, 2, 2, "#e04848"], [5, 4, 2, 2, "#ffd36a"], [10, 4, 2, 2, "#4a90e0"], [3, 5, 2, 1, "#d8ccc0"], [7, 5, 3, 1, "#d8ccc0"], [1, 6, 2, 1, "#fff6e8"], [4, 6, 2, 1, "#c0b8d0"], [6, 6, 1, 3, "#d8ccc0"], [7, 6, 1, 2, "#c0b8d0"], [9, 6, 2, 1, "#fff6e8"], [2, 7, 1, 2, "#fff6e8"], [4, 7, 1, 1, "#c0b8d0"], [9, 7, 1, 2, "#fff6e8"], [3, 8, 2, 1, "#fff6e8"], [7, 8, 2, 1, "#fff6e8"], [2, 9, 2, 1, "#c0b8d0"], [4, 9, 1, 1, "#fff6e8"], [5, 9, 2, 2, "#ff8ab0"], [7, 9, 1, 1, "#fff6e8"], [8, 9, 2, 1, "#c0b8d0"], [2, 10, 1, 2, "#c0b8d0"], [9, 10, 1, 1, "#c0b8d0"], [10, 11, 1, 1, "#c0b8d0"]], [[2, 2, 8, 1, "#b07a45"], [1, 3, 2, 1, "#b07a45"], [3, 3, 6, 2, "#3a9ad8"], [9, 3, 2, 1, "#b07a45"], [1, 4, 1, 2, "#b07a45"], [2, 4, 1, 4, "#3a9ad8"], [9, 4, 1, 5, "#3a9ad8"], [10, 4, 1, 2, "#b07a45"], [0, 5, 1, 3, "#b07a45"], [3, 5, 1, 3, "#3a9ad8"], [4, 5, 4, 3, "#5fb048"], [8, 5, 1, 5, "#3a9ad8"], [11, 5, 1, 3, "#b07a45"], [1, 6, 1, 1, "#3a9ad8"], [10, 6, 1, 1, "#3a9ad8"], [1, 7, 1, 1, "#b07a45"], [10, 7, 1, 3, "#b07a45"], [1, 8, 1, 2, "#f0d8b0"], [2, 8, 1, 1, "#f4c8a0"], [3, 8, 1, 2, "#f0d8b0"], [4, 8, 4, 2, "#3a9ad8"], [2, 9, 1, 1, "#f0d8b0"], [9, 9, 1, 2, "#b07a45"], [2, 10, 7, 1, "#b07a45"]], [[4, 1, 6, 1, "#e04848"], [3, 2, 2, 1, "#e04848"], [9, 2, 2, 1, "#e04848"], [3, 3, 1, 2, "#e04848"], [10, 3, 1, 4, "#e04848"], [3, 5, 1, 2, "#c0b8d0"], [2, 6, 1, 1, "#f4c8a0"], [1, 7, 3, 2, "#ffd36a"], [4, 7, 1, 4, "#e04848"], [9, 7, 1, 4, "#e04848"], [10, 7, 1, 2, "#c0b8d0"], [5, 8, 4, 3, "#e04848"], [0, 9, 4, 2, "#e04848"], [10, 9, 2, 2, "#e04848"]], [[5, 0, 3, 2, "#ff8ab0"], [5, 2, 3, 1, "#d8962a"], [6, 3, 1, 1, "#d8962a"], [0, 4, 2, 2, "#ff8ab0"], [2, 4, 2, 2, "#fff6e8"], [4, 4, 2, 2, "#ff8ab0"], [6, 4, 2, 2, "#fff6e8"], [8, 4, 2, 2, "#ff8ab0"], [10, 4, 2, 2, "#fff6e8"], [1, 6, 10, 1, "#f0d8b0"], [1, 7, 2, 4, "#f0d8b0"], [3, 7, 6, 2, "#2a2236"], [9, 7, 2, 4, "#f0d8b0"], [3, 9, 6, 2, "#f0d8b0"]], [[4, 0, 4, 1, "#ff9a48"], [3, 1, 6, 1, "#5fb048"], [3, 2, 6, 1, "#6a4428"], [0, 4, 2, 2, "#e04848"], [2, 4, 2, 2, "#fff6e8"], [4, 4, 2, 2, "#e04848"], [6, 4, 2, 2, "#fff6e8"], [8, 4, 2, 2, "#e04848"], [10, 4, 2, 2, "#fff6e8"], [1, 6, 10, 1, "#f0d8b0"], [1, 7, 2, 4, "#f0d8b0"], [3, 7, 6, 2, "#2a2236"], [9, 7, 2, 4, "#f0d8b0"], [3, 9, 6, 2, "#f0d8b0"]], [[3, 0, 3, 1, "#9a5ad8"], [3, 1, 1, 2, "#9a5ad8"], [4, 1, 1, 1, "#ffd36a"], [5, 1, 1, 2, "#9a5ad8"], [7, 1, 3, 2, "#4a90e0"], [4, 2, 1, 1, "#9a5ad8"], [0, 4, 2, 2, "#4a90e0"], [2, 4, 2, 2, "#fff6e8"], [4, 4, 2, 2, "#4a90e0"], [6, 4, 2, 2, "#fff6e8"], [8, 4, 2, 2, "#4a90e0"], [10, 4, 2, 2, "#fff6e8"], [1, 6, 10, 1, "#f0d8b0"], [1, 7, 2, 4, "#f0d8b0"], [3, 7, 6, 2, "#2a2236"], [9, 7, 2, 4, "#f0d8b0"], [3, 9, 6, 2, "#f0d8b0"]], [[3, 1, 6, 1, "#5fb048"], [2, 2, 1, 1, "#5fb048"], [3, 2, 3, 3, "#8ad860"], [6, 2, 4, 1, "#5fb048"], [1, 3, 1, 4, "#5fb048"], [2, 3, 1, 1, "#8ad860"], [6, 3, 1, 1, "#8ad860"], [7, 3, 4, 4, "#5fb048"], [2, 4, 1, 4, "#5fb048"], [6, 4, 1, 5, "#5fb048"], [3, 5, 3, 4, "#5fb048"], [7, 7, 3, 1, "#5fb048"], [7, 8, 2, 1, "#5fb048"], [5, 9, 2, 2, "#6a4428"]], [[0, 5, 12, 1, "#c0b8d0"], [0, 6, 1, 5, "#c0b8d0"], [1, 6, 1, 4, "#5fb048"], [2, 6, 2, 1, "#e04848"], [4, 6, 4, 1, "#5fb048"], [8, 6, 2, 1, "#ff8ab0"], [10, 6, 1, 4, "#5fb048"], [11, 6, 1, 5, "#c0b8d0"], [2, 7, 3, 1, "#5fb048"], [5, 7, 2, 1, "#ffd36a"], [7, 7, 3, 1, "#5fb048"], [2, 8, 1, 2, "#5fb048"], [3, 8, 2, 1, "#fff6e8"], [5, 8, 2, 2, "#5fb048"], [7, 8, 2, 1, "#9a5ad8"], [9, 8, 1, 2, "#5fb048"], [3, 9, 2, 1, "#5fb048"], [7, 9, 2, 1, "#5fb048"], [1, 10, 10, 1, "#c0b8d0"]], [[4, 1, 1, 1, "#a8e8ff"], [7, 1, 1, 1, "#a8e8ff"], [5, 2, 2, 6, "#c0b8d0"], [3, 3, 1, 1, "#a8e8ff"], [8, 3, 1, 1, "#a8e8ff"], [2, 5, 3, 1, "#c0b8d0"], [7, 5, 3, 1, "#c0b8d0"], [1, 6, 1, 1, "#c0b8d0"], [2, 6, 3, 3, "#3a9ad8"], [7, 6, 3, 3, "#3a9ad8"], [10, 6, 1, 1, "#c0b8d0"], [0, 7, 1, 2, "#c0b8d0"], [1, 7, 1, 1, "#3a9ad8"], [10, 7, 1, 1, "#3a9ad8"], [11, 7, 1, 2, "#c0b8d0"], [1, 8, 1, 2, "#c0b8d0"], [5, 8, 2, 2, "#3a9ad8"], [10, 8, 1, 2, "#c0b8d0"], [2, 9, 1, 2, "#c0b8d0"], [3, 9, 2, 1, "#3a9ad8"], [7, 9, 2, 1, "#3a9ad8"], [9, 9, 1, 2, "#c0b8d0"], [3, 10, 6, 1, "#c0b8d0"]], [[0, 0, 12, 1, "#d8ccc0"], [0, 1, 12, 2, "#f0d8b0"], [0, 3, 8, 1, "#f0d8b0"], [8, 3, 1, 1, "#d8ccc0"], [9, 3, 3, 8, "#f0d8b0"], [0, 4, 3, 5, "#f0d8b0"], [3, 4, 1, 1, "#d8ccc0"], [4, 4, 5, 4, "#f0d8b0"], [3, 5, 1, 6, "#f0d8b0"], [4, 8, 2, 3, "#f0d8b0"], [6, 8, 1, 1, "#d8ccc0"], [7, 8, 2, 3, "#f0d8b0"], [0, 9, 2, 2, "#f0d8b0"], [2, 9, 1, 1, "#d8ccc0"], [6, 9, 1, 2, "#f0d8b0"], [2, 10, 1, 1, "#f0d8b0"], [0, 11, 12, 1, "#d8ccc0"]]]
+  let liteArt = [["...Yo...", ".oWWRRo.", "oRRWRWWo", "RRRRRRRR", "oWRRWWRo", "oCKRRKWo", "CCKYYKTy", "yTTTTTTy", ".oyyyyo."], ["........", "...RR...", ".oPRRPo.", "oPGYYbBo", "PGgGBBBP", "pPGYyPPp", ".ppYYpp.", "..oppo.."], ["SY............Ss", "SsRRYRRRYRRRYRSs", "RRRRnRRRnRRRnRSR", "RRNNNNNNNNNNNNRR", "RRNRRRNNNNNNNNRR", "RRNRFrNNNNBBNNRR", "RRNRRRNNNBbbBNRR", "RRNNNNNNNNBBNNRR", "RRNNNNNNNNNNNNRR", "RRNNNNYNNNNNNNRR", "RRNNNYFYNNNGGNRR", "RRNNNYFYNNGFGGRR", "RRNNNNYNNNGGGGRR", "SYNNNNNNNNNGGNSs", "SsrrYrrrYrrrYrSs", ".srrYrrrYrrrYrS."], ["......ooWW......", "....WWSRSSWW....", "..oWWSowo.SWW...", "..oMw..w...BBW..", "..WSow..w.woSW..", ".WS...w.ww...SW.", ".WS....YY....SW.", "oPSwwwwYYwwwwRR.", "oPS...wSsw...RR.", "..WS.wSSwsw.SW..", "..WWSSS.wssSWW..", "..oGSSS.wssBB...", "..oGSWSSSSWBB...", "....SSBYYBss....", "...SS.BYYB.ss...", "..TSSTTTTTTTsT..", "..tttttttttttt.."], ["................", "...ttttttttt....", "..tTccccccccT...", ".tTccccccccccT..", ".tcccTTGGTTccWW.", ".tccTGGGGGtTccW.", ".tUtGGSGGGgtccW.", ".tUtGSSSGggtccT.", ".tUtGGSggggtccT.", ".tccGGGggggtccT.", ".tccTGGGgGtTccT.", ".tcccTttttTcccT.", ".tTcccTUUTcccT..", "..tTcccFFcccT...", "...tTTttttTT....", "................"], ["................", "....RRRRR.......", "...RRrrrRR......", "...RRs.s.RR.....", "...R.....RR.....", "...R.....RR.....", "...RS...SRR.....", "...rRRRRRRr.....", "..RRRRRRRRRRRRR.", ".RRs.s.sssS.srR.", ".RRs...s.s..s.RR", ".RR..bbbbbb..oRR", ".RR..BBBBBB..oYo", ".RR..BKKKKB.ooRo", ".rRRRBUUUUBBRBr.", ".srrRRRRRRBBRos.", "................"], ["..oPPo..", "..oPyo..", "ot.yy.to", "oPWPPWto", "PPWPPWPP", "oUUUUUUo", "oUKKKKUo", "oUKKKKUo", ".tttttt."], ["..OOOO..", ".otttto.", "otoOOoto", "oRYRRYRo", "RRYRRYRR", "oWWWWWWo", "oWKKKKWo", "oWKKKKWo", ".tttttt."], ["..ooBB..", ".oYYBBo.", "otYMBBto", "oBWBBWto", "BBWBBWBB", "oUUUUUUo", "oUKKKKUo", "oUKKKKUo", ".tttttt."], ["..oooo..", ".oLLGGo.", "oLLLLGGo", "oGLLGGGo", "oGGGGGGo", ".gGGGGg.", "..gggg..", ".ggttgg.", ".gggggg."], ["........", "........", ".ogGGGo.", "oGRGYGGo", "gGGGGGPg", "gyGWGPyg", ".ggGGgg.", "..osso.."], ["........", "...oo...", "..osso..", ".SSSSSS.", "sSCCCCSs", "sScCCcSs", "osssssso", ".oossoo."]]
+  // what drawing each kind costs, in drawing calls: in full, and in half-size art (gardens are
+  // drawn with a few rectangles either way)
+  let KC = [[111, 50], [119, 44], [99, 99], [210, 112], [265, 107], [142, 77], [67, 50], [64, 49], [67, 51], [10, 10], [13, 13], [16, 16]]
+  // How much each item is drawn in. A frame has 2000 drawing calls; what's left after the grass,
+  // paths, guests, gate and panel goes to the rides and stalls: all of them in half-size art,
+  // then each in full while it fits, the small ones first, as half of a small one is only 8
+  // pixels across. Should even half-size art not fit, the last ones become plain blocks.
+  // 2: full, 1: half, 0: a block.
+  let room = 1940 - 350 - (tool >= 0 ? len(free) : 0) - len(checker) - len(tufts) - len(paths) - len(edges) - len(pines) - 7 * len(crowd)
+  let pri = range(len(items)).sortBy(i => KD[items[i].k].w * 1000 + KD[items[i].k].t * 100 + i)
+  let lod0 = reduce(reverse(pri), (A, i) => A.room < 0 && KD[items[i].k].t < 2 ? {room: A.room + KC[items[i].k][1] - 4, s: set(A.s, i, 0)} : A, {room: room - sum(items.map(it => KC[it.k][1])), s: items.map(it => 1)})
+  let lod = reduce(pri, (A, i) => A.s[i] == 1 && A.room >= KC[items[i].k][0] - KC[items[i].k][1] ? {room: A.room - KC[items[i].k][0] + KC[items[i].k][1], s: set(A.s, i, 2)} : A, lod0).s
+  // the coin fading as it rises (a layer() would cost a whole screen's worth of drawing)
+  let coinFade = [1, 1, 1, 0.8].map(a => {o: alpha(PAL.o, a), Y: alpha(PAL.Y, a), W: alpha(PAL.W, a), y: alpha(PAL.y, a)})
+  // a pine in the woods, in ninths of a cell, stepped like pixels, with its trunk
+  let pineShape = [[3, 0], [5, 0], [5, 2], [6, 2], [6, 4], [7, 4], [7, 6], [4.5, 6], [4.5, 7], [3.5, 7], [3.5, 6], [1, 6], [1, 4], [2, 4], [2, 2], [3, 2]]
+  let coinArt = ["..ooo..", ".oYYYo.", "oYWYYyo", "oYWYYyo", "oYYYYyo", ".oyyyo.", "..ooo.."]
+  let starArt = ["..o..", ".oYo.", "oYYYo", ".oYo.", "..o.."]
+  let signArt = ["oooooooooooooooooooooo", "oWWWWWWWWWWWWWWWWWWWWo", "oWWWWWWWWWWWWWWWWWWWWo", "oWWWWWWWWWWWWWWWWWWWWo", "oWWWWWWWWWWWWWWWWWWWWo", "oWWWWWWWWWWWWWWWWWWWWo", "oooooooooooooooooooooo", "....ot..........ot....", "....ot..........ot...."]
+  let bubbleArt = [".ooooo.", "oWWRWWo", "oWWRWWo", "oWWRWWo", "oWWWWWo", "oWWRWWo", ".ooooo.", "...o..."]
+
+  Canvas {
+    fill: true
+    background: UI.bg
+
+    onTap: {
+      let ax = floor((x - MX) / C)
+      let ay = floor((y - MY) / C)
+      let cell = ay * 8 + ax
+      if x >= MX && x < MX + MW && y >= MY && y < MY + MH {
+        if ay < 12 - land {
+          sel = sel == -2 ? -1 : -2
+          tool = -1
+        } else if tool == 12 {
+          if isP[cell] {
+            if cell != 91 && cell != 92 {
+              bank = coins + 5
+              since = tnow
+              paths = paths.filter(c => c != cell)
+            }
+          } else if own[cell] < 0 {
+            if coins >= 10 {
+              bank = coins - 10
+              since = tnow
+              paths = paths + [cell]
+            } else {
+              msg = "NOT ENOUGH COINS"
+              msgT = time
+            }
+          }
+        } else if tool >= 0 {
+          let w = KD[tool].w
+          let fit = (w == 1 ? [cell] : [cell, cell - 1, cell - 8, cell - 9]).filter(a => a >= 0 && a % 8 <= ax && a % 8 <= 8 - w && floor(a / 8) >= 12 - land && floor(a / 8) <= 12 - w && all(w == 1 ? [a] : [a, a + 1, a + 8, a + 9], c => own[c] < 0 && !isP[c]))
+          if len(fit) == 0 {
+            msg = "NO ROOM HERE"
+            msgT = time
+          } else if coins < price[tool] {
+            msg = "NOT ENOUGH COINS"
+            msgT = time
+          } else {
+            bank = coins - price[tool]
+            since = tnow
+            items = items + [{c: fit[0], k: tool, l: 1, sp: price[tool]}]
+            haptic()
+          }
+        } else if own[cell] >= 0 {
+          sel = sel == items[own[cell]].c ? -1 : items[own[cell]].c
+        } else {
+          sel = -1
+        }
+      } else if (LS ? x >= PX : y >= PY) && sel == -2 {
+        if x >= PX + PW - 34 && y < PY + 34 {
+          sel = -1
+        } else if y >= BY && land < 12 {
+          if coins >= LANDCOST[(land - 6) / 2] {
+            bank = coins - LANDCOST[(land - 6) / 2]
+            since = tnow
+            land = land + 2
+            sel = -1
+            msg = "MORE LAND!"
+            msgT = time
+            haptic()
+          } else {
+            msg = "NOT ENOUGH COINS"
+            msgT = time
+          }
+        }
+      } else if (LS ? x >= PX : y >= PY) && si >= 0 {
+        let it = items[si]
+        if x >= PX + PW - 34 && y < PY + 34 {
+          sel = -1
+        } else if y >= BY && x < PX + UW && KD[it.k].t < 2 {
+          if coins >= upCost[si] {
+            bank = coins - upCost[si]
+            since = tnow
+            items = set(items, si, merge(it, {l: it.l + 1, sp: it.sp + upCost[si]}))
+            haptic()
+          } else {
+            msg = "NOT ENOUGH COINS"
+            msgT = time
+          }
+        } else if y >= BY && x >= PX + UW + 8 {
+          bank = coins + floor(it.sp / 2)
+          since = tnow
+          items = remove(items, si)
+          sel = -1
+        }
+      } else if (LS ? x >= PX : y >= PY) && y < PY + TH {
+        tab = clamp(floor((x - PX) / (PW / 4)), 0, 3)
+        tool = tab == 3 ? 12 : -1
+        sel = -1
+      } else if (LS ? x >= PX : y >= PY) && tab < 3 && y >= CY && x >= PX {
+        let hi = floor((y - CY) / (CH + 6)) * CC + floor((x - PX) / (CW + 6))
+        if hi >= 0 && hi < len(TABS[tab]) {
+          tool = tool == TABS[tab][hi] ? -1 : TABS[tab][hi]
+          sel = -1
+        }
+      }
+    }
+
+    // a finger dragged over the grass lays path
+    onDrag: {
+      let ax = floor((x - MX) / C)
+      let ay = floor((y - MY) / C)
+      let cell = ay * 8 + ax
+      if tool == 12 && x >= MX && x < MX + MW && ay >= 12 - land && ay < 12 {
+        if !isP[cell] && own[cell] < 0 && coins >= 10 {
+          bank = coins - 10
+          since = tnow
+          paths = paths + [cell]
+        }
+      }
+    }
+
+    // ---- the grass, a checkerboard of two greens ----
+    rect(MX, MY, MW, MH, fill: "#6cbf4a")
+    for g in checker { rect(g[0], g[1], C, C, fill: "#66b745") }
+    for g in tufts { rect(g[0], g[1], g[2] == "#8ad860" ? 2 * q : q, q, fill: g[2]) }
+
+    // ---- the paths, edged where they meet grass ----
+    for c in paths { rect(MX + c % 8 * C, MY + floor(c / 8) * C, C, C, fill: "#e8d4a8") }
+    for r in edges { rect(r[0], r[1], r[2], r[3], fill: len(r) > 4 ? "#d4bc8c" : "#c4a878") }
+
+    // ---- the entrance below the park: a hedge, the plaza and the gate ----
+    rect(MX, MY + MH, MW, GH, fill: "#d8c8a0")
+    rect(MX, MY + MH, 3 * C, 4 * q, fill: "#3a8a3a")
+    rect(MX + 5 * C, MY + MH, 3 * C, 4 * q, fill: "#3a8a3a")
+    rect(MX, MY + MH - 2 * q, 3 * C, 2 * q, fill: "#4fa040")
+    rect(MX + 5 * C, MY + MH - 2 * q, 3 * C, 2 * q, fill: "#4fa040")
+    rect(MX + 3 * C, MY + MH, 2 * C, GH, fill: "#e8d4a8")
+
+    // ---- the land still for sale: woods behind a fence ----
+    if land < 12 {
+      rect(MX, MY, MW, (12 - land) * C, fill: "#3f7f3a")
+      for g in pines {
+        path(pineShape.map(v => [g[0] + v[0] * C / 9, g[1] + v[1] * C / 9]), closed: true, fill: "#2c5e30")
+      }
+      rect(MX, MY + (12 - land) * C - 3 * q, MW, q, fill: "#8a5a32")
+      rect(MX, MY + (12 - land) * C - 6 * q, MW, q, fill: "#8a5a32")
+      for f in range(17) { rect(MX + f * C / 2 - q / 2, MY + (12 - land) * C - 8 * q, 1.5 * q, 7 * q, fill: "#6a4428") }
+      let sq = C / 7
+      let sx = MX + MW / 2 - 11 * sq
+      let sy = MY + (12 - land) * C - 11 * sq
+      sprite(signArt, sx, sy, sq, palette: PAL)
+      text("FOR SALE", MX + MW / 2, sy + 2.3 * sq, size: 1.9 * sq, color: "#e04848", font: press, align: center)
+      text([LANDCOST[(land - 6) / 2]].map(fmt)[0], MX + MW / 2, sy + 4.7 * sq, size: 1.7 * sq, color: "#2a1e30", font: press, align: center)
+      if sel == -2 { rect(MX, MY, MW, (12 - land) * C, stroke: UI.gold, width: 2) }
+    }
+
+    // ---- the guests ----
+    // Each round of 22 s a guest walks from the gate to a ride or stall picked by hash, stays 4 s,
+    // walks back, and spends the rest of the round on the plaza by the gate. On a ride they're
+    // out of sight; at a stall they stand by it.
+    clip(MX, MY, MW, MH + GH) {
+      for g, k in crowd {
+        let ph = time / 22 + g.o
+        let n = floor(ph)
+        let tc = (ph - n) * 22
+        let di = dest[floor(hash(k, n, 2) * len(dest))]
+        let pts = routes[di]
+        let S = len(pts) - 1
+        let v = max(1.3, S / 8)
+        let tw = S / v
+        let f = tc < tw ? tc * v : tc < tw + 4 ? S : tc < 2 * tw + 4 ? S - (tc - tw - 4) * v : 0
+        let i0 = min(floor(f), S - 1)
+        let fr = f - i0
+        // out on the plaza: to a spot of its own and back to the gate in time
+        let pa = tc > 2 * tw + 4 ? clamp(min(tc - 2 * tw - 4, 22 - tc) / 2.5, 0, 1) : 0
+        let gx = MX + (lerp(lerp(pts[i0][0], pts[i0 + 1][0], fr), 0.6 + hash(k, n, 3) * 6.8, pa) + g.dx) * C
+        let gy = MY + (lerp(lerp(pts[i0][1], pts[i0 + 1][1], fr), 12.4 + hash(k, n, 4) * 0.3, pa) + g.dy * (1 - pa)) * C
+        let step = (f < S && f > 0) || (pa > 0 && pa < 1) ? floor(time * 6 + k) % 2 : 0
+        if f < S || info[di].t == 1 {
+          if g.ball {
+            rect(gx + q, gy - 12 * q, q / 2, 7 * q, fill: "#fff6e8")
+            rect(gx, gy - 15 * q + sin(time * 2 + k) * q, 3 * q, 3 * q, fill: g.bc)
+          }
+          rect(gx - 1.5 * q, gy - q, 4 * q, 1.5 * q, fill: alpha("#000000", 0.18))
+          rect(gx - q, gy - 7 * q, 2.5 * q, 2.5 * q, fill: "#f4c8a0")
+          rect(gx - q, gy - 7.5 * q, 2.5 * q, q, fill: g.hair)
+          rect(gx - 1.5 * q, gy - 4.5 * q, 3.5 * q, 3 * q, fill: g.shirt)
+          rect(gx - q + step * 0.5 * q, gy - 1.5 * q, q, 2 * q, fill: "#2a1e30")
+          rect(gx + q - step * 0.5 * q, gy - 1.5 * q, q, 2 * q, fill: "#2a1e30")
+        }
+      }
+    }
+
+    // ---- the gate, over the guests walking under it ----
+    rect(MX + 3 * C - 3 * q, MY + MH - 10 * q, 3 * q, GH + 10 * q, fill: "#7a7490")
+    rect(MX + 5 * C, MY + MH - 10 * q, 3 * q, GH + 10 * q, fill: "#7a7490")
+    rect(MX + 3 * C - 3 * q, MY + MH - 10 * q, q, GH + 10 * q, fill: "#c0b8d0")
+    rect(MX + 5 * C, MY + MH - 10 * q, q, GH + 10 * q, fill: "#c0b8d0")
+    rect(MX + 3 * C - 5 * q, MY + MH - 16 * q, 2 * C + 10 * q, 7 * q, fill: "#2a1e30")
+    rect(MX + 3 * C - 4 * q, MY + MH - 15 * q, 2 * C + 8 * q, 5 * q, fill: "#e04848")
+    text("PARK", MX + 4 * C, MY + MH - 12.3 * q, size: 3.4 * q, color: "#ffd36a", font: press, align: center)
+    for j in range(2) {
+      let fx = MX + 3 * C - 3 * q + j * (2 * C + 3 * q)
+      rect(fx + q, MY + MH - 22 * q, q / 2, 6 * q, fill: "#2a1e30")
+      rect(fx + 1.5 * q, MY + MH - 22 * q, (3 + floor(time * 4 + j) % 2) * q, 2.5 * q, fill: j == 0 ? "#ffd36a" : "#4a90e0")
+    }
+
+    // ---- rides, stalls and gardens, from the back row to the front ----
+    for i in order {
+      let it = items[i]
+      let K = it.k
+      let ix = MX + it.c % 8 * C
+      let iy = MY + floor(it.c / 8) * C
+      let by = iy + KD[K].w * C
+      let ph = hash(it.c, 12) * 10
+      rect(ix + q, by - 2.5 * q, KD[K].w * C - 2 * q, 2 * q, fill: alpha("#000000", 0.15))
+      if K == 9 {
+        // a tree: a rounded crown on a trunk
+        rect(ix + 7 * q, by - 7 * q, 2 * q, 5 * q, fill: "#6a4428")
+        rect(ix + 2 * q, by - 16 * q, 12 * q, 9 * q, fill: "#2a1e30")
+        rect(ix + 3 * q, by - 17 * q, 10 * q, 11 * q, fill: "#2a1e30")
+        rect(ix + 3 * q, by - 15 * q, 10 * q, 7 * q, fill: "#3a8a3a")
+        rect(ix + 4 * q, by - 16 * q, 8 * q, 9 * q, fill: "#3a8a3a")
+        rect(ix + 3 * q, by - 15 * q, 9 * q, 5 * q, fill: "#5fb048")
+        rect(ix + 4 * q, by - 16 * q, 7 * q, 7 * q, fill: "#5fb048")
+        rect(ix + 5 * q, by - 15 * q, 3 * q, 2 * q, fill: "#8ad860")
+      } else if K == 10 {
+        // a flower bed
+        rect(ix + q, by - 11 * q, 14 * q, 7 * q, fill: "#2a1e30")
+        rect(ix + 2 * q, by - 12 * q, 12 * q, 9 * q, fill: "#2a1e30")
+        rect(ix + 2 * q, by - 11 * q, 12 * q, 7 * q, fill: "#3a8a3a")
+        rect(ix + 3 * q, by - 11 * q, 10 * q, 6 * q, fill: "#5fb048")
+        for fl in [[4, 9, 0], [7, 10, 2], [10, 9, 4], [5, 7, 7], [9, 7, 5], [11, 6, 2], [3, 6, 4]] {
+          rect(ix + fl[0] * q, by - (fl[1] + 1) * q, 2 * q, 2 * q, fill: BRIGHT[fl[2]])
+        }
+      } else if K == 11 {
+        // a fountain, splashing
+        rect(ix + q, by - 9 * q, 14 * q, 7 * q, fill: "#2a1e30")
+        rect(ix + 2 * q, by - 10 * q, 12 * q, 9 * q, fill: "#2a1e30")
+        rect(ix + 2 * q, by - 9 * q, 12 * q, 7 * q, fill: "#c0b8d0")
+        rect(ix + 2 * q, by - 4 * q, 12 * q, 2 * q, fill: "#7a7490")
+        rect(ix + 3 * q, by - 8 * q, 10 * q, 4 * q, fill: "#3a9ad8")
+        rect(ix + 4 * q, by - 8 * q, 8 * q, 2 * q, fill: "#a8e8ff")
+        rect(ix + 7 * q, by - 14 * q, 2 * q, 8 * q, fill: "#c0b8d0")
+        rect(ix + 6 * q, by - 14 * q, 4 * q, q, fill: "#7a7490")
+        for j in range(4) {
+          let sp = (time * 1.2 + j / 4) % 1
+          rect(ix + (7.5 + (j % 2 == 0 ? -1 : 1) * sp * 4) * q, by - (15 + sp * 3 - sp * sp * 9) * q, q, q, fill: "#a8e8ff")
+        }
+      } else if lod[i] == 1 {
+        sprite(liteArt[K], ix, by - len(liteArt[K]) * 2 * q, 2 * q, palette: PAL)
+      } else if lod[i] == 0 {
+        // past what a frame can draw: a plain block in the kind's colour
+        rect(ix + q, iy + q, KD[K].w * C - 2 * q, KD[K].w * C - 2 * q, fill: "#2a1e30")
+        rect(ix + 2 * q, iy + 2 * q, KD[K].w * C - 4 * q, KD[K].w * C - 4 * q, fill: BRIGHT[K % 8])
+      } else if K == 0 {
+        sprite(carouselArt[floor(time * 6 + ph) % 4], ix, by - 18 * q, q, palette: PAL)
+      } else if K == 1 {
+        sprite(teaBaseArt, ix, by - 16 * q, q, palette: PAL)
+        for j in range(3) {
+          let a = time * 1.6 + ph + j * 2.094
+          sprite(cupArt, ix + floor(5 + 4.5 * cos(a)) * q, by - 16 * q + floor(6.5 + 2.8 * sin(a)) * q, q, palette: tint[j * 2 + 1])
+        }
+      } else if K == 2 {
+        for r in bumperArt {
+          let rx = round(ix + r[0] * q)
+          let ry = round(by - (32 - r[1]) * q)
+          rect(rx, ry, round(ix + (r[0] + r[2]) * q) - rx, round(by - (32 - r[1] - r[3]) * q) - ry, fill: r[4])
+        }
+        for j in range(4) {
+          let bx = floor(13 + 9 * sin(time * 0.9 + ph + j * 1.7))
+          let byy = floor(14 + 8 * sin(time * 1.27 + ph + j * 2.3))
+          sprite(carArt, ix + bx * q, by - 32 * q + byy * q, q, palette: tint[j])
+          if floor(time * 8 + j * 3) % 9 == 0 { rect(ix + (bx + 2) * q, by - 33 * q + byy * q, 2 * q, q, fill: "#ffd36a") }
+        }
+      } else if K == 3 {
+        let th = time * 16 + ph * 36
+        sprite(wheelArt[floor(th / 11.25) % 4], ix, by - 34 * q, q, palette: PAL)
+        for g in range(8) {
+          let a = rad(th + g * 45)
+          let gx = floor(16 + 12.5 * cos(a))
+          let gy = floor(14 + 12.5 * sin(a))
+          rect(ix + (gx - 2) * q, by - 34 * q + gy * q, 4 * q, 4 * q, fill: "#2a1e30")
+          rect(ix + (gx - 1) * q, by - 34 * q + (gy + 1) * q, 2 * q, 2 * q, fill: BRIGHT[g % 6])
+        }
+      } else if K == 4 {
+        sprite(flumeArt, ix, by - 32 * q, q, palette: PAL)
+        for j in range(2) {
+          let u = (time * 7 + ph + j * 24) % 48
+          let u0 = floor(u)
+          let fp = flumePath[u0]
+          let np = flumePath[(u0 + 1) % 48]
+          let lx = lerp(fp[0], np[0], u - u0)
+          let ly = lerp(fp[1], np[1], u - u0)
+          let hz = abs(np[0] - fp[0]) >= abs(np[1] - fp[1]) ? 0 : 1
+          sprite(logArt[hz], ix + floor(lx - (hz == 0 ? 3 : 2)) * q, by - 32 * q + floor(ly - (hz == 0 ? 2 : 3)) * q, q, palette: PAL)
+        }
+        for j in range(3) {
+          let sp = (time * 1.4 + j / 3) % 1
+          rect(ix + (27 + j - sp * 2) * q, by - 32 * q + (16 - sp * 5 + sp * sp * 6) * q, q, q, fill: "#fff6e8")
+        }
+      } else if K == 5 {
+        sprite(coasterArt, ix, by - 34 * q, q, palette: PAL)
+        let u = (time * 16 + 3 * sin(time * 0.7) + ph) % 64
+        for j in range(3) {
+          let uu = (u - j * 2.2 + 64) % 64
+          let u0 = floor(uu)
+          let cp = coasterPath[u0]
+          let np = coasterPath[(u0 + 1) % 64]
+          let cx = floor(lerp(cp[0], np[0], uu - u0))
+          let cy = floor(lerp(cp[1], np[1], uu - u0))
+          rect(ix + (cx - 1) * q, by - 34 * q + (cy - 2) * q, 4 * q, 4 * q, fill: "#2a1e30")
+          rect(ix + cx * q, by - 34 * q + (cy - 1) * q, 2 * q, 2 * q, fill: j == 0 ? "#ffd36a" : "#4a90e0")
+          rect(ix + cx * q, by - 34 * q + (cy - 2) * q, q, q, fill: "#f4c8a0")
+        }
+      } else if K >= 6 {
+        for r in stallArt[K - 6] {
+          let rx = round(ix + r[0] * q)
+          let ry = round(by - (18 - r[1]) * q)
+          rect(rx, ry, round(ix + (r[0] + r[2]) * q) - rx, round(by - (18 - r[1] - r[3]) * q) - ry, fill: r[4])
+        }
+        for j in range(K == 8 ? 3 : 0) {
+          rect(ix + (2 + j * 2) * q, by - (21 - j) * q, q / 2, (6 - j) * q, fill: "#2a1e30")
+          rect(ix + (1 + j * 2) * q, by - (25 - j + sin(time * 2 + j) * 0.8) * q, 3 * q, 3 * q, fill: BRIGHT[[0, 4, 1][j]])
+        }
+      }
+      // a ride or stall that no path reaches asks for one
+      if !conn[i] && KD[K].t < 2 && time % 1.2 < 0.9 {
+        sprite(bubbleArt, ix + (KD[K].w * 8 - 3.5) * q, iy - 9 * q, q, palette: PAL)
+      }
+      // and a coin now and then from those that earn
+      if conn[i] && KD[K].t < 2 {
+        let cyc = (time * 0.45 + hash(it.c, 13) * 2) % 2.2
+        if cyc < 1 {
+          sprite(coinArt, ix + (KD[K].w * 8 - 3.5) * q, iy - (4 + cyc * 8) * q, q, palette: coinFade[floor(cyc * 4)])
+        }
+      }
+      if it.c == sel {
+        rect(ix, iy, KD[K].w * C, KD[K].w * C, stroke: UI.gold, width: 2)
+      }
+    }
+
+    // where the picked kind can go
+    if tool >= 0 {
+      for c in free { rect(MX + (c % 8 + 0.5) * C - q, MY + (floor(c / 8) + 0.5) * C - q, 2 * q, 2 * q, fill: alpha("#ffffff", 0.55)) }
+    }
+
+    // ---- what the park is making ----
+    sprite(coinArt, 14, TOP + 6, 2.8, palette: PAL)
+    text([coins].map(fmt)[0], 40, TOP + 14, size: 13, color: UI.text, font: press)
+    text("${[rate].map(fmtRate)[0]}/S", 40, TOP + 31, size: 7, color: UI.dim, font: press)
+    for s in range(5) {
+      sprite(starArt, SW - 14 - (5 - s) * 13, TOP + 8, 2.2, palette: s < stars ? PAL : {o: alpha(UI.dim, 0.6)})
+    }
+    text("${guests} GUESTS", SW - 16, TOP + 31, size: 7, color: UI.dim, font: press, align: end)
+
+    // ---- the panel ----
+    if sel == -2 && land < 12 {
+      text("MORE LAND", PX + 4, PY + 16, size: 11, color: UI.text, font: press)
+      text("TWO MORE ROWS OF GRASS", PX + 4, PY + 38, size: 7, color: UI.dim, font: press)
+      text("FOR RIDES, STALLS AND GARDENS", PX + 4, PY + 54, size: 7, color: UI.dim, font: press)
+      text("✕", PX + PW - 14, PY + 14, size: 14, color: UI.dim, align: center)
+      rect(PX, BY, PW, BH, fill: coins >= LANDCOST[(land - 6) / 2] ? UI.go : UI.card, radius: 6 * corners)
+      text("BUY  ${[LANDCOST[(land - 6) / 2]].map(fmt)[0]}", PX + PW / 2, BY + BH / 2, size: 10, color: coins >= LANDCOST[(land - 6) / 2] ? UI.text : UI.dim, font: press, align: center)
+    } else if si >= 0 {
+      let it = items[si]
+      let f = info[si]
+      let ic = icons[it.k]
+      rect(PX, PY + 2, 44, 44, fill: UI.card, radius: 6 * corners)
+      for r in ic { rect(PX + 4 + r[0] * 3, PY + 6 + r[1] * 3, r[2] * 3, r[3] * 3, fill: r[4]) }
+      text(KD[it.k].n, PX + 54, PY + 14, size: 10, color: UI.text, font: press)
+      text(KD[it.k].t == 2 ? "GARDEN" : "LEVEL ${it.l}", PX + 54, PY + 34, size: 7, color: UI.dim, font: press)
+      text("✕", PX + PW - 14, PY + 14, size: 14, color: UI.dim, align: center)
+      if KD[it.k].t == 2 {
+        text("+${KD[it.k].b * 10}% FOR EVERY RIDE", PX + 4, PY + 64, size: 7, color: UI.text, font: press)
+        text("AND STALL NEXT TO IT", PX + 4, PY + 80, size: 7, color: UI.text, font: press)
+      } else if !conn[si] {
+        text("NO PATH TO THE GATE", PX + 4, PY + 64, size: 8, color: UI.warn, font: press)
+        text("LAY ONE FROM THE PATH TAB", PX + 4, PY + 82, size: 7, color: UI.dim, font: press)
+      } else {
+        text("+${[earn[si]].map(fmtRate)[0]}/S", PX + 4, PY + 64, size: 10, color: UI.gold, font: press)
+        text(KD[it.k].t == 0 ? "BRINGS ${floor(KD[it.k].pull * (1 + 0.15 * (it.l - 1)) * boost[si] * (0.6 + 0.2 * stars))} GUESTS" : "SELLS TO ${guests} GUESTS", PX + 4, PY + 84, size: 7, color: UI.dim, font: press)
+        if f.beauty > 0 {
+          text("GARDENS +${round(min(0.6, 0.1 * f.beauty) * 100)}%", PX + 4, PY + 100, size: 7, color: UI.go, font: press)
+        }
+      }
+      if KD[it.k].t < 2 {
+        rect(PX, BY, UW, BH, fill: coins >= upCost[si] ? UI.go : UI.card, radius: 6 * corners)
+        text("UPGRADE", PX + UW / 2, BY + BH / 2 - 7, size: 8, color: coins >= upCost[si] ? UI.text : UI.dim, font: press, align: center)
+        text([upCost[si]].map(fmt)[0], PX + UW / 2, BY + BH / 2 + 8, size: 8, color: coins >= upCost[si] ? UI.text : UI.dim, font: press, align: center)
+      }
+      rect(PX + UW + 8, BY, PW - UW - 8, BH, fill: UI.card, radius: 6 * corners)
+      text("SELL", PX + UW + 8 + (PW - UW - 8) / 2, BY + BH / 2 - 7, size: 8, color: UI.text, font: press, align: center)
+      text("+${[floor(it.sp / 2)].map(fmt)[0]}", PX + UW + 8 + (PW - UW - 8) / 2, BY + BH / 2 + 8, size: 8, color: UI.dim, font: press, align: center)
+    } else {
+      for t in range(4) {
+        let tx = PX + t * PW / 4
+        rect(tx + 2, PY, PW / 4 - 4, TH, fill: tab == t ? UI.gold : UI.card, radius: 6 * corners)
+        text(["RIDES", "FOOD", "GARDEN", "PATH"][t], tx + PW / 8, PY + TH / 2, size: 7, color: tab == t ? UI.bg : UI.text, font: press, align: center)
+      }
+      if tab == 3 {
+        text("TAP OR DRAG ON GRASS", PX + 4, CY + 12, size: 8, color: UI.text, font: press)
+        text("TO LAY PATH, 10 A CELL", PX + 4, CY + 30, size: 8, color: UI.text, font: press)
+        text("TAP A PATH TO TAKE IT UP", PX + 4, CY + 54, size: 7, color: UI.dim, font: press)
+        text("RIDES AND STALLS EARN ONCE", PX + 4, CY + 74, size: 7, color: UI.dim, font: press)
+        text("A PATH LEADS TO THE GATE", PX + 4, CY + 90, size: 7, color: UI.dim, font: press)
+      } else {
+        for k, j in TABS[tab] {
+          let cx = PX + j % CC * (CW + 6)
+          let cy = CY + floor(j / CC) * (CH + 6)
+          let can = coins >= price[k]
+          let ip = min(3, (CH - 30) / 12)
+          rect(cx, cy, CW, CH, fill: UI.card, radius: 6 * corners)
+          if tool == k { rect(cx + 1, cy + 1, CW - 2, CH - 2, stroke: UI.gold, width: 2, radius: 6 * corners) }
+          for r in icons[k] { rect(round(cx + CW / 2 + (r[0] - 6) * ip), round(cy + 6 + r[1] * ip), round(r[2] * ip + 0.4), round(r[3] * ip + 0.4), fill: r[4]) }
+          text(KD[k].n, cx + CW / 2, cy + CH - 22, size: CW < 120 ? 5 : 6, color: UI.text, font: press, align: center)
+          text([price[k]].map(fmt)[0], cx + CW / 2, cy + CH - 9, size: 7, color: can ? UI.gold : UI.dim, font: press, align: center)
+        }
+        if tab > 0 {
+          text(tab == 1 ? "STALLS EARN FROM EVERY GUEST" : "GARDENS: MORE FOR WHAT'S NEXT TO THEM", PX + 4, CY + CH + 20, size: 6, color: UI.dim, font: press)
+          text(tab == 1 ? "IN THE PARK" : "AND MORE STARS FOR THE PARK", PX + 4, CY + CH + 34, size: 6, color: UI.dim, font: press)
+        }
+      }
+    }
+
+    // ---- a hint for a new park, and messages ----
+    if len(items) == 0 {
+      if time % 1.4 < 1 {
+        text("PICK A RIDE BELOW,", MX + MW / 2, MY + MH - 3.2 * C, size: 8, color: "#2a1e30", font: press, align: center)
+        text("THEN TAP THE GRASS", MX + MW / 2, MY + MH - 3.2 * C + 16, size: 8, color: "#2a1e30", font: press, align: center)
+      }
+    } else if len(dest) == 0 && any(info, f => f.t < 2) {
+      if time % 1.4 < 1 {
+        text("LAY A PATH FROM THE GATE", MX + MW / 2, MY + MH - 3.2 * C, size: 7, color: "#2a1e30", font: press, align: center)
+        text("IN THE PATH TAB", MX + MW / 2, MY + MH - 3.2 * C + 14, size: 7, color: "#2a1e30", font: press, align: center)
+      }
+    }
+    if time - msgT < 2.2 && time >= msgT {
+      let ma = min(1, (2.2 - (time - msgT)) * 3)
+      rect(MX + 8, MY + MH / 2 - 18, MW - 16, 36, fill: alpha("#2a1e30", 0.85 * ma), radius: 6 * corners)
+      text(msg, MX + MW / 2, MY + MH / 2, size: 9, color: alpha("#ffd36a", ma), font: press, align: center)
+    }
+  }
+}

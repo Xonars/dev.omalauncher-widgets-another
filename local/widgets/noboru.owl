@@ -1,0 +1,327 @@
+app "Noboru · Манга" {
+  meta { owl: 13; description: "Манга: семь источников, все ветки глав, Webtoon, чтение и CBZ"; version: "2.1"; license: "MIT"; category: "reading" }
+  requires { pacman: ["python", "python-pillow", "python-beautifulsoup4"] }
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M24 10C17 5 10 5 4 7v33c7-2 14-1 20 3 6-4 13-5 20-3V7c-6-2-13-2-20 3v33M10 14l8 2v12l-8-2zM30 16l8-2M30 23l8-2M10 33l8 2M30 32l8-2"/></svg>"""
+  state tab = "catalog"
+  state query = ""
+  state draft = ""
+  state provider = "all"
+  state lang = "ru"
+  state offset = 0
+  state chapterOffset = 0
+  state chapterQuery = ""
+  state feedRevision = 0
+  state selected = null
+  state chapter = null
+  state pageNo = 0
+  state favorites = [] persist
+  state positions = {} persist
+  state lastRead = null persist
+  state zoom = 1
+  state panX = 0
+  state message = ""
+  state fullscreen = false
+  state readMode = "pages" persist
+  state webtoonStart = 0
+  let providers = [{id: "all", name: "Все источники"}, {id: "mangadex", name: "MangaDex"}, {id: "remanga", name: "ReManga"}, {id: "shonen", name: "Dreamy Manga"}, {id: "mangovaya", name: "Манговая"}, {id: "readmanga", name: "ReadManga"}, {id: "mangachan", name: "MangaChan"}, {id: "mangahub", name: "MangaHub RU"}]
+  let helper = "python /root/.config/omalauncher/widgets/noboru/main.py"
+  let immersive = fullscreen && chapter != null
+  let readingWidth = screenWidth - (immersive ? 0 : 28)
+  edge: true
+  statusBar: !immersive
+  title: immersive ? "" : chapter != null ? chapter.name : selected != null ? selected.name : "Noboru · Манга"
+  back: selected != null || chapter != null
+  onBack: { if immersive { fullscreen = false } else if chapter != null { chapter = null } else { selected = null } }
+  source catalog = cmd(tab == "catalog" && selected == null ? "${helper} search ${sh(query)} ${sh(lang)} ${int(offset)} ${sh(provider)}" : null) json every 30m timeout 180s
+  source feed = cmd(selected != null && chapter == null ? "${helper} chapters ${sh(selected.id)} ${sh(lang)} ${int(chapterOffset)} ${sh(chapterQuery)} ${int(feedRevision)}" : null) json every 30m timeout 180s
+  let feedReady = selected != null && feed.manga == selected.id && feed.lang == lang && feed.offset == chapterOffset && feed.query == chapterQuery && feed.revision == str(feedRevision)
+  on selected first { chapterOffset = 0; chapterQuery = ""; if selected != null && selected.source != null && selected.source != "mangadex" { lang = "ru" } }
+  source manifest = cmd(chapter != null ? "${helper} pages ${sh(chapter.id)}" : null) json every 1h timeout 90s
+  let ready = chapter != null && manifest.id == chapter.id
+  source picture = cmd(ready && readMode == "pages" ? "${helper} page ${sh(chapter.id)} ${int(pageNo)}" : null) json every 1h timeout 90s
+  source ribbon = stream(ready && readMode == "webtoon" ? "${helper} webtoon ${sh(chapter.id)} ${int(webtoonStart)}" : null) json
+  source following = cmd(chapter != null && readMode == "webtoon" ? "${helper} next-chapter ${sh(selected.id)} ${sh(lang)} ${sh(chapter.id)}" : null) json every 30m timeout 180s
+  on chapter first { fullscreen = false; webtoonStart = pageNo; message = "" }
+  source local = cmd("${helper} library") json every 3s
+  let selectedCover = contains(["readmanga", "mangachan", "mangahub"], selected.source) ? get(local.covers, selected.id, "") : selected.cover
+  let books = tab == "favorites" ? favorites : catalog.items ?? []
+  on pageNo { panX = 0; if chapter != null { positions = set(positions, chapter.id, pageNo); lastRead = {book: selected, chapter: chapter} } }
+  Column {
+    fill: true
+    padding: immersive ? [0, 0, 0, 0] : [14, 8, 14, 8 + (screenInset ?? 0)]
+    gap: immersive ? 0 : 10
+    if chapter != null {
+      Column {
+        visible: !immersive
+        gap: 8
+        Row {
+          Text { text: selected.name; weight: 1; maxLines: 1; style: small }
+          Text { text: "${pageNo + 1} / ${ready ? len(manifest.urls) : "…"}"; color: accent }
+        }
+        Row {
+          for mode in [{id: "pages", name: "Страницы"}, {id: "webtoon", name: "Webtoon ↕"}] {
+            Text {
+              text: mode.name
+              weight: 1
+              align: center
+              padding: [8, 10]
+              color: readMode == mode.id ? accent : muted
+              background: surface
+              onTap: { webtoonStart = pageNo; readMode = mode.id; zoom = 1; panX = 0 }
+            }
+          }
+          Button { text: "⛶"; onTap: { fullscreen = true; message = "" } }
+        }
+        if readMode == "pages" {
+          Row {
+            Button { text: "−"; onTap: zoom = max(1, zoom - 0.5) }
+            Text { text: "${zoom}×"; style: small }
+            Button { text: "+"; onTap: zoom = min(3, zoom + 0.5) }
+            Spacer { weight: 1 }
+            Button { text: "Скачать"; onTap: { run("${helper} download ${sh(chapter.id)}"); message = "Загрузка начата. Прогресс — во вкладке «Скачано»." } }
+          }
+        }
+        Text { text: "⛶ — полный экран. Удержание страницы или «Назад» — вернуть панель."; style: small; color: muted }
+      }
+      if manifest.error { Text { text: manifest.error; color: red } }
+      if readMode == "webtoon" {
+        Column {
+          weight: 1
+          fill: width
+          lazy: true
+          gap: 0
+          background: #111111
+          for p in (ribbon.id == chapter.id && ribbon.start == webtoonStart ? ribbon.items ?? [] : []) key "${chapter.id}:${p.index}" {
+              Image {
+                src: p.path
+                fit: contain
+                fill: width
+                height: readingWidth * p.ratio
+                label: "Страница ${p.index + 1}"
+                onTap: pageNo = p.index
+                onLongPress: { pageNo = p.index; fullscreen = !fullscreen }
+              }
+          }
+          if ribbon.id == chapter.id && ribbon.start == webtoonStart {
+            Text {
+              text: ribbon.error ?? (ribbon.done ? "Конец главы" : "Загружаю следующие страницы…")
+              color: ribbon.error ? red : #cccccc
+              padding: [16, 20]
+              onTap: refresh()
+            }
+            if ribbon.done && !ribbon.error {
+              if following.id == chapter.id && following.next != null {
+                Button {
+                  text: "Следующая глава →"
+                  onTap: {
+                    let nextChapter = following.next
+                    if nextChapter.external { url(nextChapter.external) } else {
+                      chapter = nextChapter
+                      pageNo = 0
+                      webtoonStart = 0
+                      zoom = 1
+                      panX = 0
+                      lastRead = {book: selected, chapter: nextChapter}
+                    }
+                  }
+                }
+              } else if following.error {
+                Text { text: following.error; color: red; padding: [16, 8]; onTap: refresh() }
+              } else {
+                Text { text: following.id == chapter.id ? "Это последняя глава" : "Ищу следующую главу…"; color: #cccccc; padding: [16, 8] }
+              }
+            }
+          } else { Text { text: "Загружаю ленту…"; color: #cccccc; padding: 24 } }
+          Spacer { height: screenInset ?? 0 }
+        }
+        if !immersive {
+          Row {
+            Button { text: "С начала"; onTap: { pageNo = 0; webtoonStart = 0 } }
+            Text { text: "Касание — закладка"; weight: 1; style: small; color: muted; align: center }
+            Button { text: "Скачать"; onTap: { run("${helper} download ${sh(chapter.id)}"); message = "Скачивание начато" } }
+          }
+        }
+      } else {
+        if picture.error { Text { text: picture.error; color: red } }
+        Column {
+          weight: 1
+          fill: width
+          scroll: true
+          background: #111111
+          if picture.id == chapter.id && picture.index == pageNo {
+            Box {
+              fill: width
+              height: max(180, readingWidth * picture.ratio * zoom)
+              clip: true
+              align: center
+              Image {
+                src: picture.path
+                fit: contain
+                width: readingWidth * zoom
+                height: max(180, readingWidth * picture.ratio * zoom)
+                offset: [clamp(panX, -readingWidth * (zoom - 1) / 2, readingWidth * (zoom - 1) / 2), 0]
+                drag: horizontal
+                onDrag: panX = clamp(panX + dx, -readingWidth * (zoom - 1) / 2, readingWidth * (zoom - 1) / 2)
+                onLongPress: fullscreen = !fullscreen
+                onTap: { if immersive && ready { pageNo = clamp(pageNo + (x < readingWidth * zoom / 2 ? -1 : 1), 0, len(manifest.urls) - 1) } }
+                label: "Страница ${pageNo + 1}"
+              }
+            }
+          } else { Text { text: "Загружаю страницу…"; color: #cccccc; padding: 24 } }
+        }
+        Column {
+          visible: !immersive
+          if ready && len(manifest.urls) > 1 {
+            Slider { value: pageNo; min: 0; max: len(manifest.urls) - 1; step: 1; onChange: pageNo = int(value) }
+          }
+          Row {
+            Button { text: "← Назад"; weight: 1; onTap: pageNo = max(0, pageNo - 1) }
+            Button { text: "Вперёд →"; weight: 1; onTap: { if ready { pageNo = min(len(manifest.urls) - 1, pageNo + 1) } } }
+          }
+        }
+      }
+    } else if selected != null {
+      Row {
+        if selectedCover != "" { Image { src: selectedCover; width: 72; height: 104; fit: cover } }
+        Column {
+          weight: 1
+          Text { text: selected.name; fontSize: 20; bold: true; maxLines: 3 }
+          Button { text: any(favorites, b => b.id == selected.id) ? "★ В избранном" : "☆ В избранное"; onTap: { if any(favorites, b => b.id == selected.id) { favorites = filter(favorites, b => b.id != selected.id) } else { favorites = favorites + [selected] } } }
+        }
+      }
+      Text { text: selected.description; maxLines: 3; style: small; color: muted }
+      Row {
+        Text { text: "ГЛАВЫ · ${upper(lang)} · ${feed.manga == selected.id ? feed.allTotal : "…"}"; color: accent; style: small; weight: 1 }
+        Button { text: "Обновить"; onTap: { feedRevision = feedRevision + 1; chapterOffset = 0 } }
+      }
+      if selected.source == "remanga" && feed.manga == selected.id {
+        Text { text: "Все ветки: ${feed.branches}. Разные переводы одной главы показаны отдельно."; style: small; color: muted }
+      }
+      Input { text: chapterQuery; placeholder: "Поиск главы, номера, переводчика…"; onChange: { chapterQuery = value; chapterOffset = 0 } }
+      if feedReady && (feed.total == 0 || feed.stale) {
+        if feed.stale { Text { text: "Нет связи с источником. Показан сохранённый список глав."; style: small; color: muted } }
+        Button { text: "Найти другие переводы"; onTap: { query = selected.name; draft = selected.name; selected = null; provider = "all"; tab = "catalog"; offset = 0 } }
+      }
+      if feedReady && feed.total > 0 {
+        Button { text: "Скачать все главы офлайн"; onTap: { run("${helper} enqueue-book ${sh(selected.id)}"); message = "Главы поставлены в очередь. Прогресс — во вкладке «Офлайн»." } }
+      }
+      if feed.error { Text { text: feed.error; color: red }; Button { text: "Повторить"; onTap: { feedRevision = feedRevision + 1; refresh() } } }
+      Column {
+        weight: 1
+        lazy: true
+        gap: 8
+        if !feedReady && !feed.error { Text { text: "Собираю все главы и ветки перевода…"; color: muted } }
+        if feedReady && len(feed.items) == 0 { Text { text: chapterQuery != "" ? "По запросу глав не найдено." : "В этой карточке нет глав. Нажмите «Найти другие переводы»."; color: muted } }
+        for c in (feedReady ? feed.items : []) key c.id {
+          Row {
+            padding: 10
+            background: surface
+            Column {
+              weight: 1
+              onTap: { if c.external { url(c.external) } else { chapter = c; pageNo = get(positions, c.id, 0); lastRead = {book: selected, chapter: c}; zoom = 1 } }
+              Text { text: c.name; maxLines: 2 }
+              Text { text: "${c.pages ?? "…"} стр. · ${c.group}"; style: small; color: muted; maxLines: 2 }
+            }
+            if c.external {
+              Button { text: "Сайт ↗"; onTap: url(c.external) }
+            } else {
+              Button { text: contains(local.downloaded ?? [], c.id) ? "✓" : "↓"; onTap: { run("${helper} download ${sh(c.id)}"); message = "Скачивание начато" } }
+            }
+          }
+        }
+      }
+      Row {
+        Button { text: "← 80"; onTap: chapterOffset = max(0, chapterOffset - 80) }
+        Text { text: feedReady ? "${feed.total == 0 ? 0 : chapterOffset + 1}–${chapterOffset + len(feed.items)} из ${feed.total}" : "…"; weight: 1; align: center; style: small }
+        Button { text: "80 →"; onTap: { if feedReady && chapterOffset + 80 < feed.total { chapterOffset = chapterOffset + 80 } } }
+      }
+      if feed.manga == selected.id && feed.total > 80 {
+        Row {
+          Button { text: "В начало"; onTap: chapterOffset = 0 }
+          Text { text: "Стр. ${floor(chapterOffset / 80) + 1}/${ceil(feed.total / 80)}"; weight: 1; align: center; style: small }
+          Button { text: "В конец"; onTap: chapterOffset = floor((feed.total - 1) / 80) * 80 }
+        }
+      }
+    } else {
+      Row {
+        for t in [{id: "catalog", name: "Каталог"}, {id: "favorites", name: "Избранное"}, {id: "downloads", name: "Офлайн"}] {
+          Text { text: t.name; weight: 1; align: center; padding: [4, 12]; color: tab == t.id ? accent : muted; background: tab == t.id ? surface : background; onTap: { tab = t.id; message = "" } }
+        }
+      }
+      if tab == "catalog" {
+        Row {
+          Input { text: draft; placeholder: "Название манги…"; weight: 1; onChange: draft = value; onSubmit: { query = trim(value); offset = 0 } }
+          Button { text: "Найти"; onTap: { query = trim(draft); offset = 0 } }
+        }
+        Text { text: "Манга на русском · поиск по шести источникам"; style: small; color: muted }
+        if len(catalog.warnings ?? []) > 0 { Text { text: "Часть источников недоступна. Показаны ответы остальных."; style: small; color: muted } }
+
+      }
+      if lastRead != null && tab != "downloads" {
+        Text { text: "Продолжить · ${lastRead.book.name}"; maxLines: 1; color: accent; padding: [8, 12]; background: surface; onTap: { selected = lastRead.book; chapter = lastRead.chapter; pageNo = get(positions, chapter.id, 0); zoom = 1 } }
+      }
+      if tab == "downloads" {
+        Text { text: "Главы доступны без интернета. CBZ сохраняется рядом со страницами."; style: small; color: muted }
+        Column {
+          weight: 1
+          lazy: true
+          for job in local.jobs ?? [] key job.id {
+            Column {
+              padding: 8
+              background: surface
+              Text { text: job.name; maxLines: 1 }
+              Text { text: "${job.status} · ${job.done}/${job.total}"; style: small; color: muted }
+              if startsWith(job.status, "Ошибка") { Button { text: "Повторить"; onTap: run("${helper} download ${sh(job.id)}") } }
+              if job.total > 0 { Progress { value: job.done; max: job.total; height: 3 } }
+            }
+          }
+          if len(local.items ?? []) == 0 { Text { text: "Пока нет скачанных глав. Откройте мангу и нажмите ↓ у нужной главы."; color: muted; padding: [0, 20] } }
+          for c in local.items ?? [] key c.id {
+            Column {
+              padding: [8, 14]
+              onTap: { selected = c.book; chapter = c; pageNo = get(positions, c.id, 0); zoom = 1 }
+              Text { text: c.book.name; bold: true; maxLines: 2 }
+              Text { text: c.name; color: accent; maxLines: 2 }
+              Text { text: c.archive; style: small; color: muted; maxLines: 2 }
+            }
+          }
+        }
+      } else {
+        if tab == "catalog" && catalog.error { Text { text: catalog.error; color: red }; Button { text: "Повторить"; onTap: refresh() } }
+        Column {
+          weight: 1
+          lazy: true
+          gap: 10
+          if tab == "favorites" && len(favorites) == 0 { Text { text: "Добавляйте мангу в избранное на странице с главами."; color: muted } }
+          if tab == "catalog" && (catalog == null || catalog.query != query || catalog.lang != lang || catalog.offset != offset || catalog.source != provider) { Text { text: "Загружаю каталог…"; color: muted } }
+          if len(books) == 0 && tab == "catalog" && !catalog.error { Text { text: "Ничего не найдено. Попробуйте английское название или другой язык."; color: muted } }
+          for b in (tab == "favorites" || (catalog.query == query && catalog.lang == lang && catalog.offset == offset && catalog.source == provider) ? books : []) key b.id {
+              let coverPath = contains(["readmanga", "mangachan", "mangahub"], b.source) ? get(local.covers, b.id, "") : b.cover
+              Row {
+                gap: 14
+                padding: 10
+                background: surface
+                radius: 8 * corners
+                onTap: { selected = b; chapterOffset = 0; message = "" }
+                if coverPath != "" { Image { src: coverPath; width: 66; height: 94; fit: cover } }
+                Column {
+                  weight: 1
+                  Text { text: b.name; fontSize: 17; bold: true; maxLines: 3 }
+                  Text { text: "${find(providers, p => p.id == (b.source ?? "mangadex")).name} · ${b.status == "ongoing" ? "Выходит" : b.status == "completed" ? "Завершена" : b.status == "hiatus" ? "На паузе" : "Остановлена"}"; style: small; color: muted }
+                  Text { text: "Открыть главы →"; color: accent; style: small }
+                }
+              }
+          }
+        }
+        if tab == "catalog" {
+          Row {
+            Button { text: "←"; onTap: offset = max(0, offset - (catalog.pageSize ?? 20)) }
+            Text { text: "Страница ${floor(offset / 20) + 1} · ${len(catalog.items ?? [])} переводов"; weight: 1; align: center; style: small }
+            Button { text: "→"; onTap: { if catalog.hasNext { offset = offset + (catalog.pageSize ?? 20) } } }
+          }
+        }
+      }
+    }
+    if message != "" && !immersive { Text { text: message; style: small; color: accent; maxLines: 2; onTap: message = "" } }
+  }
+}

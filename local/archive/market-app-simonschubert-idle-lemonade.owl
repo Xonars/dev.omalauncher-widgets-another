@@ -1,0 +1,395 @@
+app "idle lemonade" {
+  // An idle tycoon in pixel art. Tap the street for coins, open a lemonade stand, then a bakery,
+  // a diner, an arcade, a hotel and a bank, and level them up: each level costs a little more and
+  // earns more every second, and levels 10, 25 and 50 double what a business makes.
+  //
+  // There's no game loop. The coins are `bank` plus what the businesses have made since `since`,
+  // so they keep coming while the app is closed; a tap or a purchase settles them into `bank`.
+
+  meta { owl: 12; description: "An idle tycoon in pixel art: tap for coins, open a lemonade stand, a bakery, a diner, an arcade, a hotel and a bank, and level them up"; version: "1.0"; license: "MIT"; category: "games" }
+
+  title: ""
+  statusBar: false
+  edge: true
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="m10 16 4 27h20l4-27H10ZM27 16l4-12h9M12 25h24"/><path d="M7 15a9 9 0 0 1 17-7M10 5l5 7"/></svg>"""
+
+  source now = clock every 1s
+
+  state bank = 0 persist
+  state since = 0 persist
+  state lv = [0, 0, 0, 0, 0, 0] persist
+  // the "+coins" floating up from the last taps
+  state pops = []
+
+  // ---- the businesses ---------------------------------------------------------------------------
+  // c is what the first one costs, r what a level earns each second
+  let biz = [
+    {n: "LEMONADE", c: 10, r: 0.5},
+    {n: "BAKERY", c: 120, r: 4},
+    {n: "DINER", c: 1400, r: 30},
+    {n: "ARCADE", c: 16000, r: 220},
+    {n: "HOTEL", c: 200000, r: 1600},
+    {n: "BANK", c: 2500000, r: 12000}
+  ]
+  let boost = lv.map(l => l >= 50 ? 8 : l >= 25 ? 4 : l >= 10 ? 2 : 1)
+  let stars = lv.map(l => l >= 50 ? 3 : l >= 25 ? 2 : l >= 10 ? 1 : 0)
+  let goal = lv.map(l => l >= 50 ? 100 : l >= 25 ? 50 : l >= 10 ? 25 : 10)
+  let income = range(6).map(i => biz[i].r * lv[i] * boost[i])
+  let cost = range(6).map(i => floor(biz[i].c * pow(1.15, lv[i])))
+  // a business shows once the one before it is open
+  let open = range(6).map(i => i == 0 ? true : lv[i - 1] > 0)
+  let owned = count(lv, l => l > 0)
+  let rate = sum(income)
+  let tnow = now ?? since
+  let coins = bank + rate * max(0, tnow - since)
+  let tap = 1 + floor(rate / 20)
+
+  let fmt = n => n < 1000 ? str(floor(n))
+    : n < 1000000 ? "${fixed(n / 1000, n < 100000 ? 1 : 0)}K"
+    : n < 1000000000 ? "${fixed(n / 1000000, n < 100000000 ? 1 : 0)}M"
+    : n < 1000000000000 ? "${fixed(n / 1000000000, n < 100000000000 ? 1 : 0)}B"
+    : "${fixed(n / 1000000000000, 1)}T"
+  let fmtRate = n => n < 10 && n != floor(n) ? fixed(n, 1) : [n].map(fmt)[0]
+
+  // ---- the screen, in art pixels of p dp, 128 across ---------------------------------------------
+  let SW = screenWidth ?? 400
+  let SH = screenHeight ?? 800
+  let p = min(SW / 128, SH / 270)
+  let OX = (SW - 128 * p) / 2
+  let H = SH / p
+  let T = max(screenTop ?? 0, 12) / p
+  let B = max(screenInset ?? 0, 16) / p
+  // the list of businesses at the bottom, the road above it, the two rows of lots above that
+  let RH = 19
+  let LY = H - B - 6 * RH
+  let FB = LY - 16
+  let BB = FB - 48
+  let BS = 1.7
+
+  let press = "https://raw.githubusercontent.com/google/fonts/main/ofl/pressstart2p/PressStart2P-Regular.ttf"
+
+  // ---- the art ----------------------------------------------------------------------------------
+  let pal = {o: "#2a1630", K: "#1a1020", Y: "#ffd36a", y: "#e09a2a", Z: "#fff4c8", W: "#fff4e0", w: "#d8c8b8", R: "#e04848", r: "#a02838", B: "#4a90e0", b: "#2a5aa0", G: "#5fa048", g: "#36703a", P: "#ff8ab0", T: "#a0683a", t: "#6a3e22", S: "#b8b0c8", s: "#6e6888", C: "#9ae0ff", c: "#4aa0c8", O: "#ff9a48", M: "#9a5ad8", m: "#6038a0", U: "#f0d8b0"}
+  let lemonArt = [
+    "..oooooooooooooooooo..",
+    ".oYYWWYYWWYYWWYYWWYYo.",
+    "oYYWWYYWWYYWWYYWWYYWWo",
+    "oooooooooooooooooooooo",
+    "..ot..............to..",
+    "..ot..............to..",
+    "..ot.....oYo......to..",
+    "..ot....oCYCo.....to..",
+    "..ot....oCCCo.....to..",
+    ".oooooooooooooooooooo.",
+    ".oTTTTTTTTTTTTTTTTTTo.",
+    ".oTTToYYYYYYYYYYoTTTo.",
+    ".oTTToYYYYYYYYYYoTTTo.",
+    ".oTTTooooooooooooTTTo.",
+    ".oTTTTTTTTTTTTTTTTTTo.",
+    ".oooooooooooooooooooo."
+  ]
+  let bakeryArt = [
+    "....oooooooooooooo....",
+    "....oTTTTTTTTTTTTo....",
+    "..ooTTTTTTTTTTTTTToo..",
+    ".oTTTTTTTTTTTTTTTTTTo.",
+    "oooooooooooooooooooooo",
+    "oUUUUUUUUUUUUUUUUUUUUo",
+    "oUUoooooUUUUUUoooooUUo",
+    "oUUoCCCoUUUUUUoCCCoUUo",
+    "oUUoCcCoUUUUUUoCcCoUUo",
+    "oUUoooooUUUUUUoooooUUo",
+    "oPWPWPWPWPWPWPWPWPWPWo",
+    "oPWPWPWPWPWPWPWPWPWPWo",
+    ".oooooooooooooooooooo.",
+    ".oUUUUUUUUUUoooooUUUo.",
+    ".oUoooooooUUoTTToUUUo.",
+    ".oUoCYOYCoUUoTTToUUUo.",
+    ".oUoYOYOYoUUoTYToUUUo.",
+    ".oUoooooooUUoTTToUUUo.",
+    ".oUUUUUUUUUUoTTToUUUo.",
+    ".oooooooooooooooooooo."
+  ]
+  let dinerArt = [
+    ".oooooooooooooooooooo.",
+    ".oRRRRRRRRRRRRRRRRRRo.",
+    ".oRRWWWRRWWRRWWWRRRRo.",
+    ".oRRRRRRRRRRRRRRRRRRo.",
+    ".oooooooooooooooooooo.",
+    "oSSSSSSSSSSSSSSSSSSSSo",
+    "oSCCCCCCSSSSSSCCCCCCSo",
+    "oSCcCCCCSSSSSSCCCCcCSo",
+    "oSCCCCCCSSSSSSCCCCCCSo",
+    "oSSSSSSSSSSSSSSSSSSSSo",
+    "oRRRRRRRRRRRRRRRRRRRRo",
+    "oWWWWWWWWWWWWWWWWWWWWo",
+    "oSSSSSSSoooooSSSSSSSSo",
+    "oSCCCCSSoCCCoSSCCCCSSo",
+    "oSCcCCSSoCCCoSSCCcCSSo",
+    "oSCCCCSSoCCCoSSCCCCSSo",
+    "oSSSSSSSoCYCoSSSSSSSSo",
+    "oRRRRRRRoCCCoRRRRRRRRo",
+    "oooooooooooooooooooooo"
+  ]
+  let arcadeArt = [
+    "..oooooooooooooooooo..",
+    "..oMMMMMMMMMMMMMMMMo..",
+    "..oMPPMMPPMMPPMMPPMo..",
+    "..oMMMMMMMMMMMMMMMMo..",
+    "oooooooooooooooooooooo",
+    "omMMMMMMMMMMMMMMMMMMmo",
+    "omMooooooooooooooooMmo",
+    "omMoKKKKKKKKKKKKKKoMmo",
+    "omMoKYKKCKKPKKGKKKoMmo",
+    "omMoKKKKKKKKKKKKKKoMmo",
+    "omMooooooooooooooooMmo",
+    "omMMMMMMMMMMMMMMMMMMmo",
+    "omMMoooooMMMMoooooMMmo",
+    "omMMoCcCoMMMMoGgGoMMmo",
+    "omMMoCCCoMMMMoGGGoMMmo",
+    "omMMoKYKoMMMMoKPKoMMmo",
+    "omMMoKKKoMMMMoKKKoMMmo",
+    "omMMoooooKKKKoooooMMmo",
+    "omMMMMMMMKKKKMMMMMMMmo",
+    "oooooooooooooooooooooo"
+  ]
+  let hotelArt = [
+    "........oooooo........",
+    "........oYYYYo........",
+    "........oooooo........",
+    ".oooooooooooooooooooo.",
+    ".oBBBBBBBBBBBBBBBBBBo.",
+    ".oBCCBBCCBBCCBBCCBBBo.",
+    ".oBCcBBCcBBCcBBCcBBBo.",
+    ".oBBBBBBBBBBBBBBBBBBo.",
+    ".oBCCBBCCBBCCBBCCBBBo.",
+    ".oBCcBBCcBBCcBBCcBBBo.",
+    ".oBBBBBBBBBBBBBBBBBBo.",
+    ".oBCCBBCCBBCCBBCCBBBo.",
+    ".oBCcBBCcBBCcBBCcBBBo.",
+    ".oBBBBBBBBBBBBBBBBBBo.",
+    ".oBCCBBCCBBCCBBCCBBBo.",
+    ".oBCcBBCcBBCcBBCcBBBo.",
+    ".oBBBBBBBBBBBBBBBBBBo.",
+    "oooooooooooooooooooooo",
+    "oRRRRRRRRRRRRRRRRRRRRo",
+    "oRWWWWWWWWWWWWWWWWWWRo",
+    "oRRRRRRRRRRRRRRRRRRRRo",
+    ".obbbbbboCCCCobbbbbbo.",
+    ".obbbbbboCCCCobbbbbbo.",
+    ".oooooooooooooooooooo."
+  ]
+  let bankArt = [
+    "..........oo..........",
+    "........ooYYoo........",
+    "......ooSSSSSSoo......",
+    "....ooSSSSSSSSSSoo....",
+    "..ooSSSSSSYYSSSSSSoo..",
+    "ooSSSSSSSSSSSSSSSSSSoo",
+    "oooooooooooooooooooooo",
+    ".oWWWWWWWWWWWWWWWWWWo.",
+    ".oooooooooooooooooooo.",
+    "..oWwosoWwosoWwosoWwo.",
+    "..oWwosoWwosoWwosoWwo.",
+    "..oWwosoWwosoWwosoWwo.",
+    "..oWwosoWwosoWwosoWwo.",
+    "..oWwosoWwosoWwosoWwo.",
+    "..oWwosoWwoKoWwosoWwo.",
+    "..oWwosoWwoKoWwosoWwo.",
+    "..oWwosoWwoKoWwosoWwo.",
+    "..oWwosoWwoKoWwosoWwo.",
+    ".oooooooooooooooooooo.",
+    "oSSSSSSSSSSSSSSSSSSSSo",
+    "oooooooooooooooooooooo"
+  ]
+  let arts = [lemonArt, bakeryArt, dinerArt, arcadeArt, hotelArt, bankArt]
+  // the small ones in the list, so a frame stays under the canvas's 2000 drawing calls
+  let icons = [
+    ["......gg.", "...ooog..", "..oYYYYo.", ".oYZYYYyo", ".oYYYYYyo", ".oYYYYyyo", "..oyyyyo.", "...oooo.."],
+    ["..ooooo..", ".oUOOOUo.", "oOOUOOUOo", "oOOOOOOOo", "oyyyyyyyo", ".ooooooo."],
+    ["..ooooo..", ".oOOOOOo.", "oOWOOWOOo", "ooooooooo", "oGGGGGGGo", "ottttttto", "oOOOOOOOo", ".ooooooo."],
+    ["...ooo...", "...oRo...", "...ooo...", "....o....", "..ooooo..", ".oMMMMYo.", ".ommmmmo.", "..ooooo.."],
+    [".ooo.....", "oYYYo....", "oYoYooooo", "oYYYYYYYo", ".ooooYoYo", ".....o.o."],
+    ["..ooooo..", "...oyo...", "..oGGGo..", ".oGGYGGo.", "oGGYYYGGo", "oGGGYGGGo", "oGGGGGGgo", ".ooooooo."]
+  ]
+  let coinArt = [
+    "..ooo..",
+    ".oYYYo.",
+    "oYZYYyo",
+    "oYZYYyo",
+    "oYYYYyo",
+    ".oyyyo.",
+    "..ooo.."
+  ]
+  let saleArt = [
+    "oooooooooo",
+    "oWWWWWWWWo",
+    "oWRRRRRRWo",
+    "oWWWWWWWWo",
+    "oooooooooo",
+    "....ot....",
+    "....ot....",
+    "....ot...."
+  ]
+  let lockArt = [
+    "..ooo..",
+    ".o...o.",
+    ".o...o.",
+    "ooooooo",
+    "oYYYYYo",
+    "oYYoYYo",
+    "oYYYYYo",
+    "ooooooo"
+  ]
+  let starArt = [
+    "..o..",
+    ".oYo.",
+    "oYYYo",
+    ".oYo.",
+    "..o.."
+  ]
+  let carArt = [
+    "...oooooo...",
+    "..oRCCRCCRo.",
+    ".oRRRRRRRRRo",
+    "oRRRRRRRRRRo",
+    "ooKKooooKKoo",
+    "..KK....KK.."
+  ]
+  let shirts = ["#e04848", "#4a90e0", "#5fa048", "#9a5ad8", "#ff9a48", "#ff8ab0", "#ffd36a", "#4aa0c8"]
+
+  Canvas {
+    fill: true
+    background: "#1d1838"
+
+    onTap: {
+      let ax = (x - OX) / p
+      let ay = y / p
+      if ay >= LY && ay < LY + 6 * RH {
+        let i = floor((ay - LY) / RH)
+        if open[i] && coins >= cost[i] {
+          bank = coins - cost[i]
+          since = tnow
+          lv = set(lv, i, lv[i] + 1)
+          haptic()
+        }
+      } else if ay > T + 24 && ay < LY {
+        bank = coins + tap
+        since = tnow
+        pops = pops.filter(q => time - q.t < 0.8 && q.t <= time) + [{x: ax, y: ay, v: tap, t: time}]
+      }
+    }
+
+    // ---- the town ----
+    rect(0, 0, width, BB * p, fill: linear(0, 0, 0, BB * p, ["#4a9ae8", "#a8dcff"]))
+    circle(OX + 104 * p, (T + 40) * p, 9 * p, fill: "#fff4c8")
+    circle(OX + 104 * p, (T + 40) * p, 12 * p, fill: alpha("#fff4c8", 0.25))
+    for c in range(3) {
+      let cx = OX + (((time * (2 + c) + c * 61) % 180) - 30) * p
+      let cy = (T + 32 + c * 9) * p
+      rect(cx, cy, 22 * p, 4 * p, fill: "#ffffff")
+      rect(cx + 4 * p, cy - 3 * p, 12 * p, 3 * p, fill: "#ffffff")
+    }
+    for h in range(5) {
+      circle(OX + (h * 34 - 6) * p, (BB + 14) * p, 26 * p, fill: h % 2 == 0 ? "#6cb85a" : "#5aa64a")
+    }
+    rect(0, BB * p, width, (FB - BB) * p, fill: "#7cc85e")
+    rect(0, BB * p, width, 3 * p, fill: "#c8bca8")
+    rect(0, (FB - 4) * p, width, 4 * p, fill: "#c8bca8")
+    rect(0, (FB - 1) * p, width, p, fill: "#a89c88")
+    rect(0, FB * p, width, 12 * p, fill: "#3a3646")
+    for d in range(12) {
+      rect(OX + (d * 12 - 8) * p, (FB + 5.5) * p, 6 * p, p, fill: "#e8d890")
+    }
+    rect(0, (FB + 12) * p, width, p, fill: "#2a2636")
+
+    translate(OX, 0) {
+      // the back row first, then the front one over it
+      for i in [3, 4, 5, 0, 1, 2] {
+        let a = arts[i]
+        let bw = len(a[0]) * BS
+        let bh = len(a) * BS
+        let cx = 22 + 42 * (i % 3)
+        let base = i < 3 ? FB - 4 : BB + 1
+        let by = base - bh
+        if lv[i] > 0 {
+          rect((cx - bw / 2 + 1) * p, (base - 1) * p, bw * p, 2 * p, fill: alpha("#000000", 0.2))
+          sprite(a, (cx - bw / 2) * p, by * p, BS * p, palette: pal)
+          for s in range(stars[i]) {
+            sprite(starArt, (cx - stars[i] * 3 + s * 6 + 0.5) * p, (by - 6) * p, p, palette: pal)
+          }
+          // a coin pops up now and then, faster for the busier ones
+          let cyc = (time * (0.6 + boost[i] * 0.15) + i * 0.37) % 2
+          if cyc < 1 {
+            layer(1 - cyc) { sprite(coinArt, (cx - 3.5) * p, (by - 10 - stars[i] * 2 - cyc * 10) * p, p, palette: pal) }
+          }
+        } else if open[i] {
+          sprite(saleArt, (cx - 5) * p, (base - 8) * p, p, palette: pal)
+        }
+      }
+
+      // people on the pavement, more as the town grows
+      for k in range(2 + owned * 2) {
+        let sp = 5 + (k % 3) * 2
+        let dir = k % 2 == 0 ? 1 : -1
+        let wx = ((time * sp + k * 53) % 150) - 11
+        let px = dir > 0 ? wx : 128 - wx
+        let step = floor(time * 6 + k) % 2
+        rect(px * p, (FB - 9) * p, 2 * p, 2 * p, fill: "#f0c098")
+        rect((px - 0.5) * p, (FB - 7) * p, 3 * p, 3 * p, fill: shirts[k % 8])
+        rect((px + (step == 0 ? -0.5 : 0)) * p, (FB - 4) * p, p, 3 * p, fill: "#2a1630")
+        rect((px + (step == 0 ? 1.5 : 1)) * p, (FB - 4) * p, p, 3 * p, fill: "#2a1630")
+      }
+      // and cars, once there's somewhere to go
+      for k in range(owned >= 2 ? min(owned - 1, 3) : 0) {
+        let cxp = ((time * (18 + k * 5) + k * 47) % 160) - 16
+        sprite(carArt, cxp * p, (FB + 4) * p, p, palette: pal)
+      }
+
+      for q in pops {
+        let age = time - q.t
+        if age >= 0 && age < 0.8 {
+          layer(1 - age / 0.8) {
+            text("+${[q.v].map(fmt)[0]}", (q.x + 0.4) * p, (q.y - age * 16 + 0.4) * p, size: 4 * p, color: "#2a1630", font: press, align: center)
+            text("+${[q.v].map(fmt)[0]}", q.x * p, (q.y - age * 16) * p, size: 4 * p, color: "#ffd36a", font: press, align: center)
+          }
+        }
+      }
+
+      // ---- the coins ----
+      sprite(coinArt, 4 * p, (T + 3) * p, 1.6 * p, palette: pal)
+      text([coins].map(fmt)[0], 19.5 * p, (T + 9.5) * p, size: 6 * p, color: "#2a1630", font: press)
+      text([coins].map(fmt)[0], 19 * p, (T + 9) * p, size: 6 * p, color: "#fff4e0", font: press)
+      text("${[rate].map(fmtRate)[0]}/S", 19 * p, (T + 18) * p, size: 3 * p, color: "#2a1630", font: press)
+      text("TAP +${[tap].map(fmt)[0]}", 124 * p, (T + 9) * p, size: 3 * p, color: "#2a1630", font: press, align: end)
+      if owned == 0 && time % 1.2 < 0.8 {
+        text("TAP THE TOWN FOR COINS", 64 * p, (BB - 14) * p, size: 3 * p, color: "#2a1630", font: press, align: center)
+      }
+
+      // ---- the businesses ----
+      for i in range(6) {
+        let ry = LY + i * RH
+        let can = open[i] && coins >= cost[i]
+        rect(4 * p, (ry + 1) * p, 120 * p, (RH - 2) * p, fill: can ? "#3a2f66" : "#2a2348")
+        rect(4 * p, (ry + RH - 2) * p, 120 * p, p, fill: "#16122c")
+        if open[i] {
+          let ic = icons[i]
+          sprite(ic, (13.5 - len(ic[0]) * 0.8) * p, (ry + 9 - len(ic) * 0.8) * p, 1.6 * p, palette: pal)
+          text(biz[i].n, 25 * p, (ry + 6) * p, size: 3.4 * p, color: "#fff4e0", font: press)
+          text(lv[i] > 0 ? "LV${lv[i]} +${[income[i]].map(fmtRate)[0]}/S" : "+${[biz[i].r].map(fmtRate)[0]}/S", 25 * p, (ry + 11.5) * p, size: 2.4 * p, color: "#a8a0d0", font: press)
+          // how far to the next doubling
+          let g0 = goal[i] == 10 ? 0 : goal[i] == 25 ? 10 : goal[i] == 50 ? 25 : 50
+          rect(25 * p, (ry + 14) * p, 54 * p, p, fill: "#16122c")
+          rect(25 * p, (ry + 14) * p, 54 * clamp((lv[i] - g0) / (goal[i] - g0), 0, 1) * p, p, fill: "#ffd36a")
+        } else {
+          sprite(lockArt, 9.5 * p, (ry + 5) * p, p, palette: pal)
+          text("???", 25 * p, (ry + 8.5) * p, size: 3.4 * p, color: "#6e6888", font: press)
+        }
+        rect(84 * p, (ry + 3) * p, 37 * p, 12 * p, fill: can ? "#5fa048" : "#4a4466")
+        rect(84 * p, (ry + 13.5) * p, 37 * p, 1.5 * p, fill: can ? "#36703a" : "#353050")
+        sprite(coinArt, 86 * p, (ry + 5.2) * p, p, palette: pal)
+        text([cost[i]].map(fmt)[0], 108 * p, (ry + 9) * p, size: 3 * p, color: can ? "#fff4e0" : "#a8a0d0", font: press, align: center)
+      }
+    }
+  }
+}

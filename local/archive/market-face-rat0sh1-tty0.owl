@@ -1,0 +1,445 @@
+face "tty0" {
+  // Restyled from the "nexus" face by zyanmd (MIT): same data, laid out as tmux panes
+  page: -2
+
+  meta {
+    owl: 13
+    description: "An Arch Linux dashboard styled as a tmux session: panes and a status bar"
+    version: "1.0"
+    license: "MIT"
+    category: "system"
+  }
+
+  requires { pacman: ["btop", "jq", "procps-ng", "gawk", "coreutils", "grep", "glibc", "pacman"] }
+
+  source now = clock every 1s
+  source dev = android.device
+  source sys = android.system every 5s
+  source bat = android.battery
+  source alarm = android.alarm
+  source n = android.notifications
+  source m = android.media
+  source modes = android.modes
+  source apps = android.apps
+  source ag = android.agents
+  source recent = android.recent
+
+  // Google Calendar's secret iCal address, pasted once on the phone; kept as two secrets, never in this file
+  state calId = null secret
+  state calTok = null secret
+  source ics = http(calId == null || calTok == null ? null : "https://calendar.google.com/calendar/ical/${enc(calId)}/private-${enc(calTok)}/basic.ics") every 15m timeout 20s
+  source pkgs = cmd("pacman -Qq | wc -l") every 30m
+  // Every running Claude Code instance: status, folder, CPU and memory (from the claude top widget)
+  source ps = cmd("""
+    pids=$(pgrep -x claude)
+    [ -n "$pids" ] || { echo '[]'; exit 0; }
+    hz=$(getconf CLK_TCK)
+    at=$(date +%s%3N)
+    home=$(getent passwd "$(id -u)" | cut -d: -f6)
+    for p in $pids; do
+      b=$(awk '{print $14+$15}' /proc/$p/stat 2>/dev/null) || continue
+      rss=$(ps -o rss= -p "$p")
+      f=~/.claude/sessions/$p.json; [ -f "$f" ] || f=/dev/null
+      sid=$(jq -r '.sessionId // empty' "$f" 2>/dev/null)
+      last=""; [ -n "$sid" ] && last=$(tac ~/.claude/history.jsonl 2>/dev/null | grep -m1 -F "\"sessionId\":\"$sid\"" | jq -r '.display // empty' | head -c 200)
+      jq -n -c --argjson pid "$p" --argjson ticks "$b" --argjson hz "$hz" --argjson at "$at" --argjson rss "${rss:-0}" \
+        --arg home "$home" --arg last "$last" --arg cwd "$(readlink /proc/$p/cwd)" \
+        --slurpfile s <(cat "$f" 2>/dev/null || true) \
+        '($s[0] // {}) as $s | {pid: $pid, ticks: $ticks, hz: $hz, at: $at, mem: ($rss * 1024), last: $last,
+          name: ($s.name // "claude"), status: ($s.status // "unknown"), started: (($s.startedAt // 0) / 1000 | floor)}'
+    done | jq -s -c 'sort_by(-.started)'
+  """) every 10s json timeout 20s
+  source wx =http("https://wttr.in/?format=j1") every 30m timeout 10s json
+  // CPU busy % between two reads of /proc/stat, one per run, compared through prev()
+  source cpuRaw = cmd("head -1 /proc/stat") every 5s
+
+  let font = "https://raw.githubusercontent.com/google/fonts/main/ofl/jetbrainsmono/JetBrainsMono%5Bwght%5D.ttf"
+
+  // The first seven counters after "cpu": the total, and idle + iowait as the idle part
+  let cpuLast = prev(cpuRaw)
+  let cpuF = words(cpuRaw ?? "").drop(1).take(7).map(x => num(x, 0))
+  let cpuP = words(cpuLast ?? "").drop(1).take(7).map(x => num(x, 0))
+  let cpuT = sum(cpuF) - sum(cpuP)
+  let cpuI = len(cpuF) > 4 && len(cpuP) > 4 ? (cpuF[3] + cpuF[4]) - (cpuP[3] + cpuP[4]) : 0
+  let cpuPct = len(cpuP) < 5 || cpuT <= 0 ? 0 : round((cpuT - cpuI) * 100 / cpuT)
+  let cpuHist = history(cpuPct, 40)
+  state focus = "0.0" persist
+
+  let hour = num(fmtTime(now, "H"))
+  let minute = hour * 60 + num(fmtTime(now, "m"))
+  let host = lower(replace(trim(dev.model ?? "phone"), " ", "-"))
+  let kver = split(sys.kernel ?? "linux", "-")[0]
+
+  let cur = wx.current_condition[0]
+  let day = wx.weather[0]
+  let place = lower(wx.nearest_area[0].areaName[0].value ?? "local")
+
+  let playing = m != null && m.available != false && m.title != null
+  let favPkgs = [
+    "com.samsung.android.dialer",
+    "com.whatsapp",
+    "com.discord",
+    "com.google.android.gm",
+    "com.android.chrome",
+    "com.sec.android.app.camera",
+    "com.sec.android.app.voicenote",
+    "com.google.android.apps.youtube.music",
+    "com.google.android.youtube",
+    "com.instagram.android"
+  ]
+  let topApps = favPkgs.map(p => (apps ?? []).filter(a => a.package == p && a.profile == null)[0]).filter(a => a != null)
+
+  // The recent strip never shows the private folder, which appears there as "VR mode"
+  let recentApps = (recent ?? []).filter(r => !contains(lower(r.name ?? ""), "vr mode") && !contains(lower(r.name ?? ""), "privad") && !contains(lower(r.name ?? ""), "private") && !contains(lower(r.name ?? ""), "secure")).take(10)
+
+  let memUsed = sys.memory.used ?? 0
+  let memTotal = sys.memory.total ?? 1
+  let memPct = round(memUsed / memTotal * 100)
+  let diskUsed = (sys.storage.total ?? 1) - (sys.storage.free ?? 0)
+  let diskTotal = sys.storage.total ?? 1
+  let diskPct = round(diskUsed / diskTotal * 100)
+
+  let alertSys = cpuPct > 90 || memPct > 85 || diskPct > 90
+  let alertBat = bat.level < 20 && !bat.charging
+  let notifs = (n.items ?? []).filter(i => i.package != "com.android.systemui").take(5)
+
+  let calAll = matchAll(ics ?? "", "BEGIN:VEVENT[\\s\\S]*?END:VEVENT").map(b => {
+    raw: (match(b, "DTSTART[^:\\r\\n]*:(\\d{8}(?:T\\d{6}Z?)?)") ?? [])[0],
+    title: replace(replace((match(b, "SUMMARY:([^\\r\\n]*)") ?? [])[0] ?? "", "\\,", ","), "\\;", ";")
+  }).map(e => { title: e.title, allDay: len(e.raw ?? "") == 8, t: parseTime(e.raw) })
+  let dayStart = parseTime(fmtTime(now, "yyyy-MM-dd"))
+  let calToday = calAll.filter(e => e.t != null && e.t >= dayStart && e.t < dayStart + 86400).sortBy(e => e.t).take(5)
+
+  // A process's CPU % from its ticks now and in the previous run
+  let psLast = prev(ps)
+  let psPrev = psLast ?? []
+  let cl = (ps ?? []).map(p => {
+    name: p.name, cpu: psPrev.filter(q => q.pid == p.pid && q.at < p.at).map(q => max(0, round((p.ticks - q.ticks) * 100000 / p.hz / (p.at - q.at))))[0] ?? 0, mem: p.mem, last: p.last, pid: p.pid,
+    tint: p.status == "busy" ? green : p.status == "idle" ? muted : yellow
+  })
+  let clBusy = count(ps ?? [], p => p.status == "busy")
+  let clMem = sum(cl.map(p => p.mem))
+
+  let cardBg = alpha(surface, 0.45)
+  let cardBorder = alpha(border, 0.4)
+  let wide = (tileWidth ?? 0) > (tileHeight ?? 1)
+
+  let bg = alpha(background, 0.88)
+  let dim = alpha(foreground, 0.55)
+  let fs = 14
+  let barBg = green
+
+  background: alpha(background, 0.94)
+  padding: 0
+
+  // A tmux pane's title line; each pane is a square bordered Column, the focused one in the accent color
+  component PaneTitle(title, sub, active) {
+    Text {
+      spans: [
+        {text: "[", color: dim},
+        {text: title, color: active ? accent : foreground, bold: true},
+        {text: "]", color: dim},
+        {text: " ${sub}", color: dim}
+      ]
+      font: font
+      fontSize: fs
+      maxLines: 1
+    }
+  }
+
+  // Text bar like [#####-----]
+  component Bar(label, pct, shown, hot) {
+    Row {
+      gap: 6
+      align: center
+      fill: width
+      Text { text: label; font: font; fontSize: fs; color: dim; width: 40 }
+      Progress { value: pct; color: hot ? red : accent; track: alpha(foreground, 0.12); height: 4; radius: 0; weight: 1 }
+      Text { text: shown; font: font; fontSize: fs; color: foreground; width: 120; align: end; maxLines: 1 }
+    }
+  }
+
+  component Prompt(cmd) {
+    Text {
+      spans: [{text: "${host} ", color: green}, {text: "~ ", color: accent}, {text: "$ ", color: dim}, {text: cmd, color: foreground}]
+      font: font
+      fontSize: fs
+      maxLines: 1
+    }
+  }
+
+  // The tmux status line: session, windows (tappable), cpu and clock
+  component StatusBar() {
+    Row {
+      align: center
+      fill: width
+      background: barBg
+      padding: [8, 5]
+      gap: 10
+      Text { text: "[0]"; font: font; fontSize: fs; color: background; bold: true }
+      Text { text: " 0:home* "; font: font; fontSize: fs; color: green; bold: true; background: background; onTap: launcher("drawer") }
+      Text { text: "1:btop"; font: font; fontSize: fs; color: background; onTap: terminal("btop", "btop") }
+      Text { text: "2:agent"; font: font; fontSize: fs; color: background; onTap: { haptic(); if ag.default != null { open(ag.default.key) } else { launcher("agents") } } }
+      Text { text: "3:style"; font: font; fontSize: fs; color: background; onTap: launcher("style") }
+      Text { text: modes.torch ? "4:torch!" : "4:torch"; font: font; fontSize: fs; color: background; bold: modes.torch; onTap: { haptic(); torch("toggle") } }
+      Spacer { weight: 1 }
+      Text { text: "${bat.level}%${bat.charging ? "+" : ""} ${fmtTime(now, "HH:mm")}"; font: font; fontSize: fs; color: background; maxLines: 1 }
+    }
+  }
+
+  component Clock() {
+    Column {
+      gap: 4; fill: width; padding: [10, 8]; background: bg; border: 1; radius: 0
+      borderColor: alertBat ? red : focus == "0.0" ? accent : alpha(foreground, 0.35)
+      onTap: focus = "0.0"
+      Row {
+        fill: width
+        align: center
+        Text {
+          spans: [{text: "[", color: dim}, {text: "0.0", color: focus == "0.0" ? accent : foreground, bold: true}, {text: "] ", color: dim}, {text: "${host}@arch", color: green}]
+          font: font
+          fontSize: fs
+          weight: 1
+          maxLines: 1
+        }
+        if alarm.set {
+          Text {
+            text: "alarm ${lower(fmtTime(alarm.time, "h:mm a"))}"
+            font: font
+            fontSize: fs
+            color: dim
+            onTap: androidApp(alarm.app)
+          }
+        }
+      }
+      Prompt { cmd: "date" }
+      Text {
+        spans: [fmtTime(now, "HH"), {text: ":", color: accent}, fmtTime(now, "mm"), {text: ":${fmtTime(now, "ss")}", color: dim}]
+        font: font
+        fontSize: fs
+      }
+      Text {
+        text: lower(fmtTime(now, "EEE d MMM yyyy")) + (cur ? "  ·  ${cur.temp_C}°c ${lower(cur.weatherDesc[0].value)} @ ${place}" : "")
+        font: font
+        fontSize: fs
+        color: foreground
+        maxLines: 2
+        onTap: url("https://wttr.in")
+      }
+      Canvas {
+        height: 8
+        fill: width
+        let x = 2 + minute / 1440 * (width - 4)
+        line(2, height / 2, width - 2, height / 2, stroke: alpha(foreground, 0.2), width: 1)
+        line(2, height / 2, x, height / 2, stroke: accent, width: 2)
+        rect(x - 2, 0, 4, height, fill: accent)
+      }
+    }
+  }
+
+  component SysPane() {
+    Column {
+      gap: 4; fill: width; padding: [8, 6]; background: bg; border: 1; radius: 0
+      borderColor: alertSys ? red : focus == "0.1" ? accent : alpha(foreground, 0.35)
+      onTap: { focus = "0.1"; terminal("btop", "btop") }
+      PaneTitle { title: "0.1 sys"; sub: "linux ${kver} · up ${fmtDuration(sys.uptime ?? 0)} · ${pkgs ?? "…"} pkgs"; active: focus == "0.1" }
+      Prompt { cmd: "free -h; df -h /sdcard" }
+      Bar { label: "cpu"; pct: cpuPct; shown: "${cpuPct}%"; hot: cpuPct > 85 }
+      Sparkline { values: cpuHist; min: 0; max: 100; color: accent; area: true; height: 28; fill: width }
+      Bar { label: "mem"; pct: memPct; shown: "${fmtBytes(memUsed)}/${fmtBytes(memTotal)}"; hot: memPct > 85 }
+      Bar { label: "dsk"; pct: diskPct; shown: "${fmtBytes(sys.storage.free ?? 0)} free"; hot: diskPct > 90 }
+    }
+  }
+
+  component CalPane() {
+    Column {
+      gap: 4; fill: width; padding: [8, 6]; background: bg; border: 1; radius: 0
+      borderColor: focus == "1.0" ? accent : alpha(foreground, 0.35)
+      onTap: focus = "1.0"
+      onLongPress: { haptic(); calId = null; calTok = null }
+      PaneTitle { title: "1.0 cal"; sub: calId == null ? "paste your secret ical link" : ics == null ? "…" : len(calToday) == 0 ? "nothing today" : "today · ${len(calToday)}"; active: focus == "1.0" }
+      if calId == null {
+        Input {
+          placeholder: "https://calendar.google.com/…/basic.ics"
+          password: true
+          fill: width
+          onSubmit: {
+            calTok = replace(split(value, "/")[6] ?? "", "private-", "")
+            calId = replace(split(value, "/")[5] ?? "", "%40", "@")
+          }
+        }
+      }
+      for e in calToday key e.title + str(e.t) {
+        Row {
+          gap: 8
+          fill: width
+          Text { text: e.allDay ? "all day" : lower(fmtTime(e.t, "h:mm a")); font: font; fontSize: fs; color: accent; width: 84 }
+          Text { text: e.title; font: font; fontSize: fs; weight: 1; maxLines: 1 }
+        }
+      }
+    }
+  }
+
+  // Busy sessions first; only a busy one shows what it was last asked
+  component ClaudePane() {
+    Column {
+      gap: 4; fill: width; padding: [8, 6]; background: bg; border: 1; radius: 0
+      borderColor: count(cl, p => p.tint == yellow) > 0 ? yellow : focus == "0.2" ? accent : alpha(foreground, 0.35)
+      onTap: { focus = "0.2"; if ag.default != null { open(ag.default.key) } else { launcher("agents") } }
+      PaneTitle { title: "0.2 claude"; sub: ps == null ? "…" : len(cl) == 0 ? "none running" : "${len(cl)} running · ${clBusy} busy · ${fmtBytes(clMem)}"; active: focus == "0.2" }
+      for p in cl.sortBy(x => x.tint == green ? 0 : 1) key p.pid {
+        Column {
+          gap: 1
+          fill: width
+          Row {
+            gap: 6
+            align: center
+            fill: width
+            Text { text: "●"; font: font; fontSize: fs; color: p.tint }
+            Text { text: p.name; font: font; fontSize: fs; weight: 1; maxLines: 1 }
+            Text { text: "${p.cpu}%"; font: font; fontSize: fs; color: p.cpu >= 50 ? yellow : dim }
+          }
+          if p.last != "" && p.tint == green {
+            Text { text: "> ${p.last}"; font: font; fontSize: fs; color: dim; maxLines: 1; padding: [20, 0, 0, 0] }
+          }
+        }
+      }
+    }
+  }
+
+  component NotifPane() {
+    Column {
+      gap: 4; fill: width; padding: [8, 6]; background: bg; border: 1; radius: 0
+      borderColor: focus == "1.1" ? accent : alpha(foreground, 0.35)
+      onTap: focus = "1.1"
+      PaneTitle { title: "1.1 mail"; sub: n.available == false ? "no notification access" : len(notifs) == 0 ? "no notifications" : "${len(notifs)} notifications"; active: focus == "1.1" }
+      for it in notifs key it.key {
+        Row {
+          gap: 8
+          fill: width
+          onTap: notification("open", it.key)
+          Text { text: fmtAgo(it.time, now); font: font; fontSize: fs; color: dim; width: 56 }
+          Text { text: "${it.app}: ${it.title}"; font: font; fontSize: fs; weight: 1; maxLines: 1 }
+        }
+      }
+    }
+  }
+
+  component PlayPane() {
+    if playing {
+      Column {
+        gap: 4; fill: width; padding: [8, 6]; background: bg; border: 1; radius: 0
+        borderColor: focus == "0.3" ? accent : alpha(foreground, 0.35)
+        onTap: focus = "0.3"
+        PaneTitle { title: "0.3 mpv"; sub: m.playing == true ? "playing" : "paused"; active: focus == "0.3" }
+        Row {
+          gap: 8
+          align: center
+          fill: width
+          onTap: media("open")
+          Column {
+            gap: 1
+            weight: 1
+            Text { text: m.title; font: font; fontSize: fs; bold: true; maxLines: 1 }
+            Text { text: m.artist ?? lower(m.app ?? "audio"); font: font; fontSize: fs; color: dim; maxLines: 1 }
+          }
+          Text { text: m.playing == true ? "[pause]" : "[play]"; font: font; fontSize: fs; color: accent; onTap: media("toggle") }
+        }
+      }
+    }
+  }
+
+  component AppsPane() {
+    Column {
+      gap: 4; fill: width; padding: [8, 6]; background: bg; border: 1; radius: 0
+      borderColor: focus == "2.1" ? accent : alpha(foreground, 0.35)
+      onTap: focus = "2.1"
+      PaneTitle { title: "2.1 apps"; sub: "tap to launch"; active: focus == "2.1" }
+      Flow {
+        gap: 12
+        fill: width
+        for a in topApps key a.key {
+          Text { text: lower(a.name); font: font; fontSize: fs; color: foreground; onTap: androidApp(a.key) }
+        }
+      }
+    }
+  }
+
+  component RecentPane() {
+    Column {
+      gap: 4; fill: width; padding: [8, 6]; background: bg; border: 1; radius: 0
+      borderColor: focus == "2.0" ? accent : alpha(foreground, 0.35)
+      onTap: focus = "2.0"
+      PaneTitle { title: "2.0 recent"; sub: "tap to open"; active: focus == "2.0" }
+      Flow {
+        gap: 10
+        fill: width
+        for r in recentApps key r.key {
+          Text { text: lower(r.name); font: font; fontSize: fs; color: dim; maxLines: 1; onTap: open(r.key) }
+        }
+      }
+    }
+  }
+
+  component SearchPane() {
+    Column {
+      gap: 4; fill: width; weight: 1; padding: [8, 6]; background: bg; border: 1; radius: 0
+      borderColor: focus == "2.2" ? accent : alpha(foreground, 0.35)
+      onTap: { focus = "2.2"; launcher("drawer") }
+      PaneTitle { title: "2.2 search"; sub: "tap to search apps"; active: focus == "2.2" }
+      // Only looks like a shell: a few lines of "history" and a prompt with a blinking cursor
+      Prompt { cmd: "uname -sr" }
+      Text { text: "Linux ${kver}"; font: font; fontSize: fs; color: dim }
+      Prompt { cmd: "uptime -p" }
+      Text { text: "up ${fmtDuration(sys.uptime ?? 0)}"; font: font; fontSize: fs; color: dim }
+      Prompt { cmd: "ls ~/recent" }
+      Text { text: join(recentApps.map(r => lower(r.name)), "  "); font: font; fontSize: fs; color: dim; maxLines: 3 }
+      Prompt { cmd: "echo $SHELL" }
+      Text { text: "/bin/bash"; font: font; fontSize: fs; color: dim }
+      Text {
+        spans: [{text: "${host} ", color: green}, {text: "~ ", color: accent}, {text: "$ ", color: dim}, {text: num(fmtTime(now, "s")) % 2 == 0 ? "▌" : " ", color: accent}]
+        font: font
+        fontSize: fs
+      }
+    }
+  }
+
+  Box {
+    fill: true
+    if wide {
+      Column {
+        fill: true
+        Row {
+          gap: 4
+          fill: true
+          weight: 1
+          padding: [28, 4, 4, 4]
+          Column { gap: 4; weight: 1; fill: height; Clock { } SysPane { } ClaudePane { } PlayPane { } CalPane { } NotifPane { } Spacer { weight: 1 } }
+          Column { gap: 4; weight: 1; fill: height; RecentPane { } AppsPane { } SearchPane { } }
+        }
+        StatusBar { }
+        Spacer { height: screenInset }
+      }
+    } else {
+      Column {
+        fill: true
+        Column {
+          gap: 4
+          weight: 1
+          padding: [4, 4]
+          Clock { }
+          SysPane { }
+          ClaudePane { }
+          PlayPane { }
+          CalPane { }
+          NotifPane { }
+          RecentPane { }
+          AppsPane { }
+          SearchPane { }
+        }
+        StatusBar { }
+        Spacer { height: screenInset }
+      }
+    }
+  }
+}

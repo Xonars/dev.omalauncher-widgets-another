@@ -1,0 +1,845 @@
+widget "tweaks" {
+  // A tweak tool for the launcher (omalauncher-tweaks-tool): quick switches on the tile, and every setting behind a
+  // tap, as its screen. The Python in `py` below reads defaults.toml for the settings and their descriptions, and
+  // edits style.toml line by line so its comments stay; restore and reset snapshot the current style first.
+  size: 6x2
+  minSize: 3x2
+  // Every knob the launcher has, in one place: style.toml's settings (read from defaults.toml, so new ones show up
+  // on their own, each with its description), themes and backgrounds, the files in this folder, style backups and
+  // what's under the hood.
+  meta { owl: 10; description: "A tweak tool for omalauncher on a tile: themes, backgrounds, gaps, borders, corners, bars, gestures, widgets and backups"; version: "1.0.1"; license: "MIT"; category: "system" }
+  requires { pacman: ["python", "fontconfig"] }
+
+  // The backend writes itself to ~/.cache on first run (and when this file changes), as a script the reviewer can read
+  // here whole. It takes a command: dump, set, unset, snapshot, restore, reset, disable, enable or add-example.
+  source boot = cmd("""
+d=~/.cache/omalauncher-tweaks
+mkdir -p "$d"
+t="$d/tweaks.py.tmp"
+cat > "$t" <<'OWL_TWEAKS_PY'
+# The tweaks widget's backend: dump, set, unset, snapshot, restore, reset, disable, enable, add-example.
+import json, os, re, shutil, subprocess, sys, time, tomllib
+from pathlib import Path
+
+HOME = Path.home()
+ROOT = HOME / ".config/omalauncher"
+STYLE = ROOT / "style/style.toml"
+DEFAULTS = ROOT / "style/defaults.toml"
+WIDGETS = ROOT / "widgets"
+REMOVED = WIDGETS / ".removed"
+EXAMPLES = WIDGETS / "examples"
+THEME_DIRS = [HOME / ".local/share/omarchy/themes", HOME / ".config/omarchy/themes"]  # later wins
+PROTECTED = {"drawer.owl"}
+IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp"}
+
+# Ranges for numbers; defaults.toml only says them in prose.
+RANGES = {
+    "home.columns": (3, 10, 1),
+    "widgets.gaps-in": (0, 24, 1),
+    "widgets.gaps-out": (0, 24, 1),
+    "widgets.border-width": (0, 8, 1),
+    "screens.gaps-out": (0, 24, 1),
+    "screens.border-width": (0, 8, 1),
+    "corners.scale": (0, 1, 0.25),
+    "status-bar.opacity": (0, 1, 0.05),
+    "status-bar.border-width": (0, 8, 1),
+    "navigation-bar.opacity": (0, 1, 0.05),
+    "navigation-bar.border-width": (0, 8, 1),
+    "terminal.text": (8, 20, 1),
+}
+COLOR_KEYS = {"widgets.border", "widgets.border-focused", "status-bar.background", "status-bar.border",
+              "navigation-bar.background", "navigation-bar.border"}
+
+
+def parse_defaults():
+    # Settings in defaults.toml's order, each with the comment above it as its description.
+    out, section, comment = [], "", []
+    for line in DEFAULTS.read_text().splitlines():
+        s = line.strip()
+        if m := re.fullmatch(r"\[([\w-]+)\]", s):
+            section, comment = m[1], []
+        elif m := re.fullmatch(r"#\s*([\w-]+)\s*=\s*(.*)", s):  # documented but unset: theme, background
+            out.append((section, m[1], None, " ".join(comment)))
+            comment = []
+        elif s.startswith("#"):
+            comment.append(s.lstrip("# "))
+        elif m := re.fullmatch(r"([\w-]+)\s*=\s*(.+)", s):
+            if not section and m[1] == "version":
+                comment = []
+                continue
+            out.append((section, m[1], tomllib.loads(f"v = {m[2]}")["v"], " ".join(comment)))
+            comment = []
+        else:
+            comment = []
+    return out
+
+
+def read_style():
+    try:
+        return tomllib.loads(STYLE.read_text())
+    except Exception:
+        return {}
+
+
+def themes():
+    found = {}
+    for base in THEME_DIRS:
+        if not base.is_dir():
+            continue
+        for d in sorted(base.iterdir()):
+            if not d.is_dir():
+                continue
+            colors = {}
+            try:
+                colors = tomllib.loads((d / "colors.toml").read_text())
+            except Exception:
+                pass
+            preview = next((str(p) for p in sorted(d.glob("preview.*")) if p.suffix in IMAGE_EXT), None)
+            found[d.name] = {
+                "name": d.name, "user": base == THEME_DIRS[-1], "preview": preview,
+                "mode": colors.get("mode", "dark"),
+                "swatch": [colors.get(k) for k in ("background", "foreground", "accent", "red", "green", "yellow", "blue", "magenta") if colors.get(k)],
+                "colors": colors,
+            }
+    return sorted(found.values(), key=lambda t: t["name"])
+
+
+def backgrounds(theme):
+    out = []
+    for base in THEME_DIRS:
+        d = base / theme / "backgrounds"
+        if d.is_dir():
+            out += [p for p in sorted(d.iterdir()) if p.suffix.lower() in IMAGE_EXT]
+    d = HOME / ".config/omarchy/backgrounds" / theme
+    if d.is_dir():
+        out += [p for p in sorted(d.iterdir()) if p.suffix.lower() in IMAGE_EXT]
+    return [{"name": p.name, "path": str(p)} for p in out]
+
+
+def mono_fonts():
+    try:
+        r = subprocess.run(["fc-list", ":spacing=100", "family"], capture_output=True, text=True, timeout=10)
+        fams = {l.split(",")[0].strip() for l in r.stdout.splitlines() if l.strip()}
+        return sorted(f for f in fams if f and "Symbols" not in f)
+    except Exception:
+        return []
+
+
+def owl_kind(path):
+    try:
+        with open(path, errors="replace") as f:
+            for line in f:
+                if m := re.match(r'\s*(widget|face|app|panel)\s+"([^"]*)"', line):
+                    return m[1], m[2]
+                if line.strip() and not line.strip().startswith("//"):
+                    break
+    except Exception:
+        pass
+    return "?", path.stem
+
+
+def owl_files(folder, errors=False):
+    out = []
+    if not folder.is_dir():
+        return out
+    for p in sorted(folder.glob("*.owl")):
+        if p.name.startswith("."):
+            continue
+        kind, name = owl_kind(p)
+        mine = "omalauncher-tweaks-tool" in p.read_text(errors="replace")
+        item = {"file": p.name, "kind": kind, "name": name, "size": p.stat().st_size,
+                "protected": p.name in PROTECTED or mine}
+        if errors:
+            e = WIDGETS / ".errors" / f"{p.name}.txt"
+            text = e.read_text(errors="replace").strip() if e.is_file() else ""
+            item["errors"] = text[:600]
+        out.append(item)
+    return out
+
+
+def dump():
+    style = read_style()
+    theme_list = themes()
+    cur_theme = style.get("theme")
+    cur = next((t for t in theme_list if t["name"] == cur_theme), None)
+    fonts = mono_fonts()
+    panels = [f["file"] for f in owl_files(WIDGETS) if f["kind"] == "panel"]
+    palette = ["theme"]
+    if cur:
+        for k in ("accent", "foreground", "muted", "background", "red", "orange", "yellow", "green", "cyan", "blue", "magenta"):
+            v = cur["colors"].get(k)
+            if isinstance(v, str) and v not in palette:
+                palette.append(v)
+
+    settings = []
+    for section, key, default, desc in parse_defaults():
+        path = f"{section}.{key}" if section else key
+        table = style.get(section, {}) if section else style
+        is_set = isinstance(table, dict) and key in table
+        value = table.get(key) if is_set else default
+        kind = "bool" if isinstance(default, bool) else "number" if isinstance(default, (int, float)) else "text"
+        s = {"section": section or "general", "key": key, "path": path, "desc": desc, "default": default,
+             "value": value, "set": is_set, "type": kind}
+        if path in RANGES:
+            s["min"], s["max"], s["step"] = RANGES[path]
+        if path == "theme":
+            s["type"] = "theme"
+        elif path == "background":
+            s["type"] = "background"
+        elif path == "font":
+            s["choices"] = ["system"] + fonts
+        elif path == "terminal.font":
+            s["choices"] = fonts
+        elif path == "gestures.swipe-up":
+            s["choices"] = panels + ["none"]
+        elif path == "gestures.swipe-down":
+            s["choices"] = ["none"] + panels
+        elif path in COLOR_KEYS:
+            s["type"] = "color"
+            s["choices"] = palette + ([value] if value not in palette else [])
+        settings.append(s)
+
+    backups = []
+    for p in sorted(STYLE.parent.glob("style.toml.*"), key=lambda p: -p.stat().st_mtime):
+        backups.append({"file": p.name, "time": int(p.stat().st_mtime)})
+
+    errors = STYLE.parent / "errors.txt"
+    layout_err = ROOT / "home/errors.txt"
+    removed = owl_files(REMOVED)
+    active = owl_files(WIDGETS, errors=True)
+    have = {f["file"] for f in active}
+    examples = owl_files(EXAMPLES)
+    for e in examples:
+        e["added"] = e["file"] in have
+
+    print(json.dumps({
+        "settings": settings,
+        "themes": [{k: t[k] for k in ("name", "user", "preview", "mode", "swatch")} for t in theme_list],
+        "theme": cur_theme,
+        "backgrounds": backgrounds(cur_theme) if cur_theme else [],
+        "files": active, "removed": removed, "examples": examples,
+        "backups": backups,
+        "styleErrors": errors.read_text(errors="replace").strip() if errors.is_file() else "",
+        "layoutErrors": layout_err.read_text(errors="replace").strip() if layout_err.is_file() else "",
+        "agent": (ROOT / "agent").read_text().strip() if (ROOT / "agent").is_file() else None,
+    }))
+
+
+def toml_value(path, raw):
+    default = next((d for s, k, d, _ in parse_defaults() if (f"{s}.{k}" if s else k) == path), None)
+    if isinstance(default, bool):
+        return "true" if raw.lower() in ("true", "1", "yes", "on") else "false"
+    if isinstance(default, (int, float)):
+        n = float(raw)
+        return str(int(n)) if isinstance(default, int) and not isinstance(default, bool) and n == int(n) else repr(round(n, 4))
+    return json.dumps(raw)
+
+
+def write_style(lines):
+    text = "\n".join(lines).rstrip("\n") + "\n"
+    tmp = STYLE.with_suffix(".toml.tmp")
+    tmp.write_text(text)
+    os.replace(tmp, STYLE)
+
+
+def section_bounds(lines, section):
+    # (start, end) line indexes of a section's body; top level when section is ''.
+    headers = [i for i, l in enumerate(lines) if re.match(r"\s*\[[^\]]+\]\s*$", l)]
+    if not section:
+        return 0, headers[0] if headers else len(lines)
+    for n, i in enumerate(headers):
+        if re.match(rf"\s*\[{re.escape(section)}\]\s*$", lines[i]):
+            return i + 1, headers[n + 1] if n + 1 < len(headers) else len(lines)
+    return None
+
+
+def set_key(path, raw, remove=False):
+    section, _, key = path.rpartition(".")
+    lines = STYLE.read_text().splitlines() if STYLE.exists() else ["version = 1"]
+    bounds = section_bounds(lines, section)
+    if bounds:
+        a, b = bounds
+        for i in range(a, b):
+            if re.match(rf"\s*{re.escape(key)}\s*=", lines[i]):
+                if remove:
+                    del lines[i]
+                else:
+                    lines[i] = f"{key} = {toml_value(path, raw)}"
+                return write_style(lines)
+    if remove:
+        return
+    entry = f"{key} = {toml_value(path, raw)}"
+    if bounds:
+        a, b = bounds
+        at = b
+        while at > a and not lines[at - 1].strip():
+            at -= 1
+        lines.insert(at, entry)
+    else:
+        while lines and not lines[-1].strip():
+            lines.pop()
+        lines += ["", f"[{section}]", entry]
+    write_style(lines)
+
+
+def snapshot(tag="snap"):
+    if STYLE.exists():
+        shutil.copy2(STYLE, STYLE.parent / f"style.toml.{tag}-{time.strftime('%Y%m%d-%H%M%S')}")
+
+
+def safe_name(name):
+    if not re.fullmatch(r"[\w.+ -]+\.owl", name) or name.startswith("."):
+        sys.exit(f"bad file name: {name}")
+    return name
+
+
+def main():
+    cmd, args = (sys.argv[1], sys.argv[2:]) if len(sys.argv) > 1 else ("dump", [])
+    if cmd == "dump":
+        dump()
+    elif cmd == "set" and len(args) == 2:
+        set_key(args[0], args[1])
+    elif cmd == "unset" and len(args) == 1:
+        set_key(args[0], "", remove=True)
+    elif cmd == "snapshot":
+        snapshot()
+    elif cmd == "restore" and len(args) == 1:
+        src = STYLE.parent / args[0]
+        if not re.fullmatch(r"style\.toml\.[\w.-]+", args[0]) or not src.is_file():
+            sys.exit("no such backup")
+        snapshot("before-restore")
+        shutil.copy2(src, STYLE)
+    elif cmd == "reset":
+        snapshot("before-reset")
+        write_style(["# The launcher's style. Settings left out have their default; defaults.toml lists them all.",
+                     "", "version = 1"])
+    elif cmd == "disable" and len(args) == 1:
+        name = safe_name(args[0])
+        if name in PROTECTED or "omalauncher-tweaks-tool" in (WIDGETS / name).read_text(errors="replace"):
+            sys.exit(f"{name} stays")
+        REMOVED.mkdir(exist_ok=True)
+        dest = REMOVED / name
+        if dest.exists():
+            dest.rename(REMOVED / f"{name}.{time.strftime('%Y%m%d-%H%M%S')}.bak")
+        (WIDGETS / name).rename(dest)
+    elif cmd == "enable" and len(args) == 1:
+        name = safe_name(args[0])
+        if (WIDGETS / name).exists():
+            sys.exit(f"{name} is already there")
+        (REMOVED / name).rename(WIDGETS / name)
+    elif cmd == "add-example" and len(args) == 1:
+        name = safe_name(args[0])
+        if (WIDGETS / name).exists():
+            sys.exit(f"{name} is already there")
+        shutil.copy2(EXAMPLES / name, WIDGETS / name)
+    else:
+        sys.exit(__doc__)
+
+
+if __name__ == "__main__":
+    main()
+OWL_TWEAKS_PY
+mv -f "$t" "$d/tweaks.py"
+echo ok
+""") every 1h
+
+  source st = cmd(boot == "ok" ? "python3 ~/.cache/omalauncher-tweaks/tweaks.py dump" : "echo null") every 20s json timeout 20s
+  source sys = android.system every 10s
+  source dev = android.device
+  source apps = android.apps
+  source now = clock every 1m
+
+  state tab = "all"
+  // What was just set, shown at once until the next dump catches up.
+  state over = {}
+  state confirmReset = false
+  state msg = ""
+  on st { over = {} }
+
+  let settings = st.settings ?? []
+  let tabs = [
+    {id: "all", name: "all settings", sections: ["general", "icons", "corners", "home", "widgets", "screens", "status-bar", "navigation-bar", "terminal", "gestures"]},
+    {id: "look", name: "look", sections: ["general", "icons", "corners"]},
+    {id: "home", name: "home", sections: ["home", "widgets", "screens"]},
+    {id: "bars", name: "bars", sections: ["status-bar", "navigation-bar"]},
+    {id: "more", name: "terminal & gestures", sections: ["terminal", "gestures"]},
+    {id: "files", name: "widgets"},
+    {id: "backups", name: "backups"},
+    {id: "hood", name: "under the hood"}
+  ]
+  let current = find(tabs, t => t.id == tab)
+  let sectionNames = {general: "launcher", home: "home screen", widgets: "tiles", screens: "full-screen panels", icons: "icons", corners: "corners", "status-bar": "status bar", "navigation-bar": "navigation bar", terminal: "terminal", gestures: "gestures"}
+  let changed = len(settings.filter(s => s.set))
+
+
+  component Heading(label) {
+    Text { text: label; style: label; color: accent; padding: [0, 12, 0, 2] }
+  }
+
+  component Toggle(on) {
+    Box {
+      width: 44
+      height: 24
+      radius: 12
+      align: start
+      background: on ? alpha(accent, 0.35) : surface
+      border: 1
+      borderColor: on ? accent : border
+      padding: 3
+      Box { size: 16; radius: 8; offset: [on ? 20 : 0, 0]; background: on ? accent : muted }
+    }
+  }
+
+  component Setting(it) {
+    let v = get(over, it.path, it.value)
+    let isSet = indexOf(keys(over), it.path) >= 0 || it.set
+    Column {
+      gap: 6
+      padding: [12, 10]
+      radius: 8 * corners
+      background: alpha(surface, 0.5)
+      border: 1
+      borderColor: isSet ? alpha(accent, 0.5) : border
+      Row {
+        align: center
+        gap: 8
+        Column {
+          gap: 2
+          weight: 1
+          Text { spans: [it.key, {text: isSet ? "  ● changed" : "", color: accent, fontSize: 10}]; bold: true }
+          Text { text: it.desc; style: small; color: muted }
+        }
+        if it.type == "bool" {
+          Box {
+            onTap: { haptic(); over = set(over, it.path, !v); run("python3 ~/.cache/omalauncher-tweaks/tweaks.py set ${sh(it.path)} ${sh(str(!v))}") }
+            Toggle { on: v == true }
+          }
+        }
+      }
+      if it.type == "number" {
+        Row {
+          align: center
+          gap: 10
+          Slider {
+            weight: 1
+            value: v
+            min: it.min ?? 0
+            max: it.max ?? 32
+            step: it.step ?? 1
+            onChange: { over = set(over, it.path, round(value, 2)); run("python3 ~/.cache/omalauncher-tweaks/tweaks.py set ${sh(it.path)} ${round(value, 2)}") }
+          }
+          Text { text: str(round(v, 2)); font: mono; width: 64; maxLines: 1; align: end }
+        }
+      }
+      if it.type == "color" {
+        Flow {
+          gap: 6
+          for c in it.choices ?? [] key c {
+            if c == "theme" {
+              Text {
+                text: "theme"
+                style: small
+                padding: [10, 5]
+                radius: 14
+                border: 2
+                borderColor: c == v ? foreground : border
+                onTap: { haptic(); over = set(over, it.path, c); run("python3 ~/.cache/omalauncher-tweaks/tweaks.py set ${sh(it.path)} ${sh(c)}") }
+              }
+            } else {
+              Box {
+                onTap: { haptic(); over = set(over, it.path, c); run("python3 ~/.cache/omalauncher-tweaks/tweaks.py set ${sh(it.path)} ${sh(c)}") }
+                padding: 2
+                radius: 14
+                border: 2
+                borderColor: c == v ? foreground : transparent
+                Box { size: 22; radius: 11; background: c }
+              }
+            }
+          }
+        }
+      }
+      if it.type == "text" && it.choices != null {
+        Flow {
+          gap: 6
+          for c in it.choices key c {
+            Text { text: c; style: small; padding: [10, 5]; radius: 12 * corners; border: 1; borderColor: (c == v) ? accent : border; background: (c == v) ? alpha(accent, 0.18) : transparent; color: (c == v) ? accent : foreground; onTap: { haptic(); over = set(over, it.path, c); run("python3 ~/.cache/omalauncher-tweaks/tweaks.py set ${sh(it.path)} ${sh(c)}") } }
+          }
+        }
+      }
+      if it.type == "text" && it.choices == null {
+        Input { text: str(v ?? ""); placeholder: str(it.default ?? ""); onSubmit: run("python3 ~/.cache/omalauncher-tweaks/tweaks.py set ${sh(it.path)} ${sh(value)}") }
+      }
+      if it.set && it.type != "theme" {
+        Text { text: "↺ back to default (${str(it.default ?? "unset")})"; style: small; color: muted; onTap: run("python3 ~/.cache/omalauncher-tweaks/tweaks.py unset ${sh(it.path)}") }
+      }
+    }
+  }
+
+  component ThemeCard(t) {
+    let on = (get(over, "theme", st.theme)) == t.name
+    Column {
+      weight: 1
+      gap: 4
+      padding: 6
+      radius: 8 * corners
+      border: on ? 2 : 1
+      borderColor: on ? accent : border
+      background: on ? alpha(accent, 0.12) : alpha(surface, 0.4)
+      onTap: { haptic(); over = set(over, "theme", t.name); run("python3 ~/.cache/omalauncher-tweaks/tweaks.py set theme ${sh(t.name)} && python3 ~/.cache/omalauncher-tweaks/tweaks.py unset background") }
+      if t.preview != null {
+        Image { src: t.preview; fit: cover; height: 56; fill: width; radius: 4 * corners; clip: true }
+      } else {
+        Box { height: 56; fill: width; radius: 4 * corners; background: t.swatch[0] ?? surface; align: center
+          Text { text: "Aa"; color: t.swatch[2] ?? accent; bold: true }
+        }
+      }
+      Text { text: t.name; style: small; bold: on; maxLines: 1 }
+      Row {
+        gap: 2
+        for c in t.swatch { Box { height: 8; weight: 1; background: c } }
+      }
+    }
+  }
+
+  component FileRow(f, actionLabel, verb) {
+    Row {
+      align: center
+      gap: 8
+      padding: [10, 8]
+      radius: 6 * corners
+      background: alpha(surface, 0.4)
+      Text {
+        text: f.kind
+        style: small
+        width: 64
+        maxLines: 1
+        color: f.kind == "app" ? blue : f.kind == "face" ? magenta : f.kind == "panel" ? yellow : green
+      }
+      Column {
+        gap: 0
+        weight: 1
+        Text { text: f.name; maxLines: 1 }
+        Text { text: f.file; style: small; color: muted; maxLines: 1 }
+        if (f.errors ?? "") != "" { Text { text: f.errors; style: small; color: red; maxLines: 3 } }
+      }
+      if f.protected {
+        Text { text: "kept"; style: small; color: muted }
+      } else if actionLabel != "" {
+        Button {
+          text: actionLabel
+          onTap: {
+            haptic()
+            if verb == "disable" {
+              msg = run("python3 ~/.cache/omalauncher-tweaks/tweaks.py disable ${sh(f.file)}")
+            } else if verb == "enable" {
+              msg = run("python3 ~/.cache/omalauncher-tweaks/tweaks.py enable ${sh(f.file)}")
+            } else if verb == "add-example" {
+              msg = run("python3 ~/.cache/omalauncher-tweaks/tweaks.py add-example ${sh(f.file)}")
+            }
+          }
+        }
+      }
+    }
+  }
+
+  component Info(label, value) {
+    Row {
+      gap: 8
+      Text { text: label; style: small; color: muted; width: 140; maxLines: 1 }
+      Text { text: str(value ?? "…"); style: small; weight: 1 }
+    }
+  }
+
+  // On the tile: the theme to step through, and the settings most worth flipping.
+  let themeNames = (st.themes ?? []).map(t => t.name)
+  let curTheme = get(over, "theme", st.theme)
+  let curT = find(st.themes ?? [], t => t.name == curTheme)
+  let ti = max(0, indexOf(themeNames, curTheme))
+  let tn = max(1, len(themeNames))
+  let nextTheme = themeNames[(ti + 1) % tn]
+  let prevTheme = themeNames[(ti - 1 + tn) % tn]
+  let corner = get(over, "corners.scale", find(settings, s => s.path == "corners.scale").value) ?? 0
+  let gap = get(over, "widgets.gaps-in", find(settings, s => s.path == "widgets.gaps-in").value) ?? 0
+  let barOn = get(over, "status-bar.shown", find(settings, s => s.path == "status-bar.shown").value) ?? true
+  let nextCorner = corner >= 1 ? 0 : corner + 0.5
+  let nextGap = gap >= 12 ? 0 : gap + 4
+  // A tile taller than wide (the landscape home screen) stacks: the theme name gets its own lines, the arrows go
+  // under a bigger swatch, and the quick switches take one line each.
+  let tall = tileWidth != null && tileHeight != null && tileHeight > tileWidth * 1.3
+
+  onTap: screen()
+
+  Column {
+    gap: 6
+    fill: true
+    Row {
+      align: center
+      gap: 6
+      Text { text: "tweaks"; style: label; color: accent; weight: 1 }
+      Text { text: st == null ? "loading…" : "${changed} changed"; style: small; color: muted }
+    }
+    if tall {
+      Spacer { height: 4 }
+      Text { text: curTheme ?? "…"; style: title; maxLines: 2; align: center }
+      Row {
+        gap: 2
+        height: 14
+        for c in curT.swatch ?? [] { Box { height: 14; weight: 1; background: c } }
+      }
+      Row {
+        align: center
+        Text { text: "‹"; style: title; color: accent; padding: [12, 0]; onTap: { haptic(); over = set(over, "theme", prevTheme); run("python3 ~/.cache/omalauncher-tweaks/tweaks.py set theme ${sh(prevTheme)} && python3 ~/.cache/omalauncher-tweaks/tweaks.py unset background") } }
+        Spacer { weight: 1 }
+        Text { text: "›"; style: title; color: accent; padding: [12, 0]; onTap: { haptic(); over = set(over, "theme", nextTheme); run("python3 ~/.cache/omalauncher-tweaks/tweaks.py set theme ${sh(nextTheme)} && python3 ~/.cache/omalauncher-tweaks/tweaks.py unset background") } }
+      }
+      if st != null {
+        Column {
+          gap: 8
+          Text { text: corner == 0 ? "□ square" : corner < 1 ? "▢ soft" : "◯ round"; style: small; maxLines: 1; fill: width; padding: [8, 4]; radius: 10 * corners; border: 1; borderColor: (corner > 0) ? accent : border; background: (corner > 0) ? alpha(accent, 0.18) : transparent; color: (corner > 0) ? accent : foreground; onTap: { haptic(); over = set(over, "corners.scale", nextCorner); run("python3 ~/.cache/omalauncher-tweaks/tweaks.py set corners.scale ${sh(nextCorner)}") } }
+          Text { text: "gaps ${gap}"; style: small; maxLines: 1; fill: width; padding: [8, 4]; radius: 10 * corners; border: 1; borderColor: (gap > 0) ? accent : border; background: (gap > 0) ? alpha(accent, 0.18) : transparent; color: (gap > 0) ? accent : foreground; onTap: { haptic(); over = set(set(over, "widgets.gaps-in", nextGap), "widgets.gaps-out", nextGap); run("python3 ~/.cache/omalauncher-tweaks/tweaks.py set widgets.gaps-in ${sh(nextGap)} && python3 ~/.cache/omalauncher-tweaks/tweaks.py set widgets.gaps-out ${sh(nextGap)}") } }
+          Text { text: barOn ? "bar on" : "bar off"; style: small; maxLines: 1; fill: width; padding: [8, 4]; radius: 10 * corners; border: 1; borderColor: (barOn) ? accent : border; background: (barOn) ? alpha(accent, 0.18) : transparent; color: (barOn) ? accent : foreground; onTap: { haptic(); over = set(over, "status-bar.shown", !barOn); run("python3 ~/.cache/omalauncher-tweaks/tweaks.py set status-bar.shown ${sh(barOn ? "false" : "true")}") } }
+        }
+      }
+    } else {
+      Row {
+        align: center
+        gap: 6
+        Text { text: "‹"; style: title; color: accent; padding: [6, 0]; onTap: { haptic(); over = set(over, "theme", prevTheme); run("python3 ~/.cache/omalauncher-tweaks/tweaks.py set theme ${sh(prevTheme)} && python3 ~/.cache/omalauncher-tweaks/tweaks.py unset background") } }
+        Column {
+          gap: 3
+          weight: 1
+          Text { text: curTheme ?? "…"; style: title; maxLines: 1 }
+          Row {
+            gap: 2
+            height: 6
+            for c in curT.swatch ?? [] { Box { height: 6; weight: 1; background: c } }
+          }
+        }
+        Text { text: "›"; style: title; color: accent; padding: [6, 0]; onTap: { haptic(); over = set(over, "theme", nextTheme); run("python3 ~/.cache/omalauncher-tweaks/tweaks.py set theme ${sh(nextTheme)} && python3 ~/.cache/omalauncher-tweaks/tweaks.py unset background") } }
+      }
+      if (rows ?? 2) >= 2 && st != null {
+        Flow {
+          gap: 6
+          Text { text: corner == 0 ? "□ square" : corner < 1 ? "▢ soft" : "◯ round"; style: small; maxLines: 1; padding: [8, 4]; radius: 10 * corners; border: 1; borderColor: (corner > 0) ? accent : border; background: (corner > 0) ? alpha(accent, 0.18) : transparent; color: (corner > 0) ? accent : foreground; onTap: { haptic(); over = set(over, "corners.scale", nextCorner); run("python3 ~/.cache/omalauncher-tweaks/tweaks.py set corners.scale ${sh(nextCorner)}") } }
+          Text { text: "gaps ${gap}"; style: small; maxLines: 1; padding: [8, 4]; radius: 10 * corners; border: 1; borderColor: (gap > 0) ? accent : border; background: (gap > 0) ? alpha(accent, 0.18) : transparent; color: (gap > 0) ? accent : foreground; onTap: { haptic(); over = set(set(over, "widgets.gaps-in", nextGap), "widgets.gaps-out", nextGap); run("python3 ~/.cache/omalauncher-tweaks/tweaks.py set widgets.gaps-in ${sh(nextGap)} && python3 ~/.cache/omalauncher-tweaks/tweaks.py set widgets.gaps-out ${sh(nextGap)}") } }
+          Text { text: barOn ? "bar on" : "bar off"; style: small; maxLines: 1; padding: [8, 4]; radius: 10 * corners; border: 1; borderColor: (barOn) ? accent : border; background: (barOn) ? alpha(accent, 0.18) : transparent; color: (barOn) ? accent : foreground; onTap: { haptic(); over = set(over, "status-bar.shown", !barOn); run("python3 ~/.cache/omalauncher-tweaks/tweaks.py set status-bar.shown ${sh(barOn ? "false" : "true")}") } }
+        }
+      }
+    }
+    Spacer { weight: 1 }
+    if (rows ?? 2) >= 2 {
+      Text { text: "tap for every setting ›"; style: small; color: muted; align: end }
+    }
+  }
+
+  screen {
+    title: "tweaks"
+    Column {
+      gap: 0
+      weight: 1
+      Flow {
+        gap: 6
+        padding: [12, 8]
+        for t in tabs key t.id {
+          Text { text: t.name; style: small; padding: [10, 5]; radius: 12 * corners; border: 1; borderColor: (tab == t.id) ? accent : border; background: (tab == t.id) ? alpha(accent, 0.18) : transparent; color: (tab == t.id) ? accent : foreground; onTap: { tab = t.id; confirmReset = false } }
+        }
+      }
+
+      Column {
+        weight: 1
+        scroll: true
+        gap: 8
+        padding: [12, 4]
+
+        if st == null {
+          Text { text: "reading the launcher's settings…"; color: muted }
+        }
+
+        if (st.styleErrors ?? "") != "" {
+          Text { text: "style.toml: ${st.styleErrors}"; style: small; color: red }
+        }
+        if msg != "" && msg != null {
+          Text { text: msg; style: small; color: yellow; onTap: msg = "" }
+        }
+
+        if tab == "all" {
+          let allTheme = find(st.themes ?? [], t => t.name == get(over, "theme", st.theme))
+          let allBg = get(over, "background", find(settings, s => s.path == "background").value) ?? ""
+          Text { text: "${len(settings)} settings, ${changed} changed from the defaults. Everything the launcher's style takes, read from defaults.toml."; style: small; color: muted }
+          Row {
+            align: center
+            gap: 10
+            padding: [12, 10]
+            radius: 8 * corners
+            background: alpha(surface, 0.5)
+            border: 1
+            borderColor: border
+            onTap: tab = "look"
+            if allTheme.preview != null {
+              Image { src: allTheme.preview; fit: cover; width: 96; height: 56; radius: 4 * corners; clip: true }
+            }
+            Column {
+              gap: 3
+              weight: 1
+              Text { spans: ["theme  ", {text: allTheme.name ?? "…", bold: true}] }
+              Row {
+                gap: 2
+                height: 6
+                for c in allTheme.swatch ?? [] { Box { height: 6; weight: 1; background: c } }
+              }
+              Text { text: "background: ${allBg == "" ? "the theme's first" : allBg}"; style: small; color: muted; maxLines: 1 }
+            }
+            Text { text: "›"; style: title; color: accent }
+          }
+        }
+
+        if tab == "look" {
+          Heading { label: "theme" }
+          for r in range(ceil(len(st.themes ?? []) / 3)) {
+            let row = take(drop(st.themes ?? [], r * 3), 3)
+            Row {
+              gap: 8
+              for t in row key t.name { ThemeCard { t: t } }
+              for e in range(3 - len(row)) { Spacer { weight: 1 } }
+            }
+          }
+          Heading { label: "background" }
+          let bgNow = get(over, "background", find(settings, s => s.path == "background").value) ?? ""
+          Flow {
+            gap: 8
+            Column {
+              width: 96
+              gap: 2
+              onTap: { over = set(over, "background", ""); run("python3 ~/.cache/omalauncher-tweaks/tweaks.py unset background") }
+              Box {
+                height: 64
+                fill: width
+                radius: 6 * corners
+                align: center
+                border: bgNow == "" ? 2 : 1
+                borderColor: bgNow == "" ? accent : border
+                Text { text: "theme's first"; style: small; color: muted }
+              }
+            }
+            for b in st.backgrounds ?? [] key b.path {
+              Column {
+                width: 96
+                gap: 2
+                onTap: { haptic(); over = set(over, "background", b.name); run("python3 ~/.cache/omalauncher-tweaks/tweaks.py set background ${sh(b.name)}") }
+                Box {
+                  height: 64
+                  fill: width
+                  radius: 6 * corners
+                  clip: true
+                  border: bgNow == b.name ? 2 : 0
+                  borderColor: accent
+                  Image { src: b.path; fit: cover; fill: true }
+                }
+                Text { text: b.name; style: small; maxLines: 1; color: bgNow == b.name ? accent : muted }
+              }
+            }
+          }
+        }
+
+        if current.sections != null {
+          for sec in current.sections key sec {
+            let items = settings.filter(s => s.section == sec && s.type != "theme" && s.type != "background")
+            if len(items) > 0 {
+              Heading { label: sectionNames[sec] ?? sec }
+              for it in items key it.path { Setting { it: it } }
+            }
+          }
+        }
+
+        if tab == "files" {
+          Text { text: "Removing moves a file to .removed/, which takes it off home and out of the drawer; restore brings it back."; style: small; color: muted }
+          Heading { label: "in use (${len(st.files ?? [])})" }
+          for f in st.files ?? [] key f.file {
+            FileRow { f: f; actionLabel: "remove"; verb: "disable" }
+          }
+          Heading { label: "removed (${len(st.removed ?? [])})" }
+          for f in st.removed ?? [] key f.file {
+            FileRow { f: f; actionLabel: "restore"; verb: "enable" }
+          }
+          Heading { label: "examples (${len(st.examples ?? [])})" }
+          for f in st.examples ?? [] key f.file {
+            FileRow { f: f; actionLabel: f.added ? "" : "add"; verb: "add-example" }
+          }
+        }
+
+        if tab == "backups" {
+          Text { text: "${changed} of ${len(settings)} settings differ from the defaults."; style: small; color: muted }
+          Row {
+            gap: 8
+            Button { text: "snapshot now"; onTap: { haptic(); run("python3 ~/.cache/omalauncher-tweaks/tweaks.py snapshot") } }
+            Button {
+              text: confirmReset ? "tap again to reset" : "reset all to defaults"
+              color: confirmReset ? red : foreground
+              onTap: {
+                if confirmReset { run("python3 ~/.cache/omalauncher-tweaks/tweaks.py reset"); confirmReset = false } else { confirmReset = true }
+              }
+            }
+          }
+          Heading { label: "style.toml backups" }
+          if len(st.backups ?? []) == 0 { Text { text: "none yet"; style: small; color: muted } }
+          for b in st.backups ?? [] key b.file {
+            Row {
+              align: center
+              gap: 8
+              padding: [10, 6]
+              radius: 6 * corners
+              background: alpha(surface, 0.4)
+              Column {
+                gap: 0
+                weight: 1
+                Text { text: replace(b.file, "style.toml.", ""); maxLines: 1 }
+                Text { text: "${fmtTime(b.time, "EEE d MMM HH:mm")} · ${fmtAgo(b.time, now)} ago"; style: small; color: muted }
+              }
+              Button { text: "restore"; onTap: { haptic(); run("python3 ~/.cache/omalauncher-tweaks/tweaks.py restore ${sh(b.file)}") } }
+            }
+          }
+          Text { text: "Restoring snapshots the current style first, so you can always go back."; style: small; color: muted }
+        }
+
+        if tab == "hood" {
+          Heading { label: "launcher screens" }
+          Flow {
+            gap: 6
+            for s in ["style", "themes", "settings", "agents", "store", "drawer", "linux"] key s {
+              Text { text: s; style: small; padding: [10, 5]; radius: 12 * corners; border: 1; borderColor: (false) ? accent : border; background: (false) ? alpha(accent, 0.18) : transparent; color: (false) ? accent : foreground; onTap: launcher(s) }
+            }
+          }
+          Heading { label: "launcher" }
+          Info { label: "version"; value: sys.launcher }
+          Info { label: "theme"; value: sys.theme }
+          Info { label: "default agent"; value: st.agent }
+            Info { label: "linux"; value: linux ? "running" : "not running" }
+            Info { label: "icons"; value: find(settings, s => s.path == "icons.monochrome").value ? "monochrome" : "full color" }
+          Info { label: "home grid"; value: "${find(settings, s => s.path == "home.columns").value} columns" }
+          Heading { label: "phone" }
+          Info { label: "device"; value: "${dev.maker} ${dev.model}" }
+          Info { label: "android"; value: "${dev.android} (sdk ${dev.sdk}) · patch ${sys.patch}" }
+          Info { label: "chip"; value: "${sys.cpu.soc ?? dev.soc} · ${sys.cpu.cores} cores · ${sys.cpu.maxMhz} MHz" }
+          Info { label: "display"; value: "${sys.display.width}×${sys.display.height} · ${sys.display.hz} Hz · ${sys.display.dpi} dpi" }
+          Info { label: "memory"; value: "${fmtBytes(sys.memory.used)} of ${fmtBytes(sys.memory.total)}" }
+          Info { label: "storage"; value: "${fmtBytes(sys.storage.used)} of ${fmtBytes(sys.storage.total)}" }
+          Info { label: "kernel"; value: sys.kernel }
+          Info { label: "uptime"; value: fmtDuration(sys.uptime) }
+          Info { label: "android apps"; value: len(apps ?? []) }
+          if (st.layoutErrors ?? "") != "" {
+            Heading { label: "layout.toml problems" }
+            Text { text: st.layoutErrors; style: small; color: red }
+          }
+          Heading { label: "things to play with" }
+          Text { text: "• Swipe down on home can open a panel of your own: write panel \"…\" { } and pick it under terminal & gestures."; style: small }
+          Text { text: "• Faces are whole home pages left of page 1; drawer.owl is the app drawer, yours to edit (.stock-drawer.owl is the original)."; style: small }
+          Text { text: "• From any script: owl-send <file> set <state> <value>, or owl-send <file> refresh."; style: small }
+          Text { text: "• ~/.config/omalauncher/home/layout.toml moves, resizes and pins tiles; faces and panels are written like widgets."; style: small }
+          Button { text: "ask the agent for ideas"; onTap: ask("Look through ~/.config/omalauncher (style, layout, widgets README) and suggest fun tweaks I could try on my launcher.") }
+        }
+
+        Spacer { height: 12 }
+      }
+    }
+  }
+}

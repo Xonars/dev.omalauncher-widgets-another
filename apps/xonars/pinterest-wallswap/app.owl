@@ -1,0 +1,545 @@
+app "Pinterest wallswap" {
+  title: settings ? "Настройки" : savePin != null ? "Сохранить пин" : feedView ? "Лента" : downloadsView ? "Загрузки" : fullscreen ? "" : selectedBoard != null ? selectedBoard.name : "Pinterest · Доски"
+  statusBar: !fullscreen
+  back: fullscreen || settings || downloadsView || feedView || savePin != null || selectedBoard != null
+  onBack: { if settings { settings = false } else if savePin != null { if !pinSaveBusy { savePin = null } } else if feedPin != null { feedPin = null } else if feedView { feedView = false } else if downloadsView { downloadsView = false } else if fullscreen { fullscreen = false } else { selectedBoard = null } }
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="38" height="38" rx="4"/><circle cx="16" cy="16" r="3"/><path d="M5 35l12-12 9 9 8-12 9 12"/></svg>"""
+  meta { owl: 13; description: "Просмотр изображений из публичных досок Pinterest"; version: "1.2.0"; license: "MIT"; category: "media" }
+  requires { pacman: ["python", "curl", "bash", "coreutils", "python-requests", "chromium", "nodejs"] }
+  state feedView = false
+  state feedPin = null
+  state savePin = null
+  state feedBusy = false
+  state feedOut = ""
+  state pinSaveBusy = false
+  state pinSaveOut = ""
+  state accountOut = ""
+  state pinBoardSearch = ""
+  state pinBoardPage = 0
+  state feedMessage = ""
+  source browserLogin = file("~/.local/state/pinterest-wallswap/browser-login.json") json
+  source accountInfo = file("~/.local/state/pinterest-wallswap/account.json") json
+  source feedState = file("~/.local/state/pinterest-wallswap/feed.json") json
+  source ownBoardsState = file("~/.local/state/pinterest-wallswap/my-boards.json") json
+  source pinSaves = file("~/.local/state/pinterest-wallswap/saved-pins.json") json
+  let ownBoards = (ownBoardsState.boards ?? []).filter(b => contains(lower(b.name), lower(pinBoardSearch)))
+  let staleTint = #ed8b23
+  on feedOut { feedBusy = false }
+  on pinSaveOut {
+    pinSaveBusy = false
+    let result = parseJson(value)
+    if result.ok == true {
+      savePin = null
+      feedMessage = "Сохранено на доску «${result.board}»"
+      boardsRefresh = boardsRefresh + 1
+    }
+  }
+  on accountInfo first {
+    if value.connected == true && (old == null || old.connected != true || old.username != value.username) {
+      accountOut = run("python ~/.config/omalauncher/widgets/pinterest-wallswap/account.py boards")
+      if feedView {
+        feedBusy = true
+        feedOut = run("python ~/.config/omalauncher/widgets/pinterest-wallswap/account.py refresh")
+      }
+    }
+  }
+  state profiles = "xonars" persist
+  state profileDraft = "xonars"
+  state settings = false
+  state saveDirectory = "~/Pictures" persist
+  state saveDraft = "~/Pictures"
+  state pendingDirectory = ""
+  state pendingProfiles = ""
+  state settingsResult = ""
+  state settingsBusy = false
+  state downloadsView = false
+  state downloadsPage = 0
+  state downloadOut = ""
+  on settingsResult {
+    settingsBusy = false
+    let checked = parseJson(value)
+    if checked.ok == true {
+      saveDirectory = pendingDirectory
+      profiles = pendingProfiles
+      selectedBoard = null
+      boardSearch = ""
+      boardPage = 0
+      settings = false
+    }
+  }
+  state selectedBoard = null
+  let boards = selectedBoard == null ? [] : [selectedBoard.id]
+  state boardPage = 0
+  state boardSearch = ""
+  state boardsRefresh = 0
+  state fullscreen = false
+  state out = ""
+  state busy = false
+  let effectiveProfiles = accountInfo.connected == true ? "${profiles},${accountInfo.username}" : profiles
+  let profileCfg = toJson({profiles: effectiveProfiles})
+  let cfg = toJson({boards: boards, profiles: effectiveProfiles})
+  source catalog = cmd("python ~/.config/omalauncher/widgets/pinterest-wallswap/pinterest.py boards ${sh(profileCfg)}; : ${int(boardsRefresh)}") every 6h json timeout 120s
+  on catalog { boardPage = 0 }
+  let accountBoards = accountInfo.connected == true ? ownBoardsState.boards ?? [] : []
+  let accountBoardIds = accountBoards.map(b => b.id)
+  let availableBoards = flatten([accountBoards, (catalog.boards ?? []).filter(b => accountBoardIds.indexOf(b.id) < 0)])
+  let visibleBoards = availableBoards.filter(b => contains(lower("${b.profile} ${b.name}"), lower(boardSearch)))
+  source maintenance = cmd(selectedBoard == null ? "true" : "python ~/.config/omalauncher/widgets/pinterest-wallswap/viewer.py info ${sh(cfg)}") every 5s json
+  source store = file("~/.cache/pinterest-wallswap/viewer.json") json
+  let matchingBoard = selectedBoard != null && store.cfg.boards[0] == selectedBoard.id
+  let st = matchingBoard ? store.history[store.index] ?? null : null
+  source downloadMaintenance = cmd("python ~/.config/omalauncher/widgets/pinterest-wallswap/downloads.py status") every 3s json
+  source downloadState = file("~/.local/state/pinterest-wallswap/downloads.json") json
+  let downloadJobs = downloadState.jobs ?? {}
+  let downloadList = values(downloadJobs).sortBy(j => -j.created)
+  let activeDownloads = downloadList.filter(j => j.status == "queued" || j.status == "downloading")
+  let selectedDownload = selectedBoard == null ? null : downloadJobs[selectedBoard.id]
+  let localMode = matchingBoard && store.mode == "local"
+  let hasPrevious = matchingBoard && (localMode ? store.localIndex > 0 : store.index > 0)
+  let hasNext = !localMode || store.localIndex + 1 < store.localCount
+  let validProfiles = match(trim(profileDraft), "^[A-Za-z0-9_]{1,64}( *, *[A-Za-z0-9_]{1,64})*$") != null
+  on out { busy = false }
+  let hasImg = st != null && st.image != null
+  let err = matchingBoard ? store.error ?? "" : ""
+  let loading = busy || (matchingBoard && store.pending == true)
+  let statusText = loading ? "Готовлю изображение…" : err != "" ? err : localMode ? "Сохранённая копия · ${store.localIndex + 1} / ${store.localCount}" : "В запасе: ${len(store.queue ?? [])} из 4"
+
+  // Arrows drawn as lines, so they sit in the middle of their circles whatever the font: a right
+  // arrow turned by `turn` degrees.
+  component Glyph(turn = 0, base = false, tint = accent, s = 18) {
+    Canvas {
+      width: s
+      height: s
+      translate(0, base ? -s * 0.1 : 0) {
+        rotate(turn, s / 2, s / 2) {
+          line(s * 0.16, s / 2, s * 0.82, s / 2, stroke: tint, width: s * 0.11, cap: round)
+          path([[s * 0.54, s * 0.22], [s * 0.82, s / 2], [s * 0.54, s * 0.78]], stroke: tint, width: s * 0.11, cap: round)
+        }
+      }
+      if base {
+        line(s * 0.2, s * 0.9, s * 0.8, s * 0.9, stroke: tint, width: s * 0.11, cap: round)
+      }
+    }
+  }
+
+  component Action(label, turn = 0, base = false, active = true) {
+    Column {
+      gap: 4
+      align: center
+      opacity: active ? 1 : 0.35
+      Box { width: 44; height: 44; radius: 22; align: center; background: alpha(accent, 0.16)
+        Glyph { turn: turn; base: base; s: 20 }
+      }
+      Text { text: label; style: small; color: muted; align: center; maxLines: 1 }
+    }
+  }
+
+  if settings {
+    Column {
+      scroll: true
+      padding: [12, 8]
+      gap: 14
+      Text { text: "Аккаунт Pinterest"; style: title }
+      Text { text: accountInfo.connected == true ? "Выполнен вход: ${accountInfo.username}" : "Войдите для персональной ленты и сохранения пинов"; color: muted; maxLines: 3 }
+      Row {
+        wrap: true
+        gap: 10
+        Button { text: "Войти по email"; onTap: app("pinterest-login") }
+        Button { text: "Задать пароль Pinterest"; onTap: app("pinterest-login --reset-password") }
+        if accountInfo.connected == true {
+          Button { text: "Выйти"; onTap: accountOut = run("python ~/.config/omalauncher/widgets/pinterest-wallswap/account.py logout") }
+        }
+      }
+      if browserLogin.message != null && browserLogin.phase != "connected" {
+        Text { text: browserLogin.message; color: browserLogin.phase == "error" ? red : muted; maxLines: 4 }
+      }
+      Text { text: "Google отклоняет вход из этого окна. Используйте email и пароль Pinterest. Если пароля Pinterest нет, нажмите «Задать пароль Pinterest». Пароль Google здесь не нужен."; style: small; color: muted; maxLines: 4 }
+      if accountInfo.error != null && accountInfo.error != "" {
+        Text { text: accountInfo.error; style: small; color: red; maxLines: 3 }
+      }
+      Text { text: "Отслеживаемые профили"; style: title }
+      Text { text: "Имена Pinterest через запятую, без ссылок. Например: xonars, another_profile"; color: muted; maxLines: 3 }
+      Input { text: profileDraft; placeholder: "xonars"; onChange: profileDraft = value }
+      if !validProfiles {
+        Text { text: "Введите имена латиницей через запятую: буквы, цифры и подчёркивания."; color: red; style: small }
+      }
+      Text { text: "Директория сохранения"; style: title }
+      Input { text: saveDraft; placeholder: "~/Pictures"; onChange: saveDraft = value }
+      Text { text: "Внутри будут папки Pinterest / профиль / доска. Уже сохранённые доски останутся доступны по прежнему пути."; style: small; color: muted }
+      if parseJson(settingsResult).error != null {
+        Text { text: parseJson(settingsResult).error; color: red; maxLines: 3 }
+      }
+      Row {
+        gap: 10
+        Button { text: settingsBusy ? "Проверяю…" : "Сохранить"; onTap: { if validProfiles && !settingsBusy { pendingDirectory = trim(saveDraft); pendingProfiles = trim(profileDraft); settingsBusy = true; settingsResult = run("python ~/.config/omalauncher/widgets/pinterest-wallswap/downloads.py validate ${sh(toJson({directory: pendingDirectory}))}") } } }
+        Button { text: "Отмена"; onTap: settings = false }
+      }
+      Text { text: "Сейчас: ${profiles}"; style: small; color: muted; maxLines: 3 }
+      Text { text: "Фоновая загрузка"; style: title }
+      Text { text: "Пока приложение открыто, заранее загружаются 4 изображения. «Далее» показывает готовый файл, а запас автоматически пополняется. При открытии другой доски запас загружается заново только из неё."; color: muted }
+    }
+  } else if savePin != null {
+    Column {
+      padding: [12, 8]
+      scroll: true
+      gap: 12
+      Text { text: "На какую доску сохранить?"; style: title }
+      Text { text: "Аккаунт: ${accountInfo.username ?? "…"}"; color: muted; style: small }
+      if parseJson(pinSaveOut).ok == false {
+        Text { text: parseJson(pinSaveOut).error; color: red; maxLines: 4 }
+      }
+      if ownBoardsState.error != null && ownBoardsState.error != "" {
+        Text { text: ownBoardsState.error; color: red; maxLines: 4 }
+      }
+      Row {
+        gap: 10
+        Button { text: "Обновить список"; onTap: accountOut = run("python ~/.config/omalauncher/widgets/pinterest-wallswap/account.py boards") }
+        Button { text: "Отмена"; onTap: { if !pinSaveBusy { savePin = null } } }
+      }
+      Input { text: pinBoardSearch; placeholder: "Найти доску"; onChange: { pinBoardSearch = value; pinBoardPage = 0 } }
+      if pinSaveBusy {
+        Text { text: "Сохраняю пин…"; color: accent }
+      }
+      if len(ownBoards) > 25 {
+        Row {
+          gap: 10
+          Button { text: "←"; onTap: pinBoardPage = max(0, pinBoardPage - 1) }
+          Text { text: "${pinBoardPage + 1} / ${ceil(len(ownBoards) / 25)}"; weight: 1; align: center }
+          Button { text: "→"; onTap: pinBoardPage = min(ceil(len(ownBoards) / 25) - 1, pinBoardPage + 1) }
+        }
+      }
+      for b in ownBoards.drop(pinBoardPage * 25).take(25) key b.id {
+        let alreadySaved = pinSaves[savePin.id][b.id] != null
+        Row {
+          padding: 12
+          gap: 10
+          align: center
+          radius: 12
+          background: alpha(alreadySaved ? green : surface, 0.15)
+          opacity: pinSaveBusy ? 0.5 : 1
+          onTap: { if !pinSaveBusy && !alreadySaved { haptic(); pinSaveBusy = true; pinSaveOut = run("python ~/.config/omalauncher/widgets/pinterest-wallswap/account.py save ${sh(toJson({pinId: savePin.id, boardId: b.id}))}") } }
+          Text { text: b.name; weight: 1; maxLines: 2 }
+          Text { text: alreadySaved ? "✓ Уже сохранён" : "Сохранить ›"; style: small; color: alreadySaved ? green : accent }
+        }
+      }
+      if len(ownBoards) == 0 {
+        Text { text: "Доски не найдены. Обновите список или проверьте вход в Pinterest."; color: muted; maxLines: 3 }
+      }
+    }
+  } else if feedView {
+    Column {
+      padding: [12, 8]
+      scroll: true
+      gap: 12
+      if accountInfo.connected != true {
+        Text { text: "Войдите в Pinterest"; style: title }
+        Text { text: "Используйте email и пароль Pinterest. Google отклоняет вход из этого окна. Если пароля Pinterest нет, его можно задать через свою почту."; color: muted }
+        Row {
+          wrap: true
+          gap: 10
+            Button { text: "Войти по email"; onTap: app("pinterest-login") }
+        Button { text: "Задать пароль Pinterest"; onTap: app("pinterest-login --reset-password") }
+        }
+        if browserLogin.message != null && browserLogin.phase != "connected" {
+          Text { text: browserLogin.message; color: browserLogin.phase == "error" ? red : muted; maxLines: 4 }
+        }
+        if accountInfo.error != null && accountInfo.error != "" {
+          Text { text: accountInfo.error; color: red; maxLines: 4 }
+        }
+      } else {
+        Row {
+          wrap: true
+          gap: 10
+          if feedPin != null {
+            Button { text: "‹ Лента"; onTap: feedPin = null }
+          }
+          Button { text: feedBusy ? "Загрузка…" : "Обновить ленту"; onTap: { if !feedBusy { feedPin = null; feedBusy = true; feedOut = run("python ~/.config/omalauncher/widgets/pinterest-wallswap/account.py refresh") } } }
+          Text { text: accountInfo.username; style: small; color: muted }
+        }
+        if feedMessage != "" {
+          Text { text: feedMessage; color: green; maxLines: 3 }
+        }
+        if feedState.error != null && feedState.error != "" {
+          Text { text: feedState.error; color: red; maxLines: 4 }
+          Button { text: "Войти по email"; onTap: app("pinterest-login") }
+        Button { text: "Задать пароль Pinterest"; onTap: app("pinterest-login --reset-password") }
+        }
+        if feedPin != null {
+          Image { src: feedPin.image; fit: contain; fill: width; height: min(520, (screenHeight ?? 800) * 0.65); label: feedPin.title }
+          Text { text: feedPin.title; maxLines: 3 }
+          Button { text: "Сохранить на доску"; onTap: { savePin = feedPin; pinBoardSearch = ""; pinBoardPage = 0; pinSaveOut = ""; accountOut = run("python ~/.config/omalauncher/widgets/pinterest-wallswap/account.py boards") } }
+          Button { text: "Открыть пин"; onTap: url(feedPin.page) }
+        } else {
+          Grid {
+            columns: 2
+            gap: 10
+            fill: width
+            for p in (feedState.items ?? []).take(20) key p.id {
+              Column {
+                gap: 6
+                padding: 6
+                radius: 12
+                background: alpha(surface, 0.6)
+                Box {
+                  height: 180
+                  fill: width
+                  clip: true
+                  radius: 10
+                  onTap: feedPin = p
+                  Image { src: p.image; fit: cover; fill: true; label: p.title }
+                }
+                Text { text: p.title; fontSize: 11; maxLines: 2; minLines: 2 }
+                Button { text: "На доску"; onTap: { savePin = p; pinBoardSearch = ""; pinBoardPage = 0; pinSaveOut = ""; accountOut = run("python ~/.config/omalauncher/widgets/pinterest-wallswap/account.py boards") } }
+              }
+            }
+          }
+          if feedState.bookmark != null && feedState.bookmark != "-end-" {
+            Button { text: feedBusy ? "Загрузка…" : "Следующие изображения"; onTap: { if !feedBusy { feedBusy = true; feedOut = run("python ~/.config/omalauncher/widgets/pinterest-wallswap/account.py next") } } }
+          }
+          if len(feedState.items ?? []) == 0 {
+            Text { text: feedBusy ? "Загружаю вашу ленту…" : "Нажмите «Обновить ленту»"; color: muted }
+          }
+        }
+      }
+    }
+  } else if downloadsView {
+    Column {
+      scroll: true
+      padding: [12, 8]
+      gap: 14
+      Text { text: "Активных: ${len(activeDownloads)} · Всего: ${len(downloadList)}"; style: small; color: muted }
+      Text { text: "Папка для новых загрузок: ${saveDirectory}"; style: small; color: muted; maxLines: 2 }
+      if downloadState.error != null && downloadState.error != "" {
+        Text { text: downloadState.error; color: red; maxLines: 4 }
+      }
+      if downloadMaintenance.available == false {
+        Text { text: "gallery-dl не установлен"; color: red }
+      }
+      if len(downloadList) == 0 {
+        Text { text: "Загрузок пока нет. Откройте доску и нажмите «Загрузить всё»."; color: muted; maxLines: 3 }
+      }
+      if len(downloadList) > 20 {
+        Row {
+          gap: 10
+          Button { text: "←"; onTap: downloadsPage = max(0, downloadsPage - 1) }
+          Text { text: "${downloadsPage + 1} / ${ceil(len(downloadList) / 20)}"; weight: 1; align: center }
+          Button { text: "→"; onTap: downloadsPage = min(ceil(len(downloadList) / 20) - 1, downloadsPage + 1) }
+        }
+      }
+      for j in downloadList.drop(downloadsPage * 20).take(20) key j.board.id {
+        let running = j.status == "queued" || j.status == "downloading"
+        let outdated = j.dirty == true && j.saved > 0
+        let done = j.status == "completed" && !outdated
+        Column {
+          padding: 12
+          gap: 8
+          radius: 12
+          background: alpha(outdated ? staleTint : done ? green : running ? accent : surface, 0.12)
+          border: 1
+          borderColor: outdated ? staleTint : done ? green : running ? accent : alpha(muted, 0.3)
+          Text { text: j.board.name; fontWeight: 600; maxLines: 2 }
+          Text { text: outdated && !running ? "Нужно обновить · сохранено ${j.saved}" : done ? "✓ Скачано · ${j.saved} изображений" : j.status == "queued" ? "В очереди · сохранено ${j.saved}" : j.status == "error" ? "Ошибка · сохранено ${j.saved}" : "Загружается · ${j.saved} / ≈ ${j.expected}"; color: outdated ? staleTint : done ? green : j.status == "error" ? red : accent; maxLines: 2 }
+          if running {
+            Progress { value: j.status == "queued" ? 0 : min(99, j.saved / max(1, j.expected) * 100); height: 5 }
+          }
+          Text { text: j.directory; style: small; color: muted; maxLines: 3 }
+          if j.error != "" {
+            Text { text: j.error; style: small; color: red; maxLines: 5 }
+          }
+          Row {
+            gap: 10
+            if j.saved > 0 {
+              Button { text: "Открыть"; onTap: { selectedBoard = j.board; downloadsView = false; fullscreen = false; busy = true; out = run("python ~/.config/omalauncher/widgets/pinterest-wallswap/viewer.py open ${sh(toJson({boards: [j.board.id], profiles: effectiveProfiles}))}; date +%s%N") } }
+            }
+            if !running {
+              Button { text: done || outdated ? "Обновить" : "Повторить"; onTap: downloadOut = run("python ~/.config/omalauncher/widgets/pinterest-wallswap/downloads.py start ${sh(toJson({board: j.board, saveDirectory: saveDirectory}))}") }
+            }
+          }
+        }
+      }
+    }
+  } else if fullscreen && hasImg {
+    Box {
+      fill: true
+      background: #000000
+      Image { src: st.image; fit: contain; fill: true; label: st.title }
+      Column {
+        fill: true
+        padding: [12, 0, 12, 16]
+        Spacer { weight: 1 }
+        Column {
+          padding: 10
+          gap: 8
+          radius: 14
+          background: #000000bb
+          Text { text: loading || err != "" ? statusText : st.title; color: err != "" && !busy ? red : #ffffff; fontSize: 12; maxLines: 2; align: center }
+          Row {
+            gap: 12
+            Box {
+              weight: 1
+              height: 48
+              radius: 24
+              background: #ffffff22
+              opacity: !busy && hasPrevious ? 1 : 0.35
+              onTap: { if !busy && hasPrevious { haptic(); busy = true; out = run("python ~/.config/omalauncher/widgets/pinterest-wallswap/viewer.py prev ${sh(cfg)} 2>&1 | tail -1; date +%s%N") } }
+              Row { fill: true; align: center; justify: center; gap: 8
+                Glyph { turn: 180; tint: #ffffff }
+                Text { text: "Назад"; color: #ffffff; fontSize: 13 }
+              }
+            }
+            Box {
+              weight: 1
+              height: 48
+              radius: 24
+              background: alpha(accent, 0.8)
+              opacity: loading || !hasNext ? 0.35 : 1
+              onTap: { if !loading && hasNext { haptic(); busy = true; out = run("python ~/.config/omalauncher/widgets/pinterest-wallswap/viewer.py next ${sh(cfg)} 2>&1 | tail -1; date +%s%N") } }
+              Row { fill: true; align: center; justify: center; gap: 8
+                Text { text: "Далее"; color: #ffffff; fontSize: 13 }
+                Glyph { tint: #ffffff }
+              }
+            }
+          }
+        }
+      }
+      Box {
+        width: 48
+        height: 48
+        offset: [12, screenTop + 12]
+        radius: 24
+        background: #00000099
+        align: center
+        onTap: fullscreen = false
+        Text { text: "×"; fontSize: 28; color: #ffffff; align: center }
+      }
+    }
+  } else if selectedBoard != null {
+    Column {
+      padding: [12, 0]
+      scroll: true
+      gap: 14
+      Row {
+        gap: 10
+        Button { text: "‹ Доски"; onTap: { fullscreen = false; selectedBoard = null } }
+        Text { text: "${selectedBoard.profile} · ${selectedBoard.count} изображений"; weight: 1; style: small; color: muted; maxLines: 1 }
+      }
+      Row {
+        gap: 10
+        Button { text: selectedDownload.status == "completed" ? "Обновить копию" : selectedDownload.status == "downloading" || selectedDownload.status == "queued" ? "В загрузках…" : "Загрузить всё"; onTap: { if selectedDownload.status != "downloading" && selectedDownload.status != "queued" { downloadOut = run("python ~/.config/omalauncher/widgets/pinterest-wallswap/downloads.py start ${sh(toJson({board: selectedBoard, saveDirectory: saveDirectory}))}") } downloadsView = true } }
+        Button { text: "Загрузки"; onTap: downloadsView = true }
+      }
+      if selectedDownload != null {
+        Text { text: selectedDownload.dirty == true ? "Нужно обновить копию · сохранено ${selectedDownload.saved}" : selectedDownload.status == "completed" ? "✓ Сохранено ${selectedDownload.saved} изображений" : selectedDownload.status == "error" ? "Загрузка завершилась с ошибкой · сохранено ${selectedDownload.saved}" : "↓ Сохранено ${selectedDownload.saved} / ≈ ${selectedDownload.expected}"; style: small; color: selectedDownload.dirty == true ? staleTint : selectedDownload.status == "completed" ? green : selectedDownload.status == "error" ? red : accent; maxLines: 2 }
+      }
+      Box {
+        fill: width
+        height: min(420, (screenHeight ?? 800) * 0.5)
+        align: center
+        if hasImg {
+          Box { radius: 10 * corners; clip: true; onTap: fullscreen = true
+            Image { src: st.image; fit: contain; height: min(420, (screenHeight ?? 800) * 0.5); opacity: 1; animate opacity: tween(200ms, "ease") }
+          }
+        } else {
+          Text { text: busy ? "Загрузка…" : "Загружаю изображения доски…"; color: muted; align: center }
+        }
+      }
+      if hasImg {
+        Column {
+          gap: 2
+          Text { text: st.title; style: title; maxLines: 3 }
+          Text { text: st.credit; color: muted; maxLines: 2 }
+          Text { text: "${st.size}"; style: small; color: muted }
+        }
+      }
+      Text { text: statusText; color: err != "" && !busy ? red : muted; visible: statusText != "" }
+      Row {
+        justify: spaceEvenly
+        Box { weight: 1; onTap: { if !loading && hasNext { haptic(); busy = true; out = run("python ~/.config/omalauncher/widgets/pinterest-wallswap/viewer.py next ${sh(cfg)} 2>&1 | tail -1; date +%s%N") } }
+          Action { label: "Далее"; active: !loading && hasNext }
+        }
+        Box { weight: 1; onTap: { if !busy && hasPrevious { haptic(); busy = true; out = run("python ~/.config/omalauncher/widgets/pinterest-wallswap/viewer.py prev ${sh(cfg)} 2>&1 | tail -1; date +%s%N") } }
+          Action { label: "Назад"; turn: 180; active: !busy && st != null && hasPrevious }
+        }
+        Box { weight: 1; onTap: { if hasImg && st.page != "" { url(st.page) } }
+          Action { label: "Пин"; turn: -45; active: hasImg && st.page != "" }
+        }
+        Box { weight: 1; onTap: { if hasImg { fullscreen = true } }
+          Action { label: "На весь экран"; turn: -45; active: hasImg }
+        }
+      }
+    }
+  } else {
+    Column {
+      padding: [12, 0]
+      scroll: true
+      gap: 14
+      Row {
+        gap: 10
+        Text { text: profiles; weight: 1; style: small; color: muted; maxLines: 1 }
+        Button { text: "Загрузки (${len(activeDownloads)})"; onTap: downloadsView = true }
+        Button { text: "Настройки"; onTap: { profileDraft = profiles; saveDraft = saveDirectory; settingsResult = ""; settings = true } }
+      }
+      Column {
+        gap: 8
+        Text { text: "ДОСКИ"; fontSize: 10; letterSpacing: 2; color: muted }
+        Text { text: "${len(availableBoards)} публичных досок"; style: small; color: muted }
+        Row {
+          wrap: true
+          gap: 10
+          Button { text: "Обновить доски"; onTap: { out = run("python ~/.config/omalauncher/widgets/pinterest-wallswap/pinterest.py boards ${sh(profileCfg)} --refresh >/dev/null; date +%s%N"); boardsRefresh = boardsRefresh + 1 } }
+          Button { text: "Загрузить все доски"; onTap: { if len(availableBoards) > 0 { downloadOut = run("python ~/.config/omalauncher/widgets/pinterest-wallswap/downloads.py start-all ${sh(toJson({boards: availableBoards, saveDirectory: saveDirectory}))}"); downloadsView = true } } }
+          Button { text: "Лента"; onTap: { feedView = true; feedPin = null; feedMessage = ""; if accountInfo.connected == true && !feedBusy { feedBusy = true; feedOut = run("python ~/.config/omalauncher/widgets/pinterest-wallswap/account.py refresh") } } }
+        }
+        if catalog.error != null && catalog.error != "" {
+          Text { text: catalog.error; style: small; color: red; maxLines: 3 }
+        }
+        if catalog.complete == false {
+          Text { text: "Список может быть неполным. Попробуйте обновить."; style: small; color: muted }
+        }
+        Input { text: boardSearch; placeholder: "Найти доску"; onChange: { boardSearch = value; boardPage = 0 } }
+        if len(visibleBoards) > 40 {
+          Row {
+            gap: 8
+            Button { text: "←"; onTap: boardPage = max(0, boardPage - 1) }
+            Text { text: "${boardPage + 1} / ${ceil(len(visibleBoards) / 40)}"; weight: 1; align: center; style: small }
+            Button { text: "→"; onTap: boardPage = min(ceil(len(visibleBoards) / 40) - 1, boardPage + 1) }
+          }
+        }
+        Grid {
+          columns: 2
+          gap: 8
+          fill: width
+          for b in visibleBoards.drop(boardPage * 40).take(40) key b.id {
+            let savedBoard = downloadJobs[b.id]
+            let outdatedBoard = savedBoard.dirty == true && savedBoard.saved > 0
+            let completedBoard = savedBoard.status == "completed" && !outdatedBoard
+            let savingBoard = savedBoard.status == "downloading" || savedBoard.status == "queued"
+            Column {
+              fill: width
+              padding: 10
+              gap: 5
+              radius: 12
+              background: outdatedBoard ? alpha(staleTint, 0.18) : completedBoard ? alpha(green, 0.12) : savingBoard ? alpha(accent, 0.12) : alpha(surface, 0.8)
+              border: 1
+              borderColor: outdatedBoard ? staleTint : completedBoard ? green : savingBoard ? accent : alpha(muted, 0.2)
+              onTap: { haptic(); selectedBoard = b; fullscreen = false; busy = true; out = run("python ~/.config/omalauncher/widgets/pinterest-wallswap/viewer.py open ${sh(toJson({boards: [b.id], profiles: effectiveProfiles}))}; date +%s%N") }
+              Text { text: outdatedBoard ? "Нужно докачать · ${savedBoard.saved}" : completedBoard ? "✓ Скачано · ${savedBoard.saved}" : savingBoard ? "↓ Загрузка · ${savedBoard.saved}" : savedBoard.saved > 0 ? "Частично · ${savedBoard.saved}" : savedBoard.status == "error" ? "Ошибка загрузки" : "Не скачано"; fontSize: 9; color: outdatedBoard ? staleTint : completedBoard ? green : savedBoard.status == "error" ? red : savingBoard ? accent : muted; maxLines: 1 }
+              Text { text: b.name; fontSize: 12; fontWeight: 600; maxLines: 2; minLines: 2 }
+              Row {
+                gap: 6
+                Text { text: "${b.profile} · ${b.count}"; weight: 1; fontSize: 10; color: muted; maxLines: 1 }
+                Text { text: "›"; color: accent; fontSize: 18 }
+              }
+            }
+          }
+        }
+
+      }
+      if catalog == null {
+        Text { text: "Загружаю доски…"; color: muted }
+      } else if len(visibleBoards) == 0 {
+        Text { text: boardSearch != "" ? "Доски не найдены" : "Нет доступных досок"; color: muted }
+      }
+    }
+  }
+}

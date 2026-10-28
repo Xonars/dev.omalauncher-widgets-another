@@ -1,0 +1,579 @@
+face "manga" {
+  // A page of a manga. A halftone city under the hour's sky and the weather, the newest notification as a
+  // caption, a close-up that sleeps at night, fastfetch and Hacker News' front page.
+  // The page is the theme's paper and ink: its background and foreground, with the accent for red.
+
+  meta {
+    owl: 14
+    description: "A manga page: a halftone city that follows the hour and the weather, your newest notification, a close-up, fastfetch and Hacker News"
+    version: "1.0"
+    license: "MIT"
+    category: "fun"
+  }
+
+  background: background
+  padding: 0
+  // The city runs on under the status bar, and under a camera cutout at the side in landscape; screenTop, screenLeft
+  // and screenRight are how much of the page those cover.
+  edge: true
+
+  source now = clock every 1m
+  source n = android.notifications
+  source dev = android.device
+  source sys = android.system every 1m
+  source bat = android.battery
+  source hn = http("https://hn.algolia.com/api/v1/search?tags=front_page&hitsPerPage=15") every 15m timeout 15s json
+  source wx = http("https://wttr.in/?format=j1") every 30m timeout 10s json
+  // Arch, once Linux is installed; base tools only, so the page still works without it.
+  source lx = cmd("""
+    . /etc/os-release
+    printf '%s\t%s\t%s\n' "$PRETTY_NAME" "$(pacman -Qq | wc -l)" "$(basename "$SHELL")"
+  """) every 1h optional
+
+  let heavy = "https://raw.githubusercontent.com/google/fonts/main/ofl/archivoblack/ArchivoBlack-Regular.ttf"
+
+  let h = num(fmtTime(now, "H")) + num(fmtTime(now, "m")) / 60
+  let night = clamp(max(h - 19.5, 6.5 - h) / 1.0 + 0.5, 0, 1)
+  let cur = wx.current_condition[0]
+  let code = cur.weatherCode ?? "113"
+  let cloud = code == "113" ? 0.15 : code == "116" ? 0.5 : 0.85
+  let rain = contains(["176", "263", "266", "281", "284", "293", "296", "299", "302", "305", "308", "311", "314", "353", "356", "359", "386", "389"], code) ? 1 : 0
+  let stories = (hn.hits ?? []).filter(x => x.title != null).take(12)
+
+  let host = lower(replace(trim(dev.model ?? "phone"), " ", "-"))
+  let user = linux ? "root" : "user"
+  let lxs = lx == null || lx == "" ? null : split(lx, "\t")
+  let rows = [
+    ["os", !linux ? (dev == null ? null : "Android ${dev.android}") : trim(lxs[0] ?? "")],
+    ["host", dev == null ? null : "${dev.maker} ${dev.model}"],
+    ["kernel", sys.kernel == null ? null : first(split(sys.kernel, "-"))],
+    ["uptime", sys.uptime == null ? null : fmtDuration(sys.uptime)],
+    ["pkgs", !linux ? (sys.apps == null ? null : "${sys.apps} apps") : "${trim(lxs[1] ?? "")} (pacman)"],
+    ["shell", !linux ? "none" : trim(lxs[2] ?? "")],
+    ["theme", sys.theme == null ? null : lower(sys.theme)],
+    ["cpu", sys.cpu == null ? null : (sys.cpu.soc == "" || sys.cpu.soc == null ? sys.cpu.hardware : sys.cpu.soc)],
+    ["android", dev == null ? null : "${dev.android} (sdk ${dev.sdk})"],
+    ["wm", sys.launcher == null ? null : "omalauncher ${sys.launcher}"]
+  ]
+  let memPct = sys.memory == null || !sys.memory.total ? 0 : sys.memory.used / sys.memory.total * 100
+  let diskPct = sys.storage == null || !sys.storage.total ? 0 : sys.storage.used / sys.storage.total * 100
+  let gauges = [
+    ["mem", memPct, "${round(memPct)}%"],
+    ["disk", diskPct, sys.storage == null ? "…" : "${fmtBytes(sys.storage.free)} free"],
+    ["bat", bat.level ?? 0, "${bat.level ?? "…"}%"]
+  ]
+  let note = n.available && n.count > 0 ? n.items[0] : null
+
+  // The page: a full-bleed panel up top, then two rows of framed panels. The gutter between the rows runs
+  // uphill, S dp over the page's width, so each panel's insets come from where it sits across the page.
+  let W = tileWidth ?? 412
+  let wide = W > (tileHeight ?? 900)
+  let m = 12
+  let g = 8
+  let S = 14
+  let artW = wide ? floor(W / 2) : W
+  let CW = (wide ? W - artW : W) - 2 * m
+  let speechW = floor(CW * 0.53)
+  let eyeW = CW - speechW - g
+  let fetchW = floor(CW * 0.43)
+  let pixW = CW - fetchW - g
+  // The fastfetch panel's height, worked out as the layout splits the page, and what fits in it: its header and padding,
+  // lines of 18 dp and gauges of 25 (as drawn, gaps included). The lines take what's left after the mem and disk gauges,
+  // and bat shows only when a whole gauge still fits under them: a landscape phone shows fewer of both.
+  let fetchH = ((wide ? (tileHeight ?? 900) - screenTop - m : (tileHeight ?? 900) * 0.6 - 10) - screenInset - 8) * 0.62
+  let fetchLines = clamp(floor((fetchH - 66 - 2 * 25) / 18), 2, len(rows))
+  let fetchGauges = clamp(floor((fetchH - 66 - fetchLines * 18) / 25), 2, 3)
+  let ink = foreground
+  let paper = background
+
+  // Shared by the shaders: halftone dots on a 45° screen, noise, and strokes, all in dp.
+  let lib = """
+    uniform half4 ink;
+    uniform half4 paper;
+    uniform float dpw;
+    float h1(float n) { return fract(sin(n * 12.9898) * 43758.5453); }
+    float h2(float2 p) { return fract(sin(dot(p, float2(127.1, 311.7))) * 43758.5453); }
+    float vn(float2 p) {
+      float2 i = floor(p);
+      float2 f = fract(p);
+      float2 u = f * f * (3.0 - 2.0 * f);
+      return mix(mix(h2(i), h2(i + float2(1.0, 0.0)), u.x), mix(h2(i + float2(0.0, 1.0)), h2(i + float2(1.0, 1.0)), u.x), u.y);
+    }
+    float fbm(float2 p) {
+      float v = 0.0;
+      float a = 0.5;
+      for (int i = 0; i < 5; i++) { v += a * vn(p); p = p * 2.03 + float2(17.0, 9.0); a *= 0.5; }
+      return v;
+    }
+    float dots(float2 q, float tone, float cell, float aa) {
+      if (tone < 0.03) { return 0.0; }
+      float2 r = float2(q.x + q.y, q.y - q.x) * 0.70710678 / cell;
+      float d = length(fract(r) - 0.5);
+      float rad = sqrt(clamp(tone, 0.0, 1.0)) * 0.72;
+      float w = aa / cell;
+      return 1.0 - smoothstep(rad - w, rad + w, d);
+    }
+    float seg(float2 p, float2 a, float2 b) {
+      float2 pa = p - a;
+      float2 ba = b - a;
+      float t = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+      return length(pa - ba * t);
+    }
+    float segT(float2 p, float2 a, float2 b) {
+      float2 ba = b - a;
+      return clamp(dot(p - a, ba) / dot(ba, ba), 0.0, 1.0);
+    }
+    float cover(float d, float w, float aa) { return 1.0 - smoothstep(w - aa, w + aa, d); }
+    half4 inked(float k) { return mix(paper, ink, clamp(k, 0.0, 1.0)); }
+  """
+
+  let city = """
+    uniform float night;
+    uniform float cloud;
+    uniform float seed;
+    uniform float rain;
+    half4 main(float2 p) {
+      float s = size.x / dpw;
+      float2 q = p / s;
+      float W = dpw;
+      float H = size.y / s;
+      float aa = 0.7 / s;
+      float y = q.y / H;
+      float cell = 3.4;
+      float L = 0.0;
+      float P = 0.0;
+      // The sky: darker overhead, lighter toward the roofs; nearly black at night.
+      float tone = mix(mix(0.6, 0.1, clamp(y / 0.7, 0.0, 1.0)), mix(0.97, 0.7, y), night);
+      // Clouds: lit tops, screened undersides.
+      float2 cq = float2(q.x * 0.010 + seed * 7.13, q.y * 0.026 + seed * 3.7);
+      float c = fbm(cq);
+      float above = fbm(cq - float2(0.0, 0.10));
+      float th = mix(0.68, 0.44, cloud) + y * 0.16;
+      float inC = smoothstep(th, th + 0.035, c) * smoothstep(0.95, 0.5, y);
+      float shade = clamp((above - c) * 8.0 + 0.3, 0.0, 1.0);
+      float ct = mix(0.03 + shade * 0.45, 0.5 + shade * 0.35, night);
+      tone = mix(tone, ct, inC);
+      if (night > 0.5 && inC < 0.3 && y < 0.6 && h2(floor(q / 2.6) + seed) > 0.993) { P = 1.0; }
+
+      // Far towers.
+      float bw = 22.0;
+      float fi = floor((q.x + 7.0) / bw);
+      float fx = fract((q.x + 7.0) / bw) * bw;
+      float ftop = H * (1.0 - (0.36 + 0.30 * h1(fi * 1.7 + 3.0)));
+      if (q.y > ftop && h1(fi + 11.0) > 0.12) {
+        tone = mix(0.36, 0.8, night);
+        if (fx < 4.0) { tone += 0.2; }
+        if (fract(q.y / 6.0) < 0.4 && fract(fx / 4.0) < 0.5 && fx > 5.0) {
+          tone -= 0.18;
+          if (night > 0.5 && h2(floor(float2(q.x / 4.0, q.y / 6.0))) > 0.72) { P = 1.0; }
+        }
+        L = max(L, cover(q.y - ftop, 0.6, aa));
+        L = max(L, cover(fx, 0.6, aa));
+      }
+      // Middle blocks with rows of windows.
+      float mw = 40.0;
+      float mi = floor((q.x + 23.0) / mw);
+      float mx = fract((q.x + 23.0) / mw) * mw;
+      float mtop = H * (1.0 - (0.16 + 0.28 * h1(mi * 2.3 + 5.0)));
+      if (q.y > mtop && h1(mi + 31.0) > 0.25 && mx > 3.0) {
+        P = 0.0;
+        tone = mix(0.62, 0.92, night);
+        float wx = fract((mx - 3.0) / 7.0);
+        float wy = fract((q.y - mtop) / 9.0);
+        if (wx > 0.2 && wx < 0.7 && wy > 0.3 && wy < 0.75 && q.y > mtop + 4.0) {
+          if (night < 0.5 || h2(floor(float2((q.x + 23.0 - 3.0) / 7.0, (q.y - mtop) / 9.0))) > 0.55) { P = 1.0; } else { L = 1.0; }
+        }
+        L = max(L, cover(q.y - mtop, 0.7, aa));
+        L = max(L, cover(mx - 3.0, 0.7, aa));
+      }
+      // Near: a dark block on the left with its fire escape, a pale one with ledges on the right.
+      float lx = W * 0.17;
+      float ltop = H * 0.14;
+      if (q.x < lx && q.y > ltop) {
+        P = 0.0;
+        tone = mix(0.82, 0.97, night);
+        float wx = fract(q.x / 12.0);
+        float wy = fract((q.y - ltop) / 16.0);
+        if (wx > 0.18 && wx < 0.62 && wy > 0.25 && wy < 0.75 && q.y > ltop + 8.0) {
+          if (night < 0.5 || h2(floor(float2(q.x / 12.0, (q.y - ltop) / 16.0)) + 3.0) > 0.5) { P = 1.0; } else { L = 1.0; }
+          if (night < 0.5 && wx < 0.3) { P = 0.0; L = 1.0; }
+        }
+        L = max(L, cover(abs(q.y - ltop), 0.9, aa));
+        L = max(L, cover(abs(q.y - ltop - 5.0), 0.6, aa));
+      }
+      L = max(L, cover(abs(q.x - lx), 1.1, aa) * step(ltop, q.y));
+      float ex = lx + W * 0.08;
+      if (q.x > lx && q.x < ex && q.y > H * 0.26) {
+        float fl = 30.0;
+        float j = floor((q.y - H * 0.26) / fl);
+        float y0 = H * 0.26 + j * fl;
+        L = max(L, cover(abs(q.y - y0), 0.9, aa));
+        L = max(L, cover(abs(q.y - y0 + 6.0), 0.5, aa) * step(fract(q.x / 3.0), 0.99));
+        if (fract(q.x / 3.0) < 0.2 && q.y > y0 - 6.0) { L = 1.0; }
+        float2 a = mod(j, 2.0) < 1.0 ? float2(lx + 2.0, y0) : float2(ex - 2.0, y0);
+        float2 b = mod(j, 2.0) < 1.0 ? float2(ex - 2.0, y0 + fl) : float2(lx + 2.0, y0 + fl);
+        L = max(L, cover(seg(q, a, b), 0.8, aa));
+        L = max(L, cover(seg(q, a + float2(0.0, -5.0), b + float2(0.0, -5.0)), 0.5, aa));
+      }
+      L = max(L, cover(abs(q.x - ex), 0.6, aa) * step(H * 0.26 - 6.0, q.y));
+      float rx = W * 0.8;
+      float rtop = H * 0.3;
+      if (q.x > rx && q.y > rtop) {
+        P = 0.0;
+        tone = mix(0.08, 0.7, night);
+        float ly = fract((q.y - rtop) / 14.0);
+        if (ly < 0.12) { L = 1.0; }
+        if (ly > 0.35 && ly < 0.8 && fract((q.x - rx) / 10.0) > 0.25) {
+          tone = mix(0.9, 0.95, night);
+          if (night > 0.5 && h2(floor(float2((q.x - rx) / 10.0, (q.y - rtop) / 14.0)) + 7.0) > 0.5) { P = 1.0; }
+        }
+        L = max(L, cover(abs(q.y - rtop), 1.0, aa));
+        if (q.x < rx + 6.0) { tone = mix(0.5, 0.95, night); }
+      }
+      L = max(L, cover(abs(q.x - rx), 1.2, aa) * step(rtop, q.y));
+      // Rain falls in white streaks, the way manga draws it.
+      if (rain > 0.5) {
+        float lane = (q.x + q.y * 0.3) / 13.0;
+        if (fract(lane) < 0.05 && fract(q.y / 47.0 + h1(floor(lane))) < 0.2) { P = 1.0; L = 0.0; }
+      }
+      float k = max(dots(q, tone, cell, aa), L);
+      // The panel's bottom edge: one solid rule across, over everything.
+      if (q.y > H - 5.0) { return inked(1.0); }
+      return inked(k * (1.0 - P));
+    }
+  """
+
+  let eye = """
+    uniform float open;
+    uniform float look;
+    half4 main(float2 p) {
+      float s = size.x / dpw;
+      float2 q = p / s;
+      float W = dpw;
+      float H = size.y / s;
+      float aa = 0.7 / s;
+      float2 u = q / H;
+      float A = W / H;
+      float ua = aa / H;
+      float L = 0.0;
+      float P = 0.0;
+      float2 c = float2(A * 0.47, 0.6);
+      float hw = min(A * 0.44, 0.8);
+      float t = (u.x - c.x) / hw;
+      float bell = max(1.0 - t * t, 0.0);
+      float yU = c.y - 0.2 * open * bell * (1.0 + 0.25 * t);
+      float yL = c.y + 0.09 * bell * (1.0 - 0.3 * t);
+      // Skin: a light screen, darker toward the edges.
+      float tone = 0.12 + 0.3 * smoothstep(0.3, 0.8, length((u - float2(A * 0.5, 0.55)) / float2(A, 1.0)));
+      // The brow, and the crease above the lid.
+      float tb = (u.x - c.x + 0.02) / (hw * 1.1);
+      if (abs(tb) < 1.0) {
+        float yB = c.y - 0.36 + 0.09 * tb * tb - 0.03 * tb;
+        float th = 0.035 * (1.0 - 0.7 * tb * tb);
+        L = max(L, cover(abs(u.y - yB), th, ua));
+        if (u.y < yB && u.y > yB - 0.05 && fract((u.x * 0.6 + u.y) * 60.0) < 0.3) { tone = max(tone, 0.5); }
+      }
+      if (abs(t) < 0.9) { L = max(L, cover(abs(u.y - (yU - 0.06 * bell - 0.012)), 0.005 * bell, ua)); }
+      bool inside = abs(t) < 1.0 && u.y > yU && u.y < yL;
+      if (inside) {
+        tone = 0.45 * smoothstep(0.08, 0.0, u.y - yU);
+        float2 ic = c + float2(look * 0.06, 0.02);
+        float d = length(u - ic);
+        float R = 0.15;
+        if (d < R) {
+          float a = atan(u.y - ic.y, u.x - ic.x);
+          float stri = 0.5 + 0.5 * sin(a * 34.0 + vn(float2(a * 5.0, d * 40.0)) * 5.0);
+          tone = max(tone, 0.4 + 0.3 * stri * smoothstep(R * 0.4, R, d) + 0.3 * smoothstep(0.0, -R, u.y - ic.y));
+          if (stri > 0.94 && d > R * 0.45) { L = 1.0; }
+          if (d > R - 0.016 || d < R * 0.42) { L = 1.0; }
+          if (length(u - (ic + float2(-0.055, -0.05))) < 0.042) { P = 1.0; }
+          if (length(u - (ic + float2(0.06, 0.055))) < 0.017) { P = 1.0; }
+        }
+      }
+      // The lids: a heavy upper line thickening toward the outer corner, a thin lower one.
+      if (abs(t) < 1.06) {
+        float w = 0.005 + 0.02 * bell * (0.6 + 0.4 * t) * open + 0.004;
+        L = max(L, cover(abs(u.y - yU), w, ua) * step(u.y, yU + w * 2.0));
+      }
+      if (t > -0.7 && t < 1.0) { L = max(L, cover(abs(u.y - yL), 0.004 * bell + 0.001, ua)); }
+      // Lashes curling outward, and a flick at the outer corner.
+      for (int i = 0; i < 11; i++) {
+        float tt = -0.2 + float(i) * 0.115;
+        float2 base = float2(c.x + tt * hw, c.y - 0.2 * open * (1.0 - tt * tt) * (1.0 + 0.25 * tt));
+        float2 dir = normalize(float2(0.25 + 0.9 * tt, -1.0));
+        float len = 0.05 + 0.06 * max(tt, 0.0);
+        float2 mid = base + dir * len * 0.6;
+        float2 tip = mid + normalize(dir + float2(0.6, 0.3)) * len * 0.5;
+        float h = segT(u, base, mid);
+        L = max(L, cover(seg(u, base, mid), 0.007 * (1.0 - h * 0.3), ua));
+        float h2_ = segT(u, mid, tip);
+        L = max(L, cover(seg(u, mid, tip), 0.005 * (1.0 - h2_ * 0.8), ua));
+      }
+      float2 corner = float2(c.x + hw, c.y);
+      float hc = segT(u, corner, corner + float2(0.09, -0.07));
+      L = max(L, cover(seg(u, corner, corner + float2(0.09, -0.07)), 0.013 * (1.0 - hc * 0.85), ua));
+      for (int i = 0; i < 5; i++) {
+        float tt = 0.3 + float(i) * 0.15;
+        float2 base = float2(c.x + tt * hw, c.y + 0.09 * (1.0 - tt * tt) * (1.0 - 0.3 * tt));
+        float2 tip = base + float2(0.012 + 0.02 * tt, 0.03);
+        float h = segT(u, base, tip);
+        L = max(L, cover(seg(u, base, tip), 0.003 * (1.0 - h * 0.8), ua));
+      }
+      // Hair falling across the top right corner, with light along its strands.
+      float v = (u.x - A * 0.58) * 0.45 / (A * 0.42) - u.y + 0.012 * sin(u.x * 70.0);
+      if (v > 0.0) {
+        L = 1.0;
+        if (v > 0.02 && fract(v * 38.0 + vn(u * float2(4.0, 14.0)) * 1.6) < 0.1) { L = 0.0; P = 1.0; }
+      }
+      float k = max(dots(q, tone, 3.0, aa), L);
+      return inked(k * (1.0 - P));
+    }
+  """
+
+  // A framed panel: e insets each corner, [top-left x, y, top-right x, y, bottom-right x, y, bottom-left x, y], from the
+  // panel's box. Drawn behind text as paper, or over art, which it trims to the frame with paper.
+  component Frame(e, art = false) {
+    Canvas {
+      fill: true
+      let b = 1.5
+      let poly = [[e[0] + b, e[1] + b], [width - e[2] - b, e[3] + b], [width - e[4] - b, height - e[5] - b], [e[6] + b, height - e[7] - b]]
+      if art {
+        path([[0, 0], [width, 0], poly[1], poly[0]], closed: true, fill: background)
+        path([[width, 0], [width, height], poly[2], poly[1]], closed: true, fill: background)
+        path([[width, height], [0, height], poly[3], poly[2]], closed: true, fill: background)
+        path([[0, height], [0, 0], poly[0], poly[3]], closed: true, fill: background)
+      } else {
+        path(poly, closed: true, fill: background)
+      }
+      path(poly, closed: true, stroke: foreground, width: 2.6)
+    }
+  }
+
+  component Caption(lines) {
+    Column {
+      gap: 0
+      padding: [10, 6]
+      background: background
+      border: 2
+      borderColor: foreground
+      radius: 0
+      for l in lines { Text { spans: l; maxLines: 1 } }
+    }
+  }
+
+  component City() {
+    Box {
+      fill: true
+      Shader {
+        fill: true
+        fallback: muted
+        uniforms: { ink: ink, paper: paper, dpw: artW, night: night, cloud: cloud, seed: floor(now / 3600) % 97, rain: rain }
+        code: lib + city
+      }
+      Column {
+        fill: true
+        padding: [screenLeft + m, screenTop + m, m, m + 4]
+        Row {
+          Caption {
+            lines: [
+              [{text: fmtTime(now, "HH:mm"), font: heavy, fontSize: 34, color: foreground}],
+              [{text: upper(fmtTime(now, "EEE d MMM")), font: "mono", fontSize: 11, letterSpacing: 2, color: foreground}]
+            ]
+          }
+        }
+        Spacer { weight: 1 }
+        if cur != null {
+          Row {
+            Spacer { weight: 1 }
+            Caption {
+              lines: [[{text: "${cur.temp_C}° ", font: heavy, fontSize: 15, color: accent}, {text: upper(cur.weatherDesc[0].value ?? ""), font: "mono", fontSize: 11, letterSpacing: 1, color: foreground}]]
+            }
+          }
+        }
+      }
+    }
+  }
+
+  component Speech() {
+    Box {
+      width: speechW
+      fill: height
+      onTap: { if note != null { notification("open", note.key) } else if !n.available { notification("open", "") } }
+      Frame { e: [0, 0, 0, 0, 0, S * speechW / CW, 0, 0] }
+      Column {
+        fill: true
+        gap: 4
+        padding: [16, 14, 14, 14 + S * speechW / CW]
+        clip: true
+        Text { text: upper(note.app ?? (n.available ? "inbox" : "notifications")); font: mono; fontSize: 12; letterSpacing: 3; color: muted; maxLines: 1 }
+        Text { text: note.title ?? (n.available ? "all quiet" : "allow access"); font: heavy; fontSize: 24; maxLines: 1 }
+        Text {
+          text: note.text ?? (n.available ? "Nothing new. The city sleeps, or pretends to." : "Tap to let the page read your notifications.")
+          fontSize: 14
+          color: muted
+          maxLines: 4
+          weight: 1
+        }
+      }
+    }
+  }
+
+  component Eye() {
+    Box {
+      width: eyeW
+      fill: height
+      Shader {
+        fill: true
+        fallback: muted
+        uniforms: { ink: ink, paper: paper, dpw: eyeW, open: night > 0.5 ? 0.12 : 1, look: hash(floor(now / 60)) * 2 - 1 }
+        code: lib + eye
+      }
+      Frame { e: [0, 0, 0, 0, 0, S, 0, S * (speechW + g) / CW]; art: true }
+    }
+  }
+
+  component Fetch() {
+    Box {
+      width: fetchW
+      fill: height
+      Frame { e: [0, S, 0, S * (1 - fetchW / CW), 0, 0, 0, 0] }
+      Column {
+        fill: true
+        gap: 2
+        padding: [14, 14 + S * 0.6, 10, 12]
+        clip: true
+        Row {
+          gap: 10
+          align: center
+          Canvas {
+            width: 34
+            height: 34
+            path([[17, 0], [34, 34], [27, 30], [22, 22], [17, 20], [12, 22], [7, 30], [0, 34]], closed: true, fill: accent)
+          }
+          Column {
+            gap: 3
+            weight: 1
+            Text { text: "${user}@${host}"; font: mono; fontSize: 13; color: accent; bold: true; maxLines: 1 }
+            Row {
+              gap: 2
+              for c in [color1, color2, color3, color4, color5, color6] { Box { width: 12; height: 5; background: c } }
+            }
+          }
+        }
+        Spacer { height: 2 }
+        for r in rows.take(fetchLines) {
+          Row {
+            gap: 6
+            Text { text: r[0]; font: mono; fontSize: 12; color: accent; width: 52; maxLines: 1 }
+            Text { text: r[1]; font: mono; fontSize: 12; maxLines: 1; weight: 1 }
+          }
+        }
+        // Gauges at the foot, so the panel ends full however tall it is.
+        Spacer { weight: 1 }
+        Box { height: 1.5; fill: width; background: foreground }
+        for gg in gauges.take(fetchGauges) {
+          Column {
+            gap: 1
+            Row {
+              Text { text: gg[0]; font: mono; fontSize: 11; color: accent; weight: 1; maxLines: 1 }
+              Text { text: gg[2]; font: mono; fontSize: 11; color: muted; maxLines: 1 }
+            }
+            Canvas {
+              height: 7
+              fill: width
+              rect(0, 0, width, height, stroke: foreground, width: 1.5)
+              for i in range(floor((width - 4) * clamp(gg[1], 0, 100) / 100 / 4)) { rect(2 + i * 4, 2, 2.5, height - 4, fill: foreground) }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Hacker News' front page: tap a story to read it, its line of points and comments for the thread.
+  component News() {
+    Box {
+      width: pixW
+      fill: height
+      Frame { e: [0, S * (1 - (fetchW + g) / CW), 0, 0, 0, 0, 0, 0] }
+      // The title on an ink band that runs along the panel's slanted top.
+      Canvas {
+        height: S + 40
+        fill: width
+        onTap: url("https://news.ycombinator.com/")
+        let sl = S * (1 - (fetchW + g) / CW)
+        let bh = 34
+        let ang = deg(atan2(sl, width))
+        path([[0, sl], [width, 0], [width, bh], [0, sl + bh]], closed: true, fill: foreground)
+        rotate(-ang, width / 2, sl / 2 + bh / 2) {
+          text("HACKER NEWS", 14, sl / 2 + bh / 2 + 1, size: min(16, (width - 60) / 8.6), font: heavy, letterSpacing: 1, color: background, align: start)
+          rect(width - 36, sl / 2 + bh / 2 - 11, 22, 22, fill: accent, stroke: background, width: 1.5)
+          text("Y", width - 25, sl / 2 + bh / 2 + 1, size: 14, font: heavy, color: background, align: center)
+        }
+      }
+      Column {
+        fill: true
+        gap: 8
+        padding: [14, S * (1 - (fetchW + g) / CW) + 46, 14, 12]
+        clip: true
+        if hn == null {
+          Text { text: "…"; font: mono; color: muted }
+        } else {
+          Column {
+            scroll: true
+            weight: 1
+            gap: 10
+            for st, i in stories key st.objectID {
+              Column {
+                gap: 2
+                Row {
+                  gap: 6
+                  align: top
+                  onTap: url(st.url ?? "https://news.ycombinator.com/item?id=${st.objectID}")
+                  Text { text: "${i + 1}"; font: heavy; fontSize: 13; color: accent; width: 16 }
+                  Text { text: st.title; fontSize: 13; fontWeight: 600; maxLines: 3; weight: 1 }
+                }
+                Text {
+                  text: "▲${st.points} · ${st.num_comments} cmts · ${fmtAgo(st.created_at_i, now)}"
+                  font: mono
+                  fontSize: 10
+                  color: muted
+                  maxLines: 1
+                  padding: [22, 0, 0, 0]
+                  onTap: url("https://news.ycombinator.com/item?id=${st.objectID}")
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  component Rows() {
+    Column {
+      fill: true
+      gap: 0
+      padding: [m, wide ? screenTop + m : 10, screenRight + m, 0]
+      Row { weight: 0.38; fill: width; gap: g; Speech {}; Eye {} }
+      Row { weight: 0.62; fill: width; gap: g; Fetch {}; News {} }
+      Spacer { height: screenInset + 8 }
+    }
+  }
+
+  if wide {
+    Row {
+      fill: true
+      gap: 0
+      Box { width: artW; fill: height; City {} }
+      Rows { weight: 1 }
+    }
+  } else {
+    Column {
+      fill: true
+      gap: 0
+      Box { weight: 0.4; fill: width; City {} }
+      Rows { weight: 0.6 }
+    }
+  }
+}

@@ -1,0 +1,439 @@
+widget "lastfm" {
+  page: 1
+  order: 55
+  size: 6x4
+  minSize: 3x3
+  meta { owl: 6; description: "Your recent Last.fm tracks with album art, plus overall scrobble, artist, album and track totals. Shows recent tracks and lifetime totals, not active scrobbling. Needs a Last.fm username and API key"; version: "1.0"; license: "MIT"; category: "media" }
+  requires { pacman: ["python", "curl"] }
+
+  // The helper writes itself to the cache on first run (and after this file changes).
+  source boot = cmd("""
+d=~/.cache/omalauncher-lastfm
+mkdir -p "$d"
+t="$d/lastfm.py.tmp"
+cat > "$t" <<'OWL_LASTFM_PY'
+#!/usr/bin/env python3
+# Last.fm recent-tracks helper for the omarchy widget.
+#   fetch <user> <api_key> <limit>   print the recent tracks as JSON
+# Uses the official user.getRecentTracks endpoint: a Last.fm API key is required.
+# Album art is cached under ~/.cache/omalauncher/lastfm.
+import hashlib
+import json
+import os
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
+
+HOME = os.path.expanduser("~")
+CACHE = os.path.join(HOME, ".cache", "omalauncher", "lastfm")
+UA = "omalauncher-lastfm/2.0"
+API = "https://ws.audioscrobbler.com/2.0/"
+ART_FAIL_TTL = 86400
+PLACEHOLDERS = ("2a96cbd8b46e442fc41c2b86b821562f",
+                "c6f59c1e5e7240a4c0d427abd71f3dbb")
+
+
+def log(*a):
+    print(*a, file=sys.stderr)
+
+
+def curl(url, timeout=20):
+    # -4 forces IPv4: a phone on an IPv4-only network otherwise hangs on IPv6.
+    # --retry: a phone's network drops often; without it a single blip would
+    # leave the tile empty until the next playback change or the 6h refresh.
+    cmd = ["curl", "-4", "-sS", "-f", "-L", "--retry", "2", "--retry-delay", "1",
+           "--retry-connrefused", "-m", str(timeout), "-A", UA, url]
+    try:
+        p = subprocess.run(cmd, capture_output=True, timeout=timeout + 5)
+    except subprocess.TimeoutExpired:
+        raise urllib.error.HTTPError(url, 124, "timeout", {}, None)
+    if p.returncode != 0:
+        raise urllib.error.URLError(p.stderr.decode(errors="replace")[:200] or "curl failed")
+    return p.stdout
+
+
+def get_json(url, timeout=20):
+    return json.loads(curl(url, timeout) or b"null")
+
+
+def art_path(url):
+    if not url or not url.startswith("http"):
+        return ""
+    if any(p in url for p in PLACEHOLDERS):
+        return ""
+    h = hashlib.md5(url.encode("utf-8")).hexdigest()
+    ext = ".jpg" if ".jpg" in url.lower() else ".png"
+    os.makedirs(CACHE, exist_ok=True)
+    dest = os.path.join(CACHE, h + ext)
+    if os.path.exists(dest) and os.path.getsize(dest) > 0:
+        return dest
+    fail = dest + ".failed"
+    try:
+        if time.time() - os.path.getmtime(fail) < ART_FAIL_TTL:
+            return ""
+    except OSError:
+        pass
+    try:
+        raw = curl(url, 12)
+        if raw:
+            with open(dest, "wb") as f:
+                f.write(raw)
+            try:
+                os.remove(fail)
+            except OSError:
+                pass
+            return dest
+    except Exception:
+        pass
+    try:
+        with open(fail, "w"):
+            pass
+    except OSError:
+        pass
+    return ""
+
+
+def parse_official(data, user, limit):
+    recent = data.get("recenttracks", {}) if isinstance(data, dict) else {}
+    raw = recent.get("track", [])
+    if isinstance(raw, dict):
+        raw = [raw]
+    out = []
+    for t in raw[:limit]:
+        a = t.get("artist", "")
+        if isinstance(a, dict):
+            artist = a.get("#text") or a.get("name") or ""
+        else:
+            artist = a or ""
+        nowplaying = (t.get("@attr", {}) or {}).get("nowplaying") == "true"
+        at = 0
+        date = t.get("date", {}) or {}
+        if "uts" in date:
+            try:
+                at = int(date["uts"])
+            except Exception:
+                at = 0
+        elif nowplaying:
+            at = int(time.time())
+        # The image array sits on the track, or under album in newer responses.
+        images = t.get("image") or (t.get("album") or {}).get("image") or []
+        img = ""
+        for i in reversed(images):
+            if isinstance(i, dict) and i.get("#text"):
+                img = i["#text"]
+                break
+        out.append({"artist": artist, "title": t.get("name") or "",
+                    "url": t.get("url") or "https://www.last.fm/user/" + user,
+                    "at": at, "nowplaying": nowplaying, "art": "", "img": img})
+    return out
+
+
+def user_stats(user, api_key):
+    # user.getInfo: overall playcount and library sizes.
+    url = (API + "?method=user.getinfo&format=json&user=%s&api_key=%s"
+           % (urllib.parse.quote(user), urllib.parse.quote(api_key)))
+    u = (get_json(url) or {}).get("user", {}) or {}
+    return {"scrobbles": int(u.get("playcount") or 0),
+            "artists": int(u.get("artist_count") or 0),
+            "albums": int(u.get("album_count") or 0),
+            "tracks": int(u.get("track_count") or 0),
+            "url": u.get("url") or ""}
+
+
+def cached_stats(user, api_key):
+    # getInfo changes slowly, so keep it for an hour and only then refresh,
+    # instead of calling it on every refresh.
+    path = os.path.join(CACHE, "stats.json")
+    try:
+        with open(path) as f:
+            c = json.load(f)
+        if c.get("user") == user and time.time() - float(c.get("at") or 0) < 3600:
+            return c.get("stats") or {}
+    except Exception:
+        pass
+    try:
+        s = user_stats(user, api_key)
+    except Exception as e:
+        log("stats failed:", e)
+        return {}
+    try:
+        os.makedirs(CACHE, exist_ok=True)
+        with open(path, "w") as f:
+            json.dump({"user": user, "at": int(time.time()), "stats": s}, f)
+    except OSError:
+        pass
+    return s
+
+
+def fetch_all(user, api_key, limit):
+    limit = max(1, min(limit, 200))
+    # user.getRecentTracks. api_key is required and must be granted by Last.fm;
+    # no user login. The now playing track has @attr.nowplaying="true", no date.
+    tracks = []
+    try:
+        url = (API + "?method=user.getrecenttracks&format=json&limit=%d"
+               "&user=%s&api_key=%s" % (limit, urllib.parse.quote(user),
+                                        urllib.parse.quote(api_key)))
+        tracks = parse_official(get_json(url), user, limit)
+    except Exception as e:
+        log("recent tracks failed:", e)
+    imgs = [t.pop("img", "") for t in tracks]
+    if tracks:
+        with ThreadPoolExecutor(max_workers=min(6, len(tracks))) as ex:
+            arts = list(ex.map(art_path, imgs))
+        for t, a in zip(tracks, arts):
+            t["art"] = a
+    return {"tracks": tracks, "stats": cached_stats(user, api_key)}
+
+
+def main():
+    a = sys.argv[1:]
+    if len(a) >= 2 and a[0] == "fetch":
+        user = a[1].strip()
+        api_key = a[2].strip() if len(a) > 2 else ""
+        limit = int(a[3]) if len(a) > 3 and a[3].isdigit() else 10
+        if not user or not api_key:
+            print("{}")
+            return 0
+        try:
+            print(json.dumps(fetch_all(user, api_key, limit)))
+        except Exception as e:
+            log("lastfm fetch error:", e)
+            print("{}")
+        return 0
+    log("usage: lastfm.py fetch <user> <api_key> <limit>")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+OWL_LASTFM_PY
+chmod 700 "$t" 2>/dev/null
+mv -f "$t" "$d/lastfm.py"
+echo ok
+""") every 12h
+
+  state username = "" persist
+  state apiKey = "" persist
+
+  // Android only shares other apps' media sessions with notification access.
+  source m = android.media
+  let allowed = m == null || m.available != false
+  let isPlaying = allowed && m != null && m.playing == true
+  let playingTrack = isPlaying ? (m.title ?? "") : ""
+
+  // Nothing changes on Last.fm while no music plays, so never poll on a short
+  // timer: refresh only on playback events (below). This 6h interval is just a
+  // fallback for scrobbles made on another device.
+  source data = cmd("[ -n ${sh(username)} ] && [ -n ${sh(apiKey)} ] && python3 ~/.cache/omalauncher-lastfm/lastfm.py fetch ${sh(username)} ${sh(apiKey)} 10 || echo '{}'") every 6h json timeout 45s
+
+  // Refresh the moment a track starts, changes, or playback stops, instead of
+  // polling, so an idle widget makes no network calls at all.
+  on playingTrack { refresh() }
+
+  let logged = trim(username ?? "") != ""
+  let hasKey = trim(apiKey ?? "") != ""
+  let ready = logged && hasKey
+  let items = data.tracks ?? []
+  let info = data.stats ?? {}
+  let scrobTxt = info.scrobbles == null ? "" : info.scrobbles >= 1000000 ? "${fixed(info.scrobbles / 1000000, 1)}M" : info.scrobbles >= 1000 ? "${fixed(info.scrobbles / 1000, 1)}k" : "${info.scrobbles}"
+  let artistsTxt = info.artists == null ? "" : info.artists >= 1000000 ? "${fixed(info.artists / 1000000, 1)}M" : info.artists >= 1000 ? "${fixed(info.artists / 1000, 1)}k" : "${info.artists}"
+
+  component Art(src, d = 40) {
+    Box {
+      size: d
+      radius: 6 * corners
+      clip: true
+      align: center
+      if src != null && src != "" {
+        Image { src: src; fit: cover; fill: true }
+      } else {
+        Canvas {
+          rect(0, 0, width, height, fill: linear(0, 0, width, height, [alpha(accent, 0.45), alpha(magenta, 0.3)]))
+          text("♪", width / 2, height / 2, size: d * 0.45, align: center, color: alpha(foreground, 0.9))
+        }
+      }
+    }
+  }
+
+  // Only exists, and only animates, while a track is now playing.
+  component Bars() {
+    Canvas {
+      width: 12
+      height: 10
+      for i in range(3) {
+        let h = 2 + (sin(time * (6 + i * 2) + i * 2) * 0.5 + 0.5) * (height - 2)
+        rect(i * 4, height - h, 2, h, radius: 1, color: accent)
+      }
+    }
+  }
+
+  component Stat(label, value) {
+    Column {
+      gap: 0
+      weight: 1
+      Text { text: value == null ? "…" : value >= 1000000 ? "${fixed(value / 1000000, 1)}M" : value >= 1000 ? "${fixed(value / 1000, 1)}k" : "${value}"; style: title; color: accent; maxLines: 1 }
+      Text { text: label; style: label; color: muted }
+    }
+  }
+
+  component Show(t) {
+    Row {
+      gap: 10
+      align: center
+      onTap: url(t.url)
+      Art { src: t.art; d: 40 }
+      Column {
+        gap: 1
+        weight: 1
+        Text { text: t.title; style: body; maxLines: 1 }
+        Text { text: t.artist; style: small; color: muted; maxLines: 1 }
+        Row {
+          gap: 4
+          align: center
+          if t.nowplaying {
+            Bars { }
+          }
+          Text { text: t.nowplaying ? "now playing" : t.at > 0 ? fmtTime(t.at, "d MMM · HH:mm") : ""; style: label; color: t.nowplaying ? accent : muted; maxLines: 1 }
+        }
+      }
+    }
+  }
+
+  Column {
+    gap: 6
+    Row {
+      align: center
+      gap: 6
+      Text { text: "Last.fm"; bold: true; color: red; width: 58; onTap: screen() }
+      Text { text: logged ? username : "set user"; style: muted; weight: 1; maxLines: 1; onTap: screen() }
+      Button { text: "refresh"; onTap: refresh() }
+      Button { text: "all ›"; onTap: screen() }
+    }
+    if ready && scrobTxt != "" {
+      Text { text: "${scrobTxt} scrobbles · ${artistsTxt} artists"; style: label; color: muted; maxLines: 1 }
+    }
+    if !ready {
+      Column {
+        weight: 1
+        justify: center
+        align: center
+        gap: 6
+        Text { text: "Add your Last.fm username and API key to see recent scrobbles."; style: small; color: muted }
+        Button { text: "set up"; color: accent; onTap: screen() }
+      }
+    } else if data == null {
+      Column {
+        weight: 1
+        justify: center
+        align: center
+        Text { text: "loading…"; style: small; color: muted }
+      }
+    } else if len(items) == 0 {
+      Column {
+        weight: 1
+        justify: center
+        align: center
+        gap: 6
+        Text { text: "no scrobbles for " + username; style: small; color: muted }
+        Button { text: "refresh"; color: accent; onTap: refresh() }
+      }
+    } else {
+      Column {
+        weight: 1
+        gap: 4
+        scroll: true
+        for t, i in items.take(5) key "${t.url}-${t.at}-${i}" {
+          Show { t: t }
+        }
+      }
+    }
+  }
+
+  screen {
+    title: logged ? "Last.fm · " + username : "Last.fm"
+    Column {
+      scroll: true
+      gap: 12
+      Row {
+        align: center
+        gap: 8
+        Text { text: "username"; width: 72 }
+        Input {
+          placeholder: "your Last.fm username"
+          text: username
+          weight: 1
+          onSubmit: {
+            username = trim(value) != "" ? trim(value) : username
+            refresh()
+          }
+        }
+      }
+      Row {
+        align: center
+        gap: 8
+        Text { text: "api key"; width: 72 }
+        Input {
+          placeholder: "your Last.fm API key"
+          text: apiKey
+          weight: 1
+          onSubmit: {
+            apiKey = trim(value)
+            refresh()
+          }
+        }
+      }
+      if !hasKey {
+        Row {
+          align: center
+          gap: 8
+          Text { text: "A free Last.fm API key is required"; style: small; color: orange; weight: 1 }
+          Button { text: "get a key"; color: orange; onTap: url("https://www.last.fm/api/account/create") }
+        }
+      }
+      if m != null && m.available == false {
+        Row {
+          align: center
+          gap: 8
+          Text { text: "Song detection needs notification access"; style: small; color: orange; weight: 1 }
+          Button { text: "grant"; color: orange; onTap: media("open") }
+        }
+      }
+      if info.scrobbles != null {
+        Row {
+          gap: 8
+          Stat { label: "scrobbles"; value: info.scrobbles }
+          Stat { label: "artists"; value: info.artists }
+          Stat { label: "albums"; value: info.albums }
+          Stat { label: "tracks"; value: info.tracks }
+        }
+      }
+      Row {
+        align: center
+        Text { text: "recent scrobbles"; style: title; weight: 1 }
+        Button { text: "refresh"; onTap: refresh() }
+      }
+      if !logged {
+        Text { text: "Set your username above to load scrobbles."; style: small; color: muted }
+      } else if !hasKey {
+        Text { text: "Add your API key above to load scrobbles."; style: small; color: muted }
+      } else if data == null {
+        Text { text: "loading…"; style: muted }
+      } else if len(items) == 0 {
+        Text { text: "no scrobbles for " + username; style: muted }
+      } else {
+        for t, i in items.take(10) key "${t.url}-${t.at}-${i}" {
+          Show { t: t }
+        }
+      }
+      Row {
+        gap: 8
+        Button { text: "open profile"; weight: 1; onTap: url(logged ? "https://www.last.fm/user/" + username : "https://www.last.fm") }
+        Button { text: "close"; width: 80; onTap: close() }
+      }
+    }
+  }
+}

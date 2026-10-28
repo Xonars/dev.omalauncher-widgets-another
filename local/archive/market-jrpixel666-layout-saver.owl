@@ -1,0 +1,420 @@
+widget "layout saver" {
+  meta { owl: 8; description: "Saves your widgets, apps and style as a layout, backs them up to GitHub, and makes one bash script that sets up a new system. Installs its helper as ~/.local/bin/owl-layout."; version: "1.4"; license: "MIT"; category: "system" }
+  page: 1
+  order: 3
+  size: 6x3
+  minSize: 4x3
+
+  requires { pacman: ["git", "github-cli", "jq", "util-linux", "tar", "gzip", "diffutils"] }
+
+  // ~/.local/bin/owl-layout does the work (the installer script carries it along too);
+  // the widget keeps it in place, then asks it for the status as JSON
+  source st = cmd("""
+    n=~/.cache/owl-layout.embedded
+    mkdir -p ~/.cache
+    cat > "$n" <<'OWL_LAYOUT_EOF'
+#!/usr/bin/env bash
+# owl-layout: snapshots the launcher's widgets, apps and style into a git repo,
+# backs it up to GitHub or a single installer script, and sets up a new system from it.
+#
+#   owl-layout status            JSON for the "layout backup" app
+#   owl-layout save [message]    copy the live files into the repo and commit
+#   owl-layout upload [message]  save, then push to GitHub
+#   owl-layout bundle [message]  save, then write ~/omalauncher-setup.sh: one self-contained
+#                                bash script that sets up a new system (needs only pacman's network)
+#   owl-layout login             read a GitHub token on stdin and sign gh in
+#   owl-layout link NAME         use repo NAME or OWNER/NAME on GitHub (created private if missing)
+#   owl-layout restore           pull from GitHub and put everything in place
+#   owl-layout use REV           put an earlier save in place (save again to keep it)
+#   owl-layout apply             put the local snapshot in place (no network)
+#
+# New system, from GitHub:  gh auth login && gh repo clone OWNER/REPO && bash REPO/install.sh
+# New system, offline:      bash omalauncher-setup.sh
+set -o pipefail
+
+CFG=~/.config/omalauncher
+REPO=$OWL_LAYOUT_REPO; [ -n "$REPO" ] || REPO=~/.local/share/omalauncher-layout
+LOG=~/.cache/owl-layout.log
+SETUP=~/omalauncher-setup.sh
+BRANCH=main
+mkdir -p ~/.cache "$REPO"
+
+say() { printf '%s %s\n' "$(date +%H:%M:%S)" "$*" >>"$LOG"; }
+die() { say "error: $*"; echo "$*" >&2; exit 1; }
+g() { git -C "$REPO" "$@"; }
+
+init_repo() {
+  [ -d "$REPO/.git" ] && return
+  git init -q -b "$BRANCH" "$REPO"
+  g config user.name "$(gh api user --jq .login 2>/dev/null || echo omalauncher)"
+  g config user.email "$(gh api user --jq '(.id|tostring) + "+" + .login + "@users.noreply.github.com"' 2>/dev/null || echo omalauncher@localhost)"
+}
+
+write_install_sh() {
+  cat >"$REPO/install.sh" <<'EOF'
+#!/usr/bin/env bash
+# Sets up this system with the saved widgets, apps, style and packages.
+# Run it from wherever this folder is:  bash install.sh
+set -e
+here=$(cd "$(dirname "$0")" && pwd)
+dest=~/.local/share/omalauncher-layout
+if [ "$here" != "$dest" ]; then
+  mkdir -p "$dest"; cp -a "$here/." "$dest/"
+fi
+OWL_LAYOUT_REPO="$dest" bash "$dest/owl-layout" apply
+tail -n 20 ~/.cache/owl-layout.log
+EOF
+  chmod +x "$REPO/install.sh"
+  cat >"$REPO/README.md" <<'EOF'
+# omalauncher layout
+
+Home-screen widgets and apps (`widgets/`), the launcher's style (`style/style.toml`) and the
+packages they need, saved by the "layout backup" app.
+
+Set up a new system (in the launcher's Linux terminal):
+
+    gh auth login
+    gh repo clone OWNER/REPO
+    bash REPO/install.sh
+
+It copies everything into ~/.config/omalauncher (widgets not in the backup go to
+widgets/.removed), installs the packages and the `owl-layout` tool, and the phone shows the
+widgets within seconds.
+EOF
+}
+
+# live files -> repo working tree
+sync() {
+  init_repo
+  rm -rf "$REPO/widgets" "$REPO/style"
+  mkdir -p "$REPO/widgets" "$REPO/style"
+  cp -p "$CFG"/widgets/*.owl "$REPO/widgets/" 2>/dev/null
+  [ -f "$CFG/style/style.toml" ] && cp -p "$CFG/style/style.toml" "$REPO/style/"
+  [ -f "$CFG/agent" ] && cp -p "$CFG/agent" "$REPO/agent"
+  # packages the widgets declare, and every package installed by hand
+  grep -ho 'pacman:[^]]*' "$REPO"/widgets/*.owl 2>/dev/null | grep -o '"[^"]*"' | tr -d '"' | sort -u >"$REPO/packages-widgets.txt"
+  pacman -Qqen | sort >"$REPO/packages-explicit.txt"
+  local self; self=$(readlink -f "$0")
+  [ "$self" = "$(readlink -f "$REPO/owl-layout")" ] || cp -p "$self" "$REPO/owl-layout"
+  chmod +x "$REPO/owl-layout"
+  write_install_sh
+}
+
+save() {
+  sync
+  g add -A
+  if g diff --cached --quiet; then say "nothing changed since the last save"; return 0; fi
+  local msg=$1; [ -n "$msg" ] || msg="layout $(date '+%Y-%m-%d %H:%M')"
+  g commit -q -m "$msg" && say "saved: $(g log -1 --format=%s)"
+}
+
+upload() {
+  save "$1" || exit 1
+  g remote get-url origin >/dev/null 2>&1 || die "no GitHub repo linked yet"
+  gh auth setup-git >/dev/null 2>&1
+  if g push -q -u origin "$BRANCH" 2>>"$LOG"; then say "uploaded to $(g remote get-url origin | sed -E 's#https://github.com/##; s#\.git$##')"
+  else die "push failed (see above); restore first if the repo changed elsewhere"; fi
+}
+
+bundle() {
+  save "$1" || exit 1
+  local tmp; tmp=$(mktemp)
+  {
+    cat <<'EOF'
+#!/usr/bin/env bash
+# omalauncher setup: puts back the widgets, apps, style and packages saved by "layout backup".
+# On a new system, in the launcher's Linux terminal:  bash omalauncher-setup.sh
+set -e
+dest=~/.local/share/omalauncher-layout
+mkdir -p "$dest"
+sed '1,/^__ARCHIVE__$/d' "$0" | base64 -d | tar -xz -C "$dest"
+bash "$dest/install.sh"
+exit 0
+__ARCHIVE__
+EOF
+    tar -C "$REPO" -cz --exclude=./.git . | base64
+  } >"$tmp" || { rm -f "$tmp"; die "couldn't pack the installer"; }
+  chmod +x "$tmp" && mv "$tmp" "$SETUP"
+  say "installer written: $SETUP ($(du -h "$SETUP" | cut -f1))"
+}
+
+login() {
+  local tok; tok=$(cat)
+  [ -n "$tok" ] || die "empty token"
+  if printf '%s\n' "$tok" | gh auth login -h github.com -p https --with-token 2>>"$LOG"; then
+    gh auth setup-git >/dev/null 2>&1
+    say "signed in to GitHub as $(gh api user --jq .login)"
+  else die "GitHub didn't accept that token"; fi
+}
+
+link() {
+  local name=$1; [ -n "$name" ] || die "no repo name"
+  gh auth status >/dev/null 2>&1 || die "sign in to GitHub first"
+  [[ $name == */* ]] || name="$(gh api user --jq .login)/$name"
+  init_repo
+  if gh repo view "$name" >/dev/null 2>&1; then
+    say "linking existing repo $name"
+  else
+    gh repo create "$name" --private -d "omalauncher widgets and layout" >/dev/null 2>>"$LOG" || die "couldn't create $name"
+    say "created private repo $name"
+  fi
+  g remote remove origin 2>/dev/null; g remote add origin "https://github.com/$name.git"
+  gh auth setup-git >/dev/null 2>&1
+  if g fetch -q origin 2>>"$LOG" && g rev-parse -q --verify "origin/$BRANCH" >/dev/null; then
+    # the repo already has a backup: take its history (live files are untouched until restore)
+    g reset -q --hard "origin/$BRANCH"; g branch -q -u "origin/$BRANCH"
+    say "repo has a saved layout from $(g log -1 --format=%cr); tap restore to use it"
+  fi
+}
+
+apply() {
+  [ -d "$REPO/widgets" ] || die "no snapshot to restore"
+  say "setting up from $(printf %s "$REPO" | sed "s#^$HOME#~#")"
+  mkdir -p "$CFG/widgets/.removed" "$CFG/style" ~/.local/bin
+  # widgets that aren't in the backup go to .removed, so the home screen matches it exactly
+  for f in "$CFG"/widgets/*.owl; do
+    [ -e "$f" ] || continue
+    [ -e "$REPO/widgets/$(basename "$f")" ] || { mv "$f" "$CFG/widgets/.removed/"; say "moved $(basename "$f") to .removed"; }
+  done
+  cp -p "$REPO"/widgets/*.owl "$CFG/widgets/" 2>/dev/null
+  [ -f "$REPO/style/style.toml" ] && cp -p "$REPO/style/style.toml" "$CFG/style/style.toml"
+  [ -f "$REPO/agent" ] && cp -p "$REPO/agent" "$CFG/agent"
+  [ "$(readlink -f "$REPO/owl-layout")" = "$(readlink -f ~/.local/bin/owl-layout)" ] \
+    || cp -p "$REPO/owl-layout" ~/.local/bin/owl-layout
+  chmod +x ~/.local/bin/owl-layout
+  say "copied $(ls "$REPO"/widgets/*.owl 2>/dev/null | wc -l) widgets/apps and the style"
+  # packages: the widgets' own, plus whatever was installed by hand that the repos have
+  local want; want=$(cat "$REPO"/packages-widgets.txt "$REPO"/packages-explicit.txt 2>/dev/null | sort -u \
+    | comm -12 - <(pacman -Slq 2>/dev/null | sort -u) | comm -23 - <(pacman -Qq | sort))
+  if [ -n "$want" ]; then
+    say "installing $(echo "$want" | wc -l) packages: $(echo $want)"
+    pacman -Syu --needed --noconfirm $want >>"$LOG" 2>&1 && say "packages installed" || say "error: some packages failed to install (see above)"
+  else say "all packages already installed"; fi
+  say "setup done"
+}
+
+use() {
+  local rev=$1
+  g rev-parse -q --verify "$rev^{commit}" >/dev/null || die "no such save: $rev"
+  rm -rf "$REPO/widgets" "$REPO/style"
+  g checkout -q "$rev" -- . || die "couldn't read save $rev"
+  say "going back to \"$(g log -1 --format=%s "$rev")\" from $(g log -1 --format=%cr "$rev")"
+  apply
+}
+
+restore() {
+  g remote get-url origin >/dev/null 2>&1 || die "no GitHub repo linked yet"
+  gh auth setup-git >/dev/null 2>&1
+  g fetch -q origin 2>>"$LOG" || die "couldn't reach GitHub"
+  g rev-parse -q --verify "origin/$BRANCH" >/dev/null || die "the repo has no saved layout yet"
+  g reset -q --hard "origin/$BRANCH"
+  apply
+}
+
+status() {
+  local user remote="" changes=0 ahead=0 commits="[]" changed="[]" has=false
+  user=$(gh api user --jq .login 2>/dev/null || true)
+  if [ -d "$REPO/.git" ]; then
+    has=true
+    remote=$(g remote get-url origin 2>/dev/null | sed -E 's#^https://github.com/##; s#\.git$##')
+    # skipped while save/restore holds the lock, or it would put the live files back mid-restore
+    ( flock -n 9 && sync ) 9>~/.cache/owl-layout.lock
+    changes=$(g status --porcelain | grep -c . || true)
+    changed=$(g status --porcelain | sed 's/^...//' | head -20 | jq -R . | jq -s .)
+    if g rev-parse -q --verify "origin/$BRANCH" >/dev/null; then ahead=$(g rev-list --count "origin/$BRANCH..HEAD")
+    else ahead=$(g rev-list --count HEAD 2>/dev/null || echo 0); fi
+    commits=$(g log -10 --format='%h%x09%ct%x09%s' 2>/dev/null | jq -R 'split("\t") | {h: .[0], t: (.[1]|tonumber), msg: .[2]}' | jq -s .)
+  fi
+  local setupSize=0 setupTime=0
+  [ -f "$SETUP" ] && { setupSize=$(stat -c %s "$SETUP"); setupTime=$(stat -c %Y "$SETUP"); }
+  jq -n --arg user "$user" --arg remote "$remote" --argjson has "$has" --argjson changes "$changes" \
+    --argjson ahead "$ahead" --argjson commits "$commits" --argjson changed "$changed" \
+    --argjson widgets "$(ls "$CFG"/widgets/*.owl 2>/dev/null | wc -l)" \
+    --arg setup "$SETUP" --argjson setupSize "$setupSize" --argjson setupTime "$setupTime" \
+    '{user: $user, remote: $remote, repo: $has, changes: $changes, ahead: $ahead, commits: $commits, changed: $changed,
+      widgets: $widgets, setup: $setup, setupSize: $setupSize, setupTime: $setupTime}'
+}
+
+cmd=$1; [ -n "$cmd" ] || cmd=status; shift || true
+case $cmd in
+  status) status ;;
+  *)
+    exec 9>~/.cache/owl-layout.lock
+    flock -w 20 9 || die "another backup action is still running"
+    case $cmd in
+      save) save "$1" ;; upload) upload "$1" ;; bundle) bundle "$1" ;;
+      login) login ;; link) link "$1" ;; restore) restore ;;
+      use) use "$1" ;; apply) apply ;; *) die "unknown command $cmd" ;;
+    esac ;;
+esac
+OWL_LAYOUT_EOF
+    cmp -s "$n" ~/.local/bin/owl-layout || { mkdir -p ~/.local/bin && cp "$n" ~/.local/bin/owl-layout && chmod +x ~/.local/bin/owl-layout; }
+    bash ~/.local/bin/owl-layout status
+  """) every 5m json timeout 30s
+  source log = file("~/.cache/owl-layout.log")
+  source setupFile = file("~/omalauncher-setup.sh")
+  source now = clock every 1m
+
+  state working = ""
+  state res = ""
+  state pick = ""
+  state confirm = false
+  state confirmGh = false
+  state repoName = "omalauncher-layout" persist
+  on res { working = ""; pick = ""; confirm = false; confirmGh = false }
+
+  let signedIn = st.user != "" && st.user != null
+  let linked = st.remote != "" && st.remote != null
+  let hasSetup = st.setupSize > 0
+  let lastLog = last(lines(log ?? "")) ?? ""
+  let lastMsg = trim(sub(lastLog, 9, len(lastLog)))
+
+  component Busy() {
+    Text { text: "${working}…"; color: yellow; align: center; fill: width; padding: [0, 8] }
+  }
+
+  onTap: screen()
+
+  Column {
+    gap: 6
+    Row {
+      Text { text: "layout"; style: muted; weight: 1 }
+      Text {
+        text: st == null ? "…" : st.changes == 0 ? "saved" : "${st.changes} unsaved"
+        style: small; width: 120; align: end
+        color: st.changes > 0 ? orange : green
+      }
+    }
+    Text {
+      text: st == null ? "…" : "${st.widgets} widgets & apps · ${len(st.commits ?? [])} saves · ${linked ? "github ✓" : hasSetup ? "installer ✓" : "no backup yet"}"
+      style: small; maxLines: 1
+    }
+    Text { text: lastMsg; style: small; color: contains(lastMsg, "error") ? red : muted; maxLines: 1 }
+    Spacer { weight: 1 }
+    if working != "" {
+      Busy { }
+    } else {
+      Row {
+        gap: 6
+        Button { text: "save"; weight: 1
+          onTap: { working = "saving"; res = run("~/.local/bin/owl-layout save; date +%s%N") } }
+        if linked {
+          Button { text: "upload"; weight: 1; color: accent
+            onTap: { working = "uploading"; res = run("~/.local/bin/owl-layout upload && ~/.local/bin/owl-layout bundle; date +%s%N") } }
+        } else {
+          Button { text: "installer"; weight: 1; color: accent
+            onTap: { working = "making installer"; res = run("~/.local/bin/owl-layout bundle; date +%s%N") } }
+        }
+        Button { text: "more"; weight: 1; onTap: screen() }
+      }
+    }
+  }
+
+  screen {
+    title: "layout saver"
+    Column {
+      scroll: true
+      gap: 12
+
+      Column {
+        gap: 8; padding: 12; border: 1; borderColor: border
+        Text { text: "save & back up"; style: label; color: accent }
+        Text { text: "Saves every widget and app in widgets/, the launcher style (theme, columns, corners) and the packages they need."; style: small; color: muted }
+        if working != "" {
+          Busy { }
+        } else {
+          Row {
+            gap: 8
+            Button { text: "save"; weight: 1
+              onTap: { working = "saving"; res = run("~/.local/bin/owl-layout save; date +%s%N") } }
+            Button { text: "make installer"; weight: 1; color: accent
+              onTap: { working = "making installer"; res = run("~/.local/bin/owl-layout bundle; date +%s%N") } }
+          }
+        }
+      }
+
+      Column {
+        gap: 8; padding: 12; border: 1; borderColor: border
+        Text { text: "upload to github"; style: label; color: accent }
+        if st == null {
+          Text { text: "…"; style: small; color: muted }
+        } else if working != "" {
+          Busy { }
+        } else if !signedIn {
+          Text { text: "Sign in once; layouts go to a private repo on your account."; style: small; color: muted }
+          Button { text: "sign in with browser"; fill: width; color: accent
+            onTap: terminal("gh auth login -h github.com -p https -w && gh auth setup-git; echo; read -p 'done, press enter to close'", "GitHub sign-in") }
+          Input { placeholder: "…or paste a token (repo scope) and send"; clear: true
+            onSubmit: { working = "signing in"; res = run("printf '%s' ${sh(value)} | ~/.local/bin/owl-layout login; date +%s%N") } }
+        } else if !linked {
+          Text { text: "Signed in as ${st.user}. Name a repo: a new one is made private; on a new system give the one you saved to (owner/name)."; style: small; color: muted }
+          Input { text: repoName; placeholder: "omalauncher-layout"; onChange: repoName = value }
+          Button { text: "link repo"; fill: width; color: accent
+            onTap: { working = "linking"; res = run("~/.local/bin/owl-layout link ${sh(repoName)}; date +%s%N") } }
+        } else {
+          Text {
+            text: "${st.remote} · ${st.ahead == 0 ? "up to date" : st.ahead == 1 ? "1 save not uploaded" : "${st.ahead} saves not uploaded"}"
+            style: small; color: st.ahead > 0 ? orange : green; maxLines: 1
+          }
+          Button { text: "save & upload"; fill: width; color: accent
+            onTap: { working = "uploading"; res = run("~/.local/bin/owl-layout upload; date +%s%N") } }
+          if confirmGh {
+            Button { text: "tap again: replace layout with github's"; fill: width; color: red
+              onTap: { working = "restoring"; res = run("~/.local/bin/owl-layout restore; date +%s%N") } }
+          } else {
+            Button { text: "restore from github"; fill: width; onTap: confirmGh = true }
+          }
+          Text { text: "New system from github: gh auth login, then gh repo clone ${st.remote} and bash ${last(split(st.remote, "/"))}/install.sh"; style: small; color: muted }
+        }
+      }
+
+      Column {
+        gap: 8; padding: 12; border: 1; borderColor: border
+        Text { text: "installer script"; style: label; color: accent }
+        if hasSetup {
+          Text { text: "~/omalauncher-setup.sh · ${fmtBytes(st.setupSize)} · made ${fmtTime(st.setupTime, "d MMM HH:mm")}"; style: small }
+          Text { text: "On a new system run:"; style: small; color: muted }
+          Text { text: "bash omalauncher-setup.sh"; font: mono; style: small }
+          Row {
+            gap: 8
+            if st.setupSize < 500000 {
+              Button { text: "share script"; weight: 1; onTap: share(setupFile) }
+            }
+            Button { text: "copy command"; weight: 1; onTap: copy("bash omalauncher-setup.sh") }
+          }
+        } else {
+          Text { text: "Not made yet: tap make installer."; style: small; color: muted }
+        }
+      }
+
+      if len(st.changed ?? []) > 0 {
+        Column {
+          gap: 4; padding: 12; border: 1; borderColor: border
+          Text { text: "not saved yet"; style: label; color: orange }
+          for f in st.changed { Text { text: f; font: mono; style: small; maxLines: 1 } }
+        }
+      }
+
+      Column {
+        gap: 8; padding: 12; border: 1; borderColor: border
+        Text { text: "saved layouts (tap to restore)"; style: label; color: accent }
+        if len(st.commits ?? []) == 0 { Text { text: "none yet"; style: small; color: muted } }
+        for c, i in st.commits ?? [] key c.h {
+          Row {
+            onTap: { pick = pick == c.h ? "" : c.h; confirm = false }
+            Text { text: c.msg; weight: 1; maxLines: 1; color: pick == c.h ? accent : i == 0 ? foreground : muted }
+            Text { text: fmtTime(c.t, "d MMM HH:mm"); style: muted; width: 110; align: end }
+          }
+          if pick == c.h && working == "" {
+            if confirm {
+              Button { text: "tap again: replace current layout"; color: red; fill: width
+                onTap: { working = "restoring"; res = run("~/.local/bin/owl-layout use ${sh(c.h)}; date +%s%N") } }
+            } else {
+              Button { text: "restore this layout"; color: red; fill: width; onTap: confirm = true }
+            }
+          }
+        }
+      }
+    }
+  }
+}

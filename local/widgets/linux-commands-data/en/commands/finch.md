@@ -1,0 +1,85 @@
+# TAGLINE
+
+console-based multi-protocol chat client
+
+# TLDR
+
+**Launch** finch
+
+```finch```
+
+**Quit** finch
+
+```<Alt q>|<Ctrl c>```
+
+Show **actions** menu
+
+```<Alt a>```
+
+Jump to **n-th** window
+
+```<Alt [Number]>```
+
+**Close** current window
+
+```<Alt c>```
+
+Start **moving** a window
+
+```<Alt m>```
+
+Start **resizing** a window
+
+```<Alt r>```
+
+# SYNOPSIS
+
+**finch** [_options_]
+
+# DESCRIPTION
+
+**finch** is a console-based modular messaging client using the libpurple library (same as Pidgin). It supports multiple protocols including XMPP, IRC, and various proprietary services.
+
+Text-based alternative to the Pidgin GUI client.
+
+# PARAMETERS
+
+**-c, --config** _dir_
+> Use alternate configuration directory
+
+**-d, --debug**
+> Enable debug output
+
+**-v, --version**
+> Display version
+
+# CONFIGURATION
+
+**~/.purple/prefs.xml**
+> Libpurple preferences shared with Pidgin.
+
+**~/.purple/accounts.xml**
+> Account credentials and connection settings.
+
+**~/.gntrc**
+> GNT (finch) UI keybindings and window behavior.
+
+# CAVEATS
+
+Requires ncurses library. Uses same libpurple plugins as Pidgin. Account configuration shared with Pidgin if using same config directory.
+
+# INSTALL
+
+```apt: sudo apt install finch```
+
+```dnf: sudo dnf install finch```
+
+```apk: sudo apk add finch```
+
+```zypper: sudo zypper install finch```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[irssi](/man/irssi)(1), [weechat](/man/weechat)(1)

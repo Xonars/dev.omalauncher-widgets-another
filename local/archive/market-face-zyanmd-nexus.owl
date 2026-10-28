@@ -1,0 +1,462 @@
+face "nexus" {
+  page: 0
+
+  meta {
+    owl: 10
+    description: "An elegant, minimalist Arch Linux dashboard with precision typography, day progress, system vitals, online quotes, and app launcher"
+    version: "1.0"
+    license: "MIT"
+    category: "system"
+  }
+
+  requires { pacman: ["btop"] }
+
+  source now = clock every 1s
+  source dev = android.device
+  source sys = android.system every 5s
+  source bat = android.battery
+  source alarm = android.alarm
+  source n = android.notifications
+  source m = android.media
+  source modes = android.modes
+  source apps = android.apps
+  source pkgs = cmd("pacman -Qq | wc -l") every 30m
+  source wx = http("https://wttr.in/?format=j1") every 30m timeout 10s json
+  source q = http("https://dummyjson.com/quotes/random") every 1h timeout 10s json
+
+  let font = "https://raw.githubusercontent.com/google/fonts/main/ofl/jetbrainsmono/JetBrainsMono%5Bwght%5D.ttf"
+
+  let hour = num(fmtTime(now, "H"))
+  let minute = hour * 60 + num(fmtTime(now, "m"))
+  let host = lower(replace(trim(dev.model ?? "phone"), " ", "-"))
+  let kver = split(sys.kernel ?? "linux", "-")[0]
+
+  let cur = wx.current_condition[0]
+  let day = wx.weather[0]
+  let place = lower(wx.nearest_area[0].areaName[0].value ?? "local")
+
+  let playing = m != null && m.available != false && m.title != null
+  let allApps = values(groupBy((apps ?? []).sortBy(a => -a.score), a => a.name)).map(g => g[0])
+  let topApps = allApps.filter(a => !a.system || a.score > 0).take(8)
+
+  let memUsed = sys.memory.used ?? 0
+  let memTotal = sys.memory.total ?? 1
+  let memPct = round(memUsed / memTotal * 100)
+  let diskUsed = (sys.storage.total ?? 1) - (sys.storage.free ?? 0)
+  let diskTotal = sys.storage.total ?? 1
+  let diskPct = round(diskUsed / diskTotal * 100)
+
+  let cardBg = alpha(surface, 0.45)
+  let cardBorder = alpha(border, 0.4)
+  let wide = (tileWidth ?? 0) > (tileHeight ?? 1)
+
+  background: linear(0, 0, 0, 1, [alpha(background, 0.96), alpha(background, 0.88), alpha(background, 0.97)])
+  padding: 0
+
+  // 1. Top Terminal Status Rail
+  component StatusRail() {
+    Row {
+      align: center
+      fill: width
+      Row {
+        gap: 6
+        align: center
+        weight: 1
+        Text {
+          spans: [
+            {text: "archlinux", color: accent, fontWeight: 600},
+            {text: "@", color: muted},
+            {text: host, color: foreground},
+            {text: " ~$", color: accent}
+          ]
+          font: font
+          fontSize: 12
+          maxLines: 1
+        }
+      }
+      Row {
+        gap: 8
+        align: center
+        if alarm.set {
+          Text {
+            text: "alarm ${fmtTime(alarm.time, "HH:mm")}"
+            font: font
+            fontSize: 11
+            color: accent
+            onTap: androidApp(alarm.app)
+          }
+        }
+        Text {
+          text: bat.charging ? "bat: ${bat.level}% [chg]" : "bat: ${bat.level}%"
+          font: font
+          fontSize: 11
+          color: bat.level < 20 && !bat.charging ? red : bat.charging ? green : foreground
+        }
+      }
+    }
+  }
+
+  // 2. Hero Clock with Precision Day Progress Line
+  component HeroClock() {
+    Column {
+      gap: 0
+      fill: width
+
+      // Large Typographic Clock
+      Text {
+        spans: [fmtTime(now, "HH"), {text: ":", color: accent}, fmtTime(now, "mm")]
+        font: font
+        fontSize: wide ? 76 : 94
+        fontWeight: 200
+        letterSpacing: -4
+      }
+
+      Spacer { height: 2 }
+
+      // Date and Weather Info
+      Row {
+        align: center
+        fill: width
+        Text {
+          text: lower(fmtTime(now, "EEEE, d MMMM yyyy"))
+          font: font
+          fontSize: 13
+          fontWeight: 300
+          color: foreground
+          weight: 1
+        }
+        if cur {
+          Text {
+            text: "${cur.temp_C}°c ${lower(cur.weatherDesc[0].value)}"
+            font: font
+            fontSize: 13
+            fontWeight: 300
+            color: muted
+            onTap: url("https://wttr.in")
+          }
+        }
+      }
+
+      Spacer { height: 12 }
+
+      // Precision Day Timeline (Midnight to Midnight Hairline)
+      Canvas {
+        height: 6
+        fill: width
+        let x = 2 + minute / 1440 * (width - 4)
+        line(2, height / 2, width - 2, height / 2, stroke: alpha(border, 0.4), width: 1.5)
+        line(2, height / 2, x, height / 2, stroke: alpha(accent, 0.8), width: 1.5)
+        circle(x, height / 2, 2.5, fill: accent)
+      }
+    }
+  }
+
+  // 3. System Vitals & Fortune Card (Rice Aesthetic)
+  component SystemCard() {
+    Column {
+      gap: 10
+      fill: width
+      padding: [14, 12]
+      frost: 20
+      background: cardBg
+      border: 1
+      borderColor: cardBorder
+      radius: 8 * corners
+
+      // Card Header
+      Row {
+        align: center
+        fill: width
+        Text {
+          spans: [
+            {text: "sys", color: accent, bold: true},
+            {text: " // ", color: muted},
+            {text: "kernel ${kver}", color: muted}
+          ]
+          font: font
+          fontSize: 11
+          weight: 1
+          maxLines: 1
+        }
+        Text {
+          text: "up ${fmtDuration(sys.uptime ?? 0)} · ${pkgs ?? "…"} pkgs"
+          font: font
+          fontSize: 10
+          color: muted
+          maxLines: 1
+        }
+      }
+
+      // Memory & Disk Gauges
+      Row {
+        gap: 14
+        fill: width
+        Column {
+          gap: 3
+          weight: 1
+          Row {
+            align: center
+            Text { text: "ram"; font: font; fontSize: 10; color: muted; weight: 1 }
+            Text { text: "${fmtBytes(memUsed)} / ${fmtBytes(memTotal)}"; font: font; fontSize: 10; color: foreground }
+          }
+          Progress { value: memPct; color: memPct > 85 ? red : accent; track: alpha(foreground, 0.08); height: 3 }
+        }
+        Column {
+          gap: 3
+          weight: 1
+          Row {
+            align: center
+            Text { text: "disk"; font: font; fontSize: 10; color: muted; weight: 1 }
+            Text { text: "${fmtBytes(sys.storage.free ?? 0)} free"; font: font; fontSize: 10; color: foreground }
+          }
+          Progress { value: diskPct; color: diskPct > 90 ? red : green; track: alpha(foreground, 0.08); height: 3 }
+        }
+      }
+
+      // Notification Strip (if active)
+      if n.available && n.count > 0 {
+        Row {
+          gap: 8
+          align: center
+          fill: width
+          padding: [8, 6]
+          background: alpha(surface, 0.5)
+          radius: 4 * corners
+          onTap: notification("open", n.items[0].key)
+          Text { text: "notif"; font: font; fontSize: 10; color: accent; bold: true }
+          Text { text: "${n.items[0].app}: ${n.items[0].title}"; font: font; fontSize: 11; weight: 1; maxLines: 1 }
+          Text { text: fmtAgo(n.items[0].time, now); font: font; fontSize: 10; color: muted }
+        }
+      }
+
+      // Quote from internet
+      Column {
+        gap: 2
+        fill: width
+        onTap: { haptic(); refresh() }
+        Text {
+          text: q == null ? "loading..." : "“${q.quote}”"
+          font: font
+          fontSize: 11
+          fontWeight: 300
+          color: alpha(foreground, 0.9)
+          italic: true
+          maxLines: 2
+        }
+        if q != null && q.author != null && q.author != "" {
+          Text {
+            text: "— ${q.author}"
+            font: font
+            fontSize: 10
+            color: muted
+            align: end
+            maxLines: 1
+          }
+        }
+      }
+    }
+  }
+
+  // 4. Now Playing Bar (Active media only)
+  component NowPlaying() {
+    if playing {
+      Row {
+        gap: 12
+        align: center
+        fill: width
+        padding: [10, 8]
+        frost: 20
+        background: cardBg
+        border: 1
+        borderColor: cardBorder
+        radius: 8 * corners
+        onTap: media("open")
+
+        Box {
+          size: 36
+          radius: 4 * corners
+          clip: true
+          if m.art != null {
+            Image { src: m.art; fit: cover; fill: true }
+          } else {
+            Canvas { rect(0, 0, width, height, fill: accent) }
+          }
+        }
+
+        Column {
+          gap: 2
+          weight: 1
+          Text { text: m.title; font: font; fontSize: 12; bold: true; maxLines: 1 }
+          Text { text: m.artist ?? lower(m.app ?? "audio"); font: font; fontSize: 10; color: muted; maxLines: 1 }
+        }
+
+        Button {
+          text: m.playing == true ? "pause" : "play"
+          color: accent
+          onTap: media("toggle")
+        }
+      }
+    }
+  }
+
+  // 5. Quick Command Toolbar
+  component QuickBar() {
+    Row {
+      gap: 8
+      fill: width
+      Text {
+        text: modes.torch ? "$ torch [on]" : "$ torch"
+        font: font
+        fontSize: 11
+        color: modes.torch ? accent : foreground
+        padding: [10, 7]
+        background: modes.torch ? alpha(accent, 0.22) : cardBg
+        border: 1
+        borderColor: modes.torch ? accent : cardBorder
+        radius: 6 * corners
+        weight: 1
+        align: center
+        onTap: { haptic(); torch("toggle") }
+      }
+      Text {
+        text: "$ btop"
+        font: font
+        fontSize: 11
+        color: foreground
+        padding: [10, 7]
+        background: cardBg
+        border: 1
+        borderColor: cardBorder
+        radius: 6 * corners
+        weight: 1
+        align: center
+        onTap: terminal("btop", "btop")
+      }
+      Text {
+        text: "$ agent"
+        font: font
+        fontSize: 11
+        color: foreground
+        padding: [10, 7]
+        background: cardBg
+        border: 1
+        borderColor: cardBorder
+        radius: 6 * corners
+        weight: 1
+        align: center
+        onTap: ask("")
+      }
+      Text {
+        text: "$ style"
+        font: font
+        fontSize: 11
+        color: foreground
+        padding: [10, 7]
+        background: cardBg
+        border: 1
+        borderColor: cardBorder
+        radius: 6 * corners
+        weight: 1
+        align: center
+        onTap: launcher("style")
+      }
+    }
+  }
+
+  // 6. Favorites Grid & Terminal Dmenu Bar
+  component Apps() {
+    Column {
+      gap: 14
+      fill: width
+
+      Grid {
+        columns: 4
+        gap: 16
+        for a in topApps key a.key {
+          Column {
+            gap: 6
+            align: center
+            onTap: androidApp(a.key)
+            Image { src: a.icon; size: 48 }
+            Text { text: lower(a.name); font: font; fontSize: 11; fontWeight: 300; color: foreground; align: center; maxLines: 1 }
+          }
+        }
+      }
+
+      // Rofi/Dmenu Prompt Bar
+      Row {
+        align: center
+        fill: width
+        padding: [12, 9]
+        background: cardBg
+        border: 1
+        borderColor: cardBorder
+        radius: 6 * corners
+        onTap: launcher("drawer")
+
+        Text {
+          spans: [
+            {text: "❯ ", color: accent, bold: true},
+            {text: "rofi -show drun", color: muted},
+            {text: " ▋", color: accent}
+          ]
+          font: font
+          fontSize: 12
+          weight: 1
+        }
+      }
+    }
+  }
+
+  // Main Page Layout
+  Box {
+    fill: true
+
+    if wide {
+      Row {
+        gap: 32
+        fill: true
+        padding: [32, 24]
+
+        Column {
+          gap: 14
+          weight: 1
+          fill: height
+          StatusRail { }
+          HeroClock { }
+          SystemCard { }
+          NowPlaying { }
+          Spacer { weight: 1 }
+          Spacer { height: screenInset }
+        }
+
+        Column {
+          gap: 14
+          weight: 1
+          fill: height
+          QuickBar { }
+          Spacer { weight: 1 }
+          Apps { }
+          Spacer { height: screenInset }
+        }
+      }
+    } else {
+      Column {
+        gap: 16
+        fill: true
+        padding: [20, 16]
+
+        StatusRail { }
+        HeroClock { }
+        SystemCard { }
+        NowPlaying { }
+        QuickBar { }
+        Spacer { weight: 1 }
+        Apps { }
+
+        // Clearance for navigation bar
+        Spacer { height: screenInset }
+      }
+    }
+  }
+}

@@ -1,0 +1,532 @@
+app "OWL справочник" {
+  meta { owl: 11; description: "Русский справочник OWL: основы, примеры, шаблоны, версии и советы"; version: "1.5"; license: "MIT"; category: "dev" }
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M24 11C18 6 10 6 4 8v31c7-2 14-1 20 4 6-5 13-6 20-4V8c-6-2-14-2-20 3v32"/><path d="m15 18-5 6 5 6m18-12 5 6-5 6"/></svg>"""
+  state tab = "Основы" persist
+  state query = ""
+  state selected = ""
+  requires { pacman: [] }
+  source previewNow = clock every 1s
+  source previewBat = android.battery
+  source previewDevice = android.device
+  source previewRecent = android.recent
+  state previewRoll = 1
+  state previewBest = 0
+  state previewEnd = 0
+  state previewScreen = false
+  state copied = false
+  state saved = [] persist
+  state onlySaved = false
+  title: selected == "" ? "OWL справочник" : article.title
+  back: selected != ""
+  onBack: { selected = ""; copied = false; previewScreen = false }
+  let articles = [
+  {
+    "id": "0",
+    "cat": "Основы",
+    "title": "Первый виджет",
+    "desc": "Файл, сетка и живая разметка",
+    "body": "Сохраните файл с расширением .owl в папке widgets. Он появится автоматически. Виджет занимает ячейки сетки из 6 колонок. size задаёт желаемый размер, minSize — минимальный. Пользователь может перемещать и менять размер плитки.\n\nСвойства разделяются переносом строки или точкой с запятой. Когда источник меняется, обновляются читающие его элементы.",
+    "code": "widget \"hello\" {\n  size: 3x2\n  minSize: 2x2\n  Text { text: \"Привет, OWL!\"; style: title }\n}"
+  },
+  {
+    "id": "1",
+    "cat": "Основы",
+    "title": "Приложения и экраны",
+    "desc": "app, screen, Back и иконки",
+    "body": "app открывается из списка приложений на весь экран. Нужен meta { owl: 8 } или выше. Верхние узлы — содержимое приложения; size, page и screen здесь не используются. Задайте icon: SVG до 16 КБ или встроенное изображение. currentColor следует акценту темы.\n\nВиджет может открыть свой screen через screen(). Общие источники и состояния доступны и плитке, и экрану. close() закрывает окно. В приложениях back и onBack управляют возвратом из вложенной страницы. Для обычного содержимого используйте padding: [12, 0].",
+    "code": ""
+  },
+  {
+    "id": "2",
+    "cat": "Основы",
+    "title": "Источники данных",
+    "desc": "clock, http, file, cmd и Android",
+    "body": "source получает данные, let вычисляет производное значение. clock возвращает Unix-время в секундах. http делает GET с Android, file следит за локальным файлом. cmd запускает bash, stream читает длительный процесс построчно.\n\nДобавьте json для разбора JSON, status для результата {out, err, code, ok}, timeout для ограничения времени. По умолчанию cmd обновляется раз в 60 секунд. Предпочитайте http вместо curl и file вместо опроса cat. Источники приложения работают, пока оно открыто.",
+    "code": "source now = clock every 1s\nsource battery = android.battery\nlet time = fmtTime(now, \"HH:mm\")\nText { text: time; style: huge }\nText { text: str(battery.level) + \"%\" }"
+  },
+  {
+    "id": "3",
+    "cat": "Основы",
+    "title": "Состояния и события",
+    "desc": "state, persist и обработчики",
+    "body": "state хранит изменяемое значение, let — вычисляемое. persist сохраняет состояние между перезапусками по имени файла. Сохраняйте обычные данные: строки, числа, списки и карты.\n\nonTap получает x и y, onDrag — dx, dy, x, y. Input и Slider передают value в onChange. Обработчик может присваивать состояния и запускать несколько действий. Начиная с OWL 9 внутри обработчиков доступны if / else if / else и локальный let. Инструкции выполняются по порядку, присваивания state действуют сразу. Локальный let виден далее в своём блоке и вложенных блоках; его имя не должно совпадать с именами state, source или let.",
+    "code": "state count = 0 persist\nButton {\n  text: \"Счёт: \" + str(count)\n  onTap: { count = count + 1; haptic() }\n}"
+  },
+  {
+    "id": "4",
+    "cat": "Основы",
+    "title": "Выражения и списки",
+    "desc": "null, функции и преобразования",
+    "body": "Поддерживаются числа, строки, true/false, null, списки и карты. Отсутствующий путь даёт null. Оператор ?? задаёт замену для null, а условие ? a : b выбирает значение. Числовой текст участвует в сравнении как число.\n\nmap, filter, sortBy, take, find, sum и avg работают со списками. Методы — те же функции: xs.map(f) равно map(xs, f). Функции sh и enc защищают значения в командах и URL. Списки ограничены 1000 элементами.",
+    "code": "let jobs = [{name: \"A\", load: 20}, {name: \"B\", load: 80}]\nfor j in jobs.filter(x => x.load > 50) key j.name {\n  Text { text: j.name }\n}"
+  },
+  {
+    "id": "5",
+    "cat": "Основы",
+    "title": "Разметка и оформление",
+    "desc": "Column, Row, размеры и тема",
+    "body": "Column располагает элементы вертикально, Row — горизонтально. Grid задаёт колонки, Flow переносит строки, Box накладывает дочерние элементы. weight: 1 заполняет остаток места; fill: width растягивает по ширине. Для длинных страниц используйте Column { scroll: true }.\n\nС OWL 10 Text в Row и Flow занимает ширину текста; weight: 1 отдаёт ему остаток места. В OWL 1–9 соседним подписям задавайте width, чтобы они не вытеснили основной текст. Используйте цвета темы accent, foreground, muted, surface. Радиус 8 * corners учитывает настройки углов. padding: [h, v] задаёт горизонтальные и вертикальные отступы.",
+    "code": ""
+  },
+  {
+    "id": "6",
+    "cat": "Основы",
+    "title": "Узлы: краткая памятка",
+    "desc": "Текст, ввод, графики и изображения",
+    "body": "Text: text, style, font, fontSize, maxLines. Button: text и onTap. Input: placeholder, onChange, onSubmit, clear, focus. Slider: value, min, max, step, live и onChange.\n\nProgress: value и max (100). Ring: value и max (1). Sparkline: values, min, max и area. Image: src и fit: contain/cover/fill. Canvas рисует фигуры, Shader выполняет AGSL на Android 13+. Terminal встраивает Linux-терминал.\n\nОбщие свойства: width, height, weight, fill, padding, background, border, borderColor, radius, opacity, visible и обработчики.",
+    "code": ""
+  },
+  {
+    "id": "7",
+    "cat": "Примеры",
+    "title": "Часы и батарея",
+    "desc": "Источники Android без Linux",
+    "body": "Полностью автономный виджет. Уровень батареи обновляется автоматически, время — раз в секунду. Ни пакеты, ни shell не нужны.",
+    "code": "widget \"часы\" {\n  size: 3x3\n  source now = clock every 1s\n  source bat = android.battery\n  Column {\n    Text { text: fmtTime(now, \"HH:mm\"); style: huge }\n    Text { text: fmtTime(now, \"EEE, dd MMM\"); color: mix(muted, foreground, 0.45) }\n    Progress { value: bat.level }\n    Text { text: bat.charging ? \"Заряжается\" : str(bat.level) + \"%\" }\n  }\n}"
+  },
+  {
+    "id": "8",
+    "cat": "Примеры",
+    "title": "Таймер фокуса",
+    "desc": "Абсолютное время и at",
+    "body": "Сохраняйте время окончания, а не число оставшихся секунд. at работает и вне домашней страницы; после перезапуска просроченный триггер сработает при запуске. Во время сна телефона возможна задержка до пробуждения.",
+    "code": "widget \"фокус\" {\n  meta { owl: 4 }\n  size: 3x3\n  source now = clock every 1s\n  state endsAt = 0 persist\n  at endsAt { notify(\"Фокус\", \"Время вышло\"); endsAt = 0 }\n  Column {\n    Text { text: endsAt > now ? fmtDuration(endsAt - now) : \"Готовы?\"; style: title }\n    Button { text: \"25 минут\"; onTap: endsAt = now + 25 * 60 }\n    Button { text: \"Сброс\"; onTap: endsAt = 0 }\n  }\n}"
+  },
+  {
+    "id": "9",
+    "cat": "Примеры",
+    "title": "Рисование в Canvas",
+    "desc": "Фигуры и координаты в dp",
+    "body": "Canvas получает width, height и time. Углы отсчитываются по часовой стрелке от 12 часов. Чтение time включает покадровую анимацию, пока узел виден. Если анимация не нужна, не используйте time.",
+    "code": "widget \"кольцо\" {\n  size: 3x3\n  Canvas {\n    let r = min(width, height) / 2 - 12\n    circle(width / 2, height / 2, r, stroke: border, width: 6)\n    arc(width / 2, height / 2, r, 0, 270, stroke: accent, width: 6, cap: round)\n    text(\"75%\", width / 2, height / 2, size: 24, align: center)\n  }\n}"
+  },
+  {
+    "id": "10",
+    "cat": "Шаблоны",
+    "title": "Приложение с заметкой",
+    "desc": "Готовый файл с иконкой",
+    "body": "Скопируйте блок в отдельный .owl. Заметка сохраняется после нажатия кнопки отправки на клавиатуре. Иконка — простой контур, адаптирующийся к теме.",
+    "code": "app \"заметка\" {\n  meta { owl: 8 }\n  icon: '<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 48 48\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"3.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M10 5h20l8 8v30H10zM29 5v10h9M17 24h14M17 32h10\"/></svg>'\n  state note = \"\" persist\n  Column {\n    padding: [12, 0]\n    gap: 12\n    Input { placeholder: \"Запишите мысль\"; text: note; onSubmit: note = value }\n    Text { text: note }\n  }\n}"
+  },
+  {
+    "id": "11",
+    "cat": "Шаблоны",
+    "title": "Виджет с большим экраном",
+    "desc": "Общая модель данных для двух видов",
+    "body": "Нажатие плитки открывает экран. Данные и состояние принадлежат одному файлу. В screen доступна полная область и до 1000 узлов.",
+    "code": "widget \"батарея\" {\n  meta { owl: 5 }\n  size: 2x2\n  source bat = android.battery\n  onTap: screen()\n  Text { text: str(bat.level) + \"%\"; style: title }\n  screen {\n    title: \"Батарея\"\n    Column {\n      scroll: true\n      Text { text: \"Заряд: \" + str(bat.level) + \"%\" }\n      Text { text: \"Температура: \" + str(bat.temp) + \" °C\" }\n      Text { text: bat.charging ? \"Заряжается\" : \"От батареи\" }\n      Button { text: \"Закрыть\"; onTap: close() }\n    }\n  }\n}"
+  },
+  {
+    "id": "12",
+    "cat": "Шаблоны",
+    "title": "Локальные данные JSON",
+    "desc": "file вместо периодического cat",
+    "body": "Файл читает launcher при каждом изменении. Отсутствующий файл даёт пустую строку. Размер ограничен 1 МБ. Создавайте JSON любым внешним инструментом; шаблон ожидает поле message.",
+    "code": "widget \"статус\" {\n  meta { owl: 4 }\n  size: 3x2\n  source data = file(\"~/.cache/owl-status.json\") json\n  Text { text: data.message ?? \"Нет данных\" }\n}"
+  },
+  {
+    "id": "21",
+    "cat": "Версии",
+    "title": "OWL 9",
+    "desc": "Даты, коллекции, случайность и обработчики",
+    "body": "Возможности OWL 9 остаются доступны в OWL 14. Объявляйте meta { owl: 9 } для новых функций.\n\nДаты и числа: parseTime, fmtAgo, fmtNum; fmtTime получил часовой пояс и язык. Коллекции: set, remove, merge, reduce, scan, groupBy; сериализация toJson. Также появились capitalize, asin, acos и глубина flatten.\n\nСлучайность: random, shuffle, hash. Обработчики поддерживают if и локальный let; on x first обрабатывает и первое значение источника. Подробные примеры ищите по названиям функций.",
+    "code": "meta { owl: 9 }"
+  },
+  {
+    "id": "13",
+    "cat": "Версии",
+    "title": "OWL 8",
+    "desc": "Приложения, сеть и мультимедиа",
+    "body": "app-файлы с иконкой и отдельным окном; android.apps со списком приложений, профилем и историей запусков; enc для значений в URL; post для HTTP POST; изображения с HTTPS; sound для коротких звуков; screenInset для нижнего системного отступа.\n\nedge: true позволяет содержимому приложения идти под панель навигации. Держите кнопки выше screenInset, а прокручиваемый список завершайте Spacer соответствующей высоты. Эти возможности требуют минимум OWL 8; текущий локальный README описывает OWL 14.",
+    "code": "meta { owl: 8 }"
+  },
+  {
+    "id": "14",
+    "cat": "Версии",
+    "title": "OWL 7",
+    "desc": "Будильник, режимы и действия",
+    "body": "android.alarm сообщает следующий будильник; android.modes — DND, энергосбережение, звонок и фонарик. Появились torch, share, haptic. Иконки Android поддерживают work и clone профили.\n\nЭто перечень возможностей из README, а не календарный журнал релизов. Для них объявляйте meta { owl: 7 } или более новую версию.",
+    "code": ""
+  },
+  {
+    "id": "15",
+    "cat": "Версии",
+    "title": "OWL 4–6",
+    "desc": "Экраны, ввод, файлы и безопасные команды",
+    "body": "OWL 6: Input.focus, sh() для shell-значений и corners для формы углов.\n\nOWL 5: screen, screen(), close(), screenWidth и screenHeight; optional-источники и linux для работы с Linux и без него.\n\nOWL 4: триггеры every/at/when/on, file, Slider, Input, android.notifications, android.volume, volume и notification.\n\nОбъявляйте минимальную версию, покрывающую все используемые возможности.",
+    "code": ""
+  },
+  {
+    "id": "16",
+    "cat": "Версии",
+    "title": "OWL 1–3",
+    "desc": "Основы, терминал и пиксельная графика",
+    "body": "OWL 1 — версия по умолчанию: базовая декларативная модель, разметка и источники. OWL 2 добавляет Terminal. OWL 3 — sprite для пиксельных рисунков в Canvas.\n\nЕсли новая функция используется без подходящего meta.owl, проверка сообщит об ошибке. Старый launcher с корректным meta предложит обновиться.",
+    "code": ""
+  },
+  {
+    "id": "17",
+    "cat": "Советы",
+    "title": "Проверка и зависимости",
+    "desc": "owl-check, pacman и предпросмотр",
+    "body": "После сохранения запустите owl-check имя.owl. Он ждёт загрузки сохранённой версии, печатает ошибки и путь к PNG с живыми данными. Откройте изображение: проверьте переносы, размеры, прокрутку и кнопки. Для виджета с экраном будет два PNG, для приложения — полный вид.\n\nВсе нужные командам пакеты перечисляйте в requires { pacman: [\"jq\"] } и устанавливайте pacman -S --needed jq. Имя пакета может отличаться от команды: dig входит в bind. Базовые coreutils, grep, sed и bash объявлять необязательно. Примеры в справочнике копируются в буфер и не исполняются.\n\nСам справочник не исполняет shell-команды: примеры показываются как текст и копируются в буфер. Поэтому его requires.pacman пуст; пакеты из примеров нужны только при запуске соответствующих файлов.",
+    "code": "owl-check my-app.owl\npacman -S --needed jq"
+  },
+  {
+    "id": "18",
+    "cat": "Советы",
+    "title": "Безопасные команды и URL",
+    "desc": "sh(), enc() и фиксированный сервер",
+    "body": "Значение в shell-команде передавайте через sh(), отдельно от любых кавычек. Эта функция заключает его в безопасные одинарные кавычки. Не вставляйте пользовательский текст прямо в shell.\n\nВ URL пропускайте переменные части через enc(), сохраняя схему и сервер фиксированными. Для пути из нескольких частей кодируйте каждую часть отдельно. В http status поле code — HTTP-статус, ok означает 2xx; в cmd — код завершения. Не храните токены в публикуемых файлах.",
+    "code": ""
+  },
+  {
+    "id": "19",
+    "cat": "Советы",
+    "title": "Триггеры, действия и анимации",
+    "desc": "Что запускается без нажатия",
+    "body": "every выполняется периодически на активной странице; at — при достижении Unix-времени; when — при переходе условия в true, включая старт; on — при изменении значения, кроме первого и null. В OWL 9 форма on x first запускается также для первого значения, с old = null.\n\nДействия: copy, notify, share, url, androidApp, refresh, haptic, media и volume. run выполняет shell в фоне, terminal открывает терминал, app запускает Linux GUI. После действия источники обновляются.\n\nanimate value: spring() или tween(300ms, \"ease\") плавно меняет свойство. Анимация Canvas и Shader через time работает только на экране.",
+    "code": ""
+  },
+  {
+    "id": "20",
+    "cat": "Советы",
+    "title": "Ограничения и публикация",
+    "desc": "Производительность и магазин",
+    "body": "Плитка: до 500 узлов; экран или приложение: до 1000. До 2000 вызовов рисования за кадр, 32 изображений и 128 SVG одновременно. Максимум 4 различных stream. HTTP-ответ и локальный файл ограничены 1 МБ.\n\nДля магазина нужны meta.description (10–200 символов), version, license и желательно category; requires с пакетами; безопасные значения в командах. Уберите личные пути и секреты. Повышайте version при обновлении.\n\nИспользуйте компоненты для повторяющейся разметки, ключи в списках — для сохранения строк при перестановке, а цвета темы — для совместимости с оформлением.",
+    "code": ""
+  },
+  {
+    "id": "22",
+    "cat": "Основы",
+    "title": "Даты и числа в OWL 9",
+    "desc": "parseTime, fmtTime, fmtAgo и fmtNum",
+    "body": "parseTime читает ISO 8601, даты RSS/HTTP и iCalendar и возвращает Unix-секунды. Неверная дата даёт null. Для своего формата передайте шаблон вторым аргументом; названия месяцев и дней читаются на английском. Без даты используется сегодня, без времени — полночь.\n\nЧасовой пояс по умолчанию телефонный. parseTime(s, pattern, zone) позволяет выбрать другой. fmtTime(t, pattern, zone, language) форматирует дату с нужным поясом и языком; null оставляет настройку телефона.\n\nfmtAgo(t, now) возвращает короткое относительное время: 5m, 3h, in 10m. now берите из clock. fmtNum группирует тысячи; вторым аргументом задаются цифры после точки либо карта {compact: true, digits: 1, sign: true}.",
+    "code": "source now = clock every 1m\nlet stamp = parseTime(\"2026-10-17T10:04:00Z\")\nText { text: fmtTime(stamp, \"dd MMM HH:mm\", \"UTC\", \"ru\") }\nText { text: fmtAgo(stamp, now) }\nText { text: fmtNum(12345, {compact: true}) }"
+  },
+  {
+    "id": "23",
+    "cat": "Основы",
+    "title": "Изменение коллекций",
+    "desc": "set, remove, merge, reduce, scan и groupBy",
+    "body": "Функции возвращают новую коллекцию: сохраните результат в state. set(list, i, value) заменяет элемент, отрицательный индекс считается с конца; индекс вне списка ничего не меняет. set(map, key, value) задаёт поле. remove удаляет элемент или поле.\n\nmerge объединяет карты, более поздние значения побеждают. reduce(list, (acc, x, i) => ..., start) сворачивает список в значение; scan возвращает промежуточные результаты. groupBy(list, x => x.key) группирует элементы по ключу, сохраняя порядок поступления.\n\ntoJson создаёт JSON-текст; parseJson читает его. flatten(list, depth) раскрывает вложенные списки на заданную глубину (по умолчанию 1). capitalize меняет регистр начала текста, asin и acos вычисляют обратные тригонометрические функции.",
+    "code": "state items = [{name: \"Дело\", done: false}] persist\nButton {\n  text: \"Отметить первое\"\n  onTap: items = set(items, 0, merge(items[0], {done: true}))\n}\nText { text: toJson(items) }\nText { text: str(reduce([1, 2, 3], (acc, x, i) => acc + x, 0)) }"
+  },
+  {
+    "id": "24",
+    "cat": "Примеры",
+    "title": "Кубик: random и обработчики",
+    "desc": "if, let, shuffle и hash",
+    "body": "random() возвращает число от 0 до 1, random(n) — целый индекс от 0 до n − 1, random(a, b) — целое между a и b включительно. shuffle(list) перемешивает список. Эти случайные функции разрешены в обработчиках, триггерах и начальном значении state, но не в реактивном let или свойстве.\n\nhash(...) и shuffle(list, seed) детерминированы и могут использоваться в любом выражении. Локальный let в обработчике фиксирует значение до следующих изменений состояния.",
+    "code": "widget \"Кубик\" {\n  meta { owl: 9 }\n  size: 3x2\n  state roll = random(1, 6)\n  state best = 0\n  Button {\n    text: str(roll) + \" · рекорд \" + str(best)\n    onTap: {\n      let nextRoll = random(1, 6)\n      roll = nextRoll\n      if nextRoll > best { best = nextRoll; haptic() }\n    }\n  }\n}"
+  },
+  {
+    "id": "25",
+    "cat": "Шаблоны",
+    "title": "Обработка первого значения",
+    "desc": "on … first и сохранение JSON",
+    "body": "Обычный on x реагирует на изменения после первого значения; null при загрузке не считается изменением. В OWL 9 on x first запускается и для первого значения, old при этом равен null. Это удобно для сохранения первого результата источника.\n\nПример запоминает полученную модель телефона в persist. Для настоящего файла JSON можно передать toJson в команду, защитив shell-аргумент через sh.",
+    "code": "widget \"Модель телефона\" {\n  meta { owl: 9 }\n  size: 3x2\n  state cached = {} persist\n  source device = android.device\n  on device first { cached = device }\n  Text { text: cached.model ?? \"Загрузка…\" }\n}"
+  },
+  {
+    "id": "26",
+    "cat": "Версии",
+    "title": "OWL 10",
+    "desc": "Типографика, градиенты, стекло и агенты",
+    "body": "OWL 10 добавляет face — домашнюю страницу, onLongPress, Popup, Input.underline, spans, fontWeight, letterSpacing, свои шрифты, градиенты и frost. Text в Row и Flow занимает ширину текста.\n\nТакже доступны android.agents, android.recent, open и ask. Для этих возможностей достаточно meta { owl: 10 }.",
+    "code": "meta { owl: 10 }"
+  },
+  {
+    "id": "27",
+    "cat": "Версии",
+    "title": "OWL 11",
+    "desc": "Панели, список приложений и ленивые списки",
+    "body": "OWL 11 добавляет panel, android.drawer, appAction, workApps, shortcuts, rank и strongMatch, chunk, lazy и reverse у Column и Grid.\n\nТакже появились Image.label, Text.minLines и statusBar у приложения. Column внутри Row занимает ширину содержимого. Панель снизу получает query, enter, onSubmit и onKey.",
+    "code": "meta { owl: 11 }"
+  },
+  {
+    "id": "28",
+    "cat": "Основы",
+    "title": "Домашние страницы: face",
+    "desc": "Размещение, системные панели и размеры",
+    "body": "face — целая домашняя страница без size и minSize; требуется OWL 10. page: 0 размещает её слева от страницы 1, −1 и −2 — ещё левее. Свободную страницу справа тоже можно занять face. Перемещение — в settings › pages.\n\nПо умолчанию содержимое обходит строку состояния и вырез камеры. statusBar: false скрывает строку состояния. С edge: true (OWL 14) содержимое идёт под верхнюю панель и боковые системные области; screenTop, screenLeft и screenRight задают безопасные отступы. edge задаётся постоянным true или false.\n\nface всегда идёт под нижнюю навигацию. Spacer высотой screenInset поднимает последний элемент над ней, а при вводе — над клавиатурой. cols и rows описывают сетку, tileWidth и tileHeight — размер страницы в dp. Для планшета и складного телефона учитывайте горизонтальную ориентацию.\n\nФон прозрачен: видны обои. background: alpha(background, tileOpacity) и frost: tileFrost повторяют оформление плиток (OWL 13).",
+    "code": ""
+  },
+  {
+    "id": "29",
+    "cat": "Шаблоны",
+    "title": "Стартовая страница",
+    "desc": "Часы на отдельной домашней странице",
+    "body": "Сохраните код в отдельный .owl: новая страница появится слева от первой страницы плиток. Часы работают без Linux. Нижний Spacer учитывает навигационную панель.",
+    "code": "face \"Мой день\" {\n  meta { owl: 11 }\n  source now = clock every 1m\n  background: linear(0, 0, 0, 1, [alpha(background, 0.85), alpha(background, 0.4)])\n  Column {\n    padding: 24\n    Spacer { weight: 1 }\n    Text { text: fmtTime(now, \"HH:mm\"); fontSize: 72; fontWeight: 200 }\n    Text { text: fmtTime(now, \"EEEE, d MMMM\", null, \"ru\") }\n    Spacer { weight: 1 }\n    Spacer { height: screenInset }\n  }\n}"
+  },
+  {
+    "id": "30",
+    "cat": "Основы",
+    "title": "Текст по частям и свои шрифты",
+    "desc": "spans, fontWeight, letterSpacing и TTF/OTF",
+    "body": "spans заменяет text: список содержит строки и карты с text и собственными color, bold, italic, fontSize, fontWeight, letterSpacing или font. В карте имя встроенного шрифта — строка: font: \"serif\". Пробелы по краям частей сохраняются.\n\nfontWeight задаётся от 100 до 900, letterSpacing — в sp и может быть отрицательным. font принимает встроенные mono/sans/serif/icon, asset со шрифтом, HTTPS-адрес или путь к TTF/OTF. Локальный файл требует Linux. WOFF и WOFF2 не поддерживаются. Пока шрифт загружается, виден шрифт launcher.\n\nДопускается до 8 шрифтов на файл и до 8 МБ на шрифт. Встраивание шрифта увеличивает .owl и может сделать его слишком большим для QR-кода. Учитывайте лицензию.",
+    "code": "widget \"Типографика\" {\n  meta { owl: 11 }\n  size: 3x2\n  Text {\n    spans: [\"OWL \", {text: \"11\", color: accent, bold: true}]\n    fontSize: 32\n    fontWeight: 300\n    letterSpacing: -0.5\n  }\n}"
+  },
+  {
+    "id": "31",
+    "cat": "Основы",
+    "title": "Градиенты и матовое стекло",
+    "desc": "linear, radial и frost",
+    "body": "В background координаты linear и radial — доли размера узла от 0 до 1; радиус radial — доля большей стороны. Цвета распределяются равномерно. В Canvas координаты по-прежнему задаются в dp. Анимируемый background должен оставаться цветом.\n\nfrost: 24 размывает обои за узлом примерно на 24 dp, внутри radius. Полупрозрачный background поверх размытия тонирует стекло. Размываются только обои launcher, а не соседние узлы или фон страницы.\n\nВ приложении, экране виджета и предпросмотре owl-check обоев за узлом нет: виден только background. Подбирайте фон, читаемый и без размытия.",
+    "code": "face \"Стекло\" {\n  meta { owl: 11 }\n  Column {\n    padding: 16\n    frost: 24\n    background: alpha(background, 0.6)\n    radius: 18 * corners\n    Text { text: \"Моя страница\"; style: title }\n  }\n}"
+  },
+  {
+    "id": "32",
+    "cat": "Примеры",
+    "title": "Агенты и недавние приложения",
+    "desc": "android.agents, android.recent, open и ask",
+    "body": "android.agents возвращает {default, installed}. У агента есть bin, name, description, command, key и icon; default равен null, если агентов нет. open(key) открывает агента без запроса.\n\nask(text) открывает терминал с ответом агента по умолчанию; ask(text, \"codex\") выбирает установленного агента. Если агентов нет, открываются их настройки. Проверяющий магазина видит передаваемый запрос.\n\nandroid.recent — список {key, kind, name, icon, score, last}. kind: android/linux/owl/shortcut. open(key) запускает выбранное приложение и учитывает запуск в истории. Список перестраивается, когда домашний экран скрыт, чтобы элементы не двигались под пальцем.",
+    "code": "widget \"Недавние\" {\n  meta { owl: 11 }\n  size: 6x3\n  source recent = android.recent\n  Column {\n    for item in take(recent, 4) key item.key {\n      Button { text: item.name; onTap: open(item.key) }\n    }\n    Button { text: \"Спросить агента\"; onTap: ask(\"Покажи состояние системы\") }\n  }\n}"
+  },
+  {
+    "id": "33",
+    "cat": "Советы",
+    "title": "Управление из скриптов",
+    "desc": "owl-send set и refresh",
+    "body": "Внешний скрипт, cron или hook может изменить state работающего виджета. Значение, которое разбирается как JSON, передаётся как JSON; иначе как текст. Для чтения значения из stdin укажите минус.\n\nИзменение действует как присваивание в обработчике: обновляет зависимые элементы и запускает триггеры. Команда ждёт ответа launcher и возвращает код 1, если виджет не работает или состояния нет. Для данных, уже записываемых скриптом в файл, удобнее source file: он реагирует на изменение сразу.",
+    "code": "owl-send build.owl set status passing\nowl-send build.owl set info - < info.json\nowl-send build.owl refresh"
+  },
+  {
+    "id": "34",
+    "cat": "Версии",
+    "title": "OWL 12",
+    "desc": "Клавиши, секреты и системные отступы",
+    "body": "OWL 12 добавляет screenTop для приложения, gapsIn, gapsOut и borderWidth для оформления под настройки пользователя.\n\nДля клавиатуры: keybar, pressKey, typeText, latch, android.modifiers, onPress, onRelease и repeats. Для запросов и секретов: post с method, toBase64, fromBase64, state secret и Input.password.\n\nОтступы screenTop, screenLeft и screenRight в face с edge: true требуют OWL 14.",
+    "code": "meta { owl: 12 }"
+  },
+  {
+    "id": "35",
+    "cat": "Версии",
+    "title": "OWL 13",
+    "desc": "Системные действия, сеть и жесты",
+    "body": "OWL 13 добавляет settings для системных панелей, dnd, яркость фонарика torch(level), выбор потока volume и сведения об аудиовыходе. android.modes получил радиомодули, геолокацию, поворот, тёмную тему, яркость, dndAllows и torchLevel.\n\nНовые источники: android.network и android.sim. Уведомления поддерживают clear, action, reply, snooze, snoozeAll, unsnooze и unsnoozeAll. Для жестов появились drag, onDragEnd и animate offset; для оформления — tileOpacity и tileFrost. У панели появилось opacity.\n\nДля регулировки фонарика через Slider явно указывайте owl: 13: проверка не может отличить переменную яркость от обычного включения.",
+    "code": "meta { owl: 13 }"
+  },
+  {
+    "id": "36",
+    "cat": "Основы",
+    "title": "Панели и поиск приложений",
+    "desc": "panel, android.drawer, rank и lazy",
+    "body": "panel — отдельный файл, открываемый жестом. Панели назначаются в настройках gestures; drawer.owl — список приложений.\n\nПанель снизу получает query из строки ввода и onSubmit с value. rank(d.apps, query) ранжирует приложения; strongMatch помогает выбрать между запуском и вопросом агенту. Для длинных списков используйте lazy: true. Панель сверху не получает ввод строки.",
+    "code": "panel \"Приложения\" {\n  meta { owl: 11 }\n  source d = android.drawer\n  Grid {\n    columns: 4\n    lazy: true\n    weight: 1\n    for a in rank(d.apps, query) key a.key {\n      Button { text: a.name; onTap: open(a.key) }\n    }\n  }\n}"
+  },
+  {
+    "id": "37",
+    "cat": "Шаблоны",
+    "title": "Дополнительные клавиши",
+    "desc": "keybar, onPress и pressKey",
+    "body": "keybar.owl задаёт полосу над экранной клавиатурой. Клавиши не забирают фокус. onPress срабатывает при нажатии; repeats повторяет удерживаемую стрелку. latch удерживает модификатор, typeText вводит текст в Linux-окно.",
+    "code": "keybar \"Клавиши\" {\n  meta { owl: 12 }\n  Row {\n    Button { text: \"Esc\"; onPress: pressKey(\"esc\") }\n    Button { text: \"↑\"; repeats: true; onPress: pressKey(\"up\") }\n    Button { text: \"Ctrl\"; onTap: latch(\"ctrl\") }\n  }\n}"
+  },
+  {
+    "id": "38",
+    "cat": "Советы",
+    "title": "Токены и пароли",
+    "desc": "secret, password и HTTP method",
+    "body": "Храните токены в state token = null secret: они сохраняются на телефоне зашифрованно отдельно от persist. Секрет разрешён в заголовках http/post, теле post и в URL строго через enc(token). Сервер должен быть записан явно и использовать HTTPS. Предпочитайте заголовок: URL может попасть в журналы сервера.\n\nСекрет нельзя выводить, копировать, передавать в shell, сохранять в let или другое state, отслеживать триггером. Можно проверить наличие через token == null, token != null или token != \"\". Input с password: true скрывает ввод; token = null выполняет выход. owl-send не может установить секрет.\n\nДо ввода токена приостанавливайте http с помощью null URL. post поддерживает фиксированный method: \"PUT\", \"PATCH\" или \"DELETE\" (OWL 12). Base64 — кодирование, а не шифрование.",
+    "code": "state token = null secret\nInput { password: true; placeholder: \"Токен\"; onSubmit: token = value }"
+  },
+  {
+    "id": "39",
+    "cat": "Основы",
+    "title": "Сеть и SIM-карта",
+    "desc": "android.network, android.sim и скорость",
+    "body": "android.network (OWL 13) возвращает rx, tx, mobileRx, mobileTx и uptime: байты с загрузки телефона и время замера в секундах с начала работы. Неподдерживаемые счётчики равны null. Скорость — разность байтов, делённая на разность uptime, а не на интервал every: вне экрана опрос останавливается. После перезагрузки счётчики сбрасываются.\n\nandroid.sim возвращает available, present, carrier, signal (0–4), data и roaming. На планшете available равен false; без SIM часть полей null. Источники не требуют разрешений. Тип сети LTE/5G и выбор SIM эти данные не содержат.",
+    "code": "widget \"Скорость сети\" {\n  meta { owl: 13 }\n  size: 3x2\n  source net = android.network every 2s\n  state down = null\n  on net {\n    if old != null && value.rx != null && old.rx != null && value.rx >= old.rx && value.uptime > old.uptime {\n      down = (value.rx - old.rx) / (value.uptime - old.uptime)\n    } else { down = null }\n  }\n  Text { text: down == null ? \"…\" : fmtBytes(down) + \"/s\" }\n}"
+  },
+  {
+    "id": "40",
+    "cat": "Основы",
+    "title": "Системные панели и режимы",
+    "desc": "settings, dnd, volume и torch",
+    "body": "settings(\"wifi\") открывает системную панель Android. Поддерживаются internet, wifi, bluetooth, airplane, data, location, cast, nfc, volume, output, sound, dnd, display, dark, battery и notifications (OWL 13).\n\nandroid.modes читает режимы, но радиомодули, яркость экрана, поворот и тёмную тему переключаются в системных настройках. dnd(true), dnd(false) и dnd(\"toggle\") управляют «Не беспокоить»; priority, alarms, none и all задают пропускаемые сигналы. На Android 15+ отключить можно только режим, включённый самим launcher; иначе откроются настройки.\n\nvolume(level, \"alarm\") меняет громкость будильника; также доступны ring и notification. android.volume.output содержит type и name выхода; settings(\"output\") открывает выбор устройства. torch(40) задаёт яркость фонарика, если телефон это поддерживает; torchLevel сообщает ближайшую доступную ступень.",
+    "code": "widget \"Wi-Fi\" {\n  meta { owl: 13 }\n  size: 2x2\n  source modes = android.modes\n  Button { text: modes.wifi ? \"Wi-Fi включён\" : \"Wi-Fi выключен\"; onTap: settings(\"wifi\") }\n}"
+  },
+  {
+    "id": "41",
+    "cat": "Версии",
+    "title": "OWL 14",
+    "desc": "Безопасные отступы домашней страницы",
+    "body": "Текущий launcher поддерживает OWL 14. Эта версия добавляет edge у face и отступы screenTop, screenLeft, screenRight в такой странице. Содержимое может рисоваться под строкой состояния, вырезом камеры и боковой навигацией; интерактивные элементы нужно размещать с учётом отступов.\n\nВерсия meta.owl — минимальное требование файла, а не номер установленного launcher. Используйте максимальную из версий возможностей, которые нужны вашему файлу.",
+    "code": "meta { owl: 14 }"
+  },
+  {
+    "id": "42",
+    "cat": "Шаблоны",
+    "title": "Face с безопасными отступами",
+    "desc": "edge, screenTop, screenLeft и screenRight",
+    "body": "Фон страницы доходит до краёв экрана. Отступы защищают текст сверху и по бокам, а screenInset — снизу, включая клавиатуру. Для этой страницы требуется OWL 14.",
+    "code": "face \"До краёв\" {\n  meta { owl: 14 }\n  edge: true\n  background: alpha(background, 0.7)\n  Column {\n    fill: true\n    padding: [screenLeft + 12, screenTop + 8, screenRight + 12, 0]\n    Text { text: \"Моя страница\"; style: title }\n    Spacer { weight: 1 }\n    Spacer { height: screenInset }\n  }\n}"
+  },
+  {
+    "id": "43",
+    "cat": "Основы",
+    "title": "Жесты и возврат с пружиной",
+    "desc": "drag, onDragEnd и animate offset",
+    "body": "С OWL 13 drag: horizontal ограничивает перетаскивание горизонталью, оставляя вертикальную прокрутку родительскому списку. onDrag получает dx, dy, x и y; onDragEnd завершает жест.\n\nanimate offset: spring() следует пальцу без задержки только тогда, когда offset, animate offset и onDrag находятся на одном узле. После отпускания можно вернуть смещение к нулю: оно плавно восстановится.",
+    "code": "widget \"Жест\" {\n  meta { owl: 13 }\n  size: 3x2\n  state shift = 0\n  Box {\n    offset: [shift, 0]\n    animate offset: spring()\n    drag: horizontal\n    onDrag: shift = shift + dx\n    onDragEnd: shift = 0\n    Text { text: \"Потяните в сторону\" }\n  }\n}"
+  }
+]
+
+  let tabs = ["Основы", "Примеры", "Шаблоны", "Версии", "Советы"]
+  let article = articles.find(a => a.id == selected)
+  let hits = articles.filter(a => (trim(query) != "" || a.cat == tab) && (!onlySaved || len(saved.filter(x => x == a.id)) > 0) && (trim(query) == "" || contains(lower(a.title + " " + a.desc + " " + a.body + " " + a.code), lower(trim(query)))))
+  Column {
+    fill: true
+    gap: 0
+    if selected == "" {
+      Column {
+        padding: [12, 0, 12, 8]
+        gap: 8
+        Row {
+          align: center
+          Input { placeholder: "Поиск по всем разделам"; text: query; weight: 1; onChange: query = value }
+          if query != "" { Text { text: "×"; width: 32; align: center; onTap: query = "" } }
+        }
+        Row {
+          Text { text: "OWL 1–14 · офлайн"; style: small; color: mix(muted, foreground, 0.45); weight: 1 }
+          Text { text: onlySaved ? "★ Избранное" : "☆ Избранное"; style: small; color: onlySaved ? accent : mix(muted, foreground, 0.45); width: 130; align: end; onTap: onlySaved = !onlySaved }
+        }
+      }
+      Column {
+        scroll: true
+        weight: 1
+        padding: [12, 4, 12, 12]
+        gap: 10
+        Text { text: trim(query) != "" ? "Результаты · " + fmtNum(len(hits)) : tab; style: title }
+        if trim(query) == "" && tab == "Основы" && !onlySaved {
+          Text { text: "От первой плитки до своего приложения. Откройте тему — код можно скопировать нажатием."; color: mix(muted, foreground, 0.45) }
+        }
+        if len(hits) == 0 { Text { text: onlySaved ? "Здесь пока нет избранных статей. Добавьте их кнопкой на странице темы." : "Ничего не найдено. Попробуйте source, Canvas или state."; color: mix(muted, foreground, 0.45) } }
+        for a in hits key a.id {
+          Column {
+            gap: 5
+            fill: width
+            padding: 12
+            radius: 8 * corners
+            background: alpha(foreground, 0.05)
+            onTap: { selected = a.id; copied = false; haptic() }
+            Text { text: a.title + (len(saved.filter(x => x == a.id)) > 0 ? " ★" : ""); bold: true }
+            Text { text: a.desc; style: small; color: mix(muted, foreground, 0.45) }
+            if trim(query) != "" { Text { text: a.cat; style: small; color: accent } }
+          }
+        }
+        Text { text: "Источник: README.md и docs/ · OWL 14 · 25.10.2026"; style: small; color: mix(muted, foreground, 0.45); padding: [0, 12] }
+      }
+      Box { height: 1; fill: width; background: alpha(muted, 0.25) }
+      Row {
+        gap: 0
+        for t, i in tabs {
+          Column {
+            weight: 1
+            align: center
+            gap: 4
+            padding: [0, 10]
+            background: tab == t ? alpha(accent, 0.10) : null
+            onTap: { tab = t; query = ""; onlySaved = false; haptic() }
+            Text { text: ["Aa", "</>", "{}", "↑", "!"][i]; align: center; font: mono; color: tab == t ? accent : mix(muted, foreground, 0.45); bold: true }
+            Text { text: t; fontSize: 10; align: center; maxLines: 1; color: tab == t ? foreground : mix(muted, foreground, 0.45) }
+          }
+        }
+      }
+    } else {
+      Column {
+        scroll: true
+        fill: true
+        padding: [12, 4, 12, 20]
+        gap: 14
+        Text { text: article.cat; style: label; color: accent }
+        Text { text: article.title; style: title }
+        Text { text: article.desc; color: mix(muted, foreground, 0.45) }
+        Button { text: (len(saved.filter(x => x == selected)) > 0) ? "★ Убрать из избранного" : "☆ В избранное"; onTap: { let alreadySaved = (len(saved.filter(x => x == selected)) > 0); if alreadySaved { saved = saved.filter(x => x != selected) } else { saved = saved + [selected] } } }
+
+        if selected == "0" || selected == "7" || selected == "8" || selected == "9" || selected == "11" || selected == "24" || selected == "25" || selected == "30" || selected == "32" {
+          Text { text: "ПРЕДПРОСМОТР · можно нажимать"; style: small; color: accent }
+          Box {
+            fill: width
+            height: selected == "32" ? 300 : 210
+            padding: 16
+            radius: 8 * corners
+            border: 1
+            borderColor: accent
+            background: alpha(foreground, 0.04)
+            if selected == "0" { Text { text: "Привет, OWL!"; style: title } }
+            if selected == "7" {
+              Column {
+                Text { text: fmtTime(previewNow, "HH:mm"); style: huge }
+                Text { text: fmtTime(previewNow, "EEE, dd MMM"); color: muted }
+                Progress { value: previewBat.level }
+                Text { text: previewBat.charging ? "Заряжается" : str(previewBat.level) + "%" }
+              }
+            }
+            if selected == "8" {
+              Column {
+                Text { text: previewEnd > previewNow ? fmtDuration(previewEnd - previewNow) : "Готовы?"; style: title }
+                Button { text: "25 минут"; onTap: previewEnd = previewNow + 25 * 60 }
+                Button { text: "Сброс"; onTap: previewEnd = 0 }
+              }
+            }
+            if selected == "9" {
+              Canvas {
+                fill: true
+                let r = min(width, height) / 2 - 12
+                circle(width / 2, height / 2, r, stroke: border, width: 6)
+                arc(width / 2, height / 2, r, 0, 270, stroke: accent, width: 6, cap: round)
+                text("75%", width / 2, height / 2, size: 24, align: center)
+              }
+            }
+            if selected == "11" {
+              Column {
+                if previewScreen {
+                  Text { text: "Заряд: " + str(previewBat.level) + "%" }
+                  Text { text: "Температура: " + str(previewBat.temp) + " °C" }
+                  Button { text: "К плитке"; onTap: previewScreen = false }
+                } else {
+                  Text { text: str(previewBat.level) + "%"; style: title; onTap: previewScreen = true }
+                  Button { text: "Открыть экран"; onTap: previewScreen = true }
+                }
+              }
+            }
+            if selected == "24" {
+              Button {
+                text: str(previewRoll) + " · рекорд " + str(previewBest)
+                onTap: { previewRoll = random(1, 6); if previewRoll > previewBest { previewBest = previewRoll }; haptic() }
+              }
+            }
+            if selected == "25" { Text { text: previewDevice.model ?? "Загрузка…" } }
+            if selected == "30" { Text { spans: ["OWL ", {text: "11", color: accent, bold: true}]; fontSize: 32; fontWeight: 300; letterSpacing: -0.5 } }
+            if selected == "32" {
+              Column {
+                for item in take(previewRecent, 4) key item.key { Button { text: item.name; onTap: open(item.key) } }
+                Button { text: "Спросить агента"; onTap: ask("Покажи состояние системы") }
+              }
+            }
+          }
+          Text { text: "Встроенная демонстрация: размер задан для справочника. Таймер не отправляет уведомления; полный код ниже."; style: small; color: muted }
+        }
+
+        for p in split(article.body, "\n\n") { Text { text: p } }
+        if article.code != "" {
+          Text { text: copied ? "Скопировано ✓" : "КОД · нажмите, чтобы скопировать"; style: small; color: accent }
+          Text {
+            text: article.code
+            font: mono
+            fontSize: 12
+            fill: width
+            padding: 12
+            radius: 8 * corners
+            background: alpha(accent, 0.08)
+            onTap: { copy(article.code); copied = true; haptic() }
+          }
+          Button { text: copied ? "Код скопирован" : "Копировать код"; onTap: { copy(article.code); copied = true; haptic() } }
+        }
+      }
+    }
+  }
+}

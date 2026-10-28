@@ -1,0 +1,96 @@
+# TAGLINE
+
+Repeatedly output a string
+
+# TLDR
+
+**Output 'y' repeatedly** (for auto-confirming prompts)
+
+```yes | [command]```
+
+**Output a custom string repeatedly**
+
+```yes "[custom text]"```
+
+**Auto-answer 'no' to all prompts**
+
+```yes n | [command]```
+
+**Output for a limited number of lines**
+
+```yes | head -n [10]```
+
+# SYNOPSIS
+
+**yes** [_string_...]
+
+# PARAMETERS
+
+_string..._
+> One or more strings to output repeatedly, joined by spaces (default: "y").
+
+**--help**
+> Display help and exit.
+
+**--version**
+> Display version and exit.
+
+# DESCRIPTION
+
+**yes** outputs a string repeatedly until killed or the pipe closes. By default, it outputs "y" followed by a newline, endlessly.
+
+The primary use is piping to commands that ask for confirmation, automatically answering "y" (or any specified response) to all prompts. This is useful for scripting commands that don't have native batch/quiet modes.
+
+When the receiving command closes its stdin (by exiting), yes terminates automatically due to the broken pipe.
+
+Without piping, yes runs indefinitely and must be interrupted with Ctrl+C.
+
+# EXAMPLES
+
+```bash
+# Auto-confirm all prompts
+yes | apt upgrade
+
+# Auto-answer 'no'
+yes n | rm -i *.txt
+
+# Generate test data
+yes "test line" | head -1000 > test.txt
+
+# Stress test (generates output as fast as possible)
+yes > /dev/null
+```
+
+# CAVEATS
+
+Using yes bypasses safety prompts. Ensure you understand what you're auto-confirming before piping yes to destructive commands.
+
+Some commands detect non-interactive input and refuse to run or behave differently. Use command-specific flags (like **-y** or **--yes**) when available.
+
+yes runs at maximum speed, which can generate significant CPU load when not piped to anything useful. Upon a write error (e.g., broken pipe), yes exits with status 1.
+
+# HISTORY
+
+**yes** is part of **GNU coreutils**, written by **David MacKenzie**. It originates from Unix System V and has been part of coreutils since the early days of the project.
+
+# INSTALL
+
+```apt: sudo apt install coreutils```
+
+```dnf: sudo dnf install coreutils```
+
+```pacman: sudo pacman -S coreutils```
+
+```apk: sudo apk add coreutils```
+
+```zypper: sudo zypper install coreutils```
+
+```brew: brew install coreutils```
+
+```nix: nix profile install nixpkgs#coreutils```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[true](/man/true)(1), [false](/man/false)(1), [head](/man/head)(1), [seq](/man/seq)(1), [timeout](/man/timeout)(1)

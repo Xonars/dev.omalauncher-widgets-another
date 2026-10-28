@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+set -euo pipefail
+mode=$1 project=$2; shift 2
+project=$(realpath "$project")
+data=${APKMAKER_HOME:-$HOME/.local/share/apk-maker}
+cache=${APKMAKER_CACHE:-$HOME/.cache/apk-maker}
+agenthome=$cache/agent-home
+managed=0; [ "$mode" != agent ] || managed=1
+if ! "$data/bin/sandbox-check"; then
+  policy=$(jq -r '.agentIsolation // "compatible"' "$data/settings.json" 2>/dev/null || echo compatible)
+  if [ "$policy" = required ]; then
+    echo "filesystem isolation is unavailable on this kernel; agentIsolation=required blocks execution" >&2; exit 126
+  fi
+  echo "compatibility mode: this kernel cannot isolate filesystem access" >&2
+  cd "$project"
+  env -i HOME="$HOME" PATH="$PATH" LANG=C.UTF-8 JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/java-17-openjdk}" \
+    ANDROID_HOME="${ANDROID_HOME:-/opt/android-sdk}" GRADLE_USER_HOME="$HOME/.gradle" \
+    APKMAKER_MANAGED_AGENT="$managed" APKMAKER_SANDBOX=1 APKMAKER_HOME="$data" APKMAKER_CACHE="$cache/agent-peek" \
+    ADB_SERIAL="${ADB_SERIAL:-}" ADB_SERVER_SOCKET=tcp:127.0.0.1:5037 "$@"
+  exit $?
+fi
+mkdir -p "$cache/gradle-home" "$agenthome/.codex" "$agenthome/.claude" "$agenthome/.local/share/opencode" "$HOME/.gradle"
+args=(--die-with-parent --new-session --unshare-pid --unshare-ipc --unshare-uts --cap-drop ALL
+  --clearenv --setenv HOME "$HOME" --setenv PATH "$PATH" --setenv LANG C.UTF-8
+  --setenv JAVA_HOME "${JAVA_HOME:-/usr/lib/jvm/java-17-openjdk}"
+  --setenv ANDROID_HOME "${ANDROID_HOME:-/opt/android-sdk}" --setenv ANDROID_SDK_ROOT "${ANDROID_HOME:-/opt/android-sdk}"
+  --setenv APKMAKER_MANAGED_AGENT "$managed" --setenv APKMAKER_SANDBOX 1 --setenv APKMAKER_HOME "$data" --setenv APKMAKER_CACHE "$cache"
+  --ro-bind /usr /usr --ro-bind /etc /etc --symlink usr/bin /bin --symlink usr/bin /sbin
+  --symlink usr/lib /lib --symlink usr/lib /lib64 --proc /proc --dev /dev --tmpfs /tmp
+  --tmpfs "$HOME" --bind "$agenthome" "$HOME" --bind "$project" "$project"
+  --bind "$cache/gradle-home" "$HOME/.gradle" --chdir "$project")
+for p in /opt /system /apex /vendor /system_ext /product; do [ ! -e "$p" ] || args+=(--ro-bind "$p" "$p"); done
+for p in "$data/sdk.path" "${ANDROID_HOME:-/opt/android-sdk}"; do [ ! -e "$p" ] || args+=(--ro-bind "$p" "$p"); done
+[ ! -d "$project/.git" ] || args+=(--ro-bind "$project/.git" "$project/.git")
+[ ! -f "$project/.apkmaker.json" ] || args+=(--ro-bind "$project/.apkmaker.json" "$project/.apkmaker.json")
+mkdir -p "$HOME/.gradle/wrapper"
+args+=(--ro-bind "$HOME/.gradle/wrapper" "$HOME/.gradle/wrapper")
+for p in "$HOME/.local/share/mise/installs" "$HOME/.opencode/bin"; do
+  [ ! -d "$p" ] || args+=(--ro-bind "$p" "$p")
+done
+args+=(--ro-bind "$data/bin" "$data/bin" --dir "$HOME/.local/bin" --symlink "$data/bin/apk-maker" "$HOME/.local/bin/apk-maker")
+if [ "$mode" = agent ]; then
+  case ${1:-} in env) agent=claude ;; *) agent=${1:-} ;; esac
+  case $agent in
+    codex) auth=.codex/auth.json ;;
+    claude) auth=.claude/.credentials.json ;;
+    opencode) auth=.local/share/opencode/auth.json ;;
+    *) echo 'unsupported isolated agent' >&2; exit 1 ;;
+  esac
+  [ ! -f "$HOME/$auth" ] || args+=(--ro-bind "$HOME/$auth" "$HOME/$auth")
+  if [ "$agent" = claude ]; then
+    printf '{"hasCompletedOnboarding":true}' > "$agenthome/.claude.json"
+  fi
+fi
+args+=(--setenv ADB_SERIAL "${ADB_SERIAL:-}" --setenv ADB_SERVER_SOCKET tcp:127.0.0.1:5037)
+exec bwrap "${args[@]}" -- "$@"

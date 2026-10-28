@@ -1,0 +1,56 @@
+# TAGLINE
+
+List branches with verbose formatting and timing information
+
+# TLDR
+
+**List branches with details**
+
+```git brv```
+
+# SYNOPSIS
+
+**git** **brv**
+
+# PARAMETERS
+
+Takes no options; running **git brv** always lists every local branch, most recently committed first.
+
+# DESCRIPTION
+
+**git brv** is a git-extras command that provides an enhanced branch listing with rich contextual information. It displays branches along with their last commit date, abbreviated commit hash, relative time (e.g., "2 days ago"), and commit messages in a well-formatted table.
+
+The output is more informative than standard git branch -v, using color coding and improved spacing to make branch information easier to scan. This helps developers quickly identify stale branches, recent activity, and the current state of parallel development efforts.
+
+The command is particularly useful in repositories with many branches, where understanding branch status at a glance is valuable for maintenance and workflow management.
+
+# INSTALL
+
+```apt: sudo apt install git```
+
+```dnf: sudo dnf install git```
+
+```pacman: sudo pacman -S git```
+
+```apk: sudo apk add git```
+
+```zypper: sudo zypper install git```
+
+```brew: brew install git```
+
+```nix: nix profile install nixpkgs#git```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[git-branch](/man/git-branch)(1), [git-extras](/man/git-extras)(1)
+
+# RESOURCES
+
+```[Source code](https://github.com/tj/git-extras)```
+
+```[Documentation](https://github.com/tj/git-extras/blob/master/Commands.md#git-brv)```
+
+<!-- verified: 2026-07-17 -->
+

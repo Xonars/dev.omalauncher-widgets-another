@@ -1,0 +1,287 @@
+widget "xfeed" {
+  page: 1
+  order: 6
+  size: 6x4
+  minSize: 3x3
+  meta { description: "Latest posts from only the X accounts you choose, no login or API key, with a notification when they post. A feed without the timeline"; version: "1.0"; license: "MIT"; category: "news"; owl: 9 }
+
+  requires { pacman: ["curl", "jq", "coreutils"] }
+
+  source now = clock every 1m
+  state users = [] persist
+  state posts = [] persist
+  state newest = {} persist
+  state seenAt = 0 persist
+  state reposts = true persist
+  state replies = false persist
+  state rate = 15 persist
+  state lastCheck = 0
+  state tab = "feed"
+  state only = ""
+  state markFrom = 0
+  state note = ""
+
+  // Each account's latest ~20 posts from the FxTwitter API (public, no token), fetched side by
+  // side with retries, since it sometimes answers 404 for an account that exists.
+  source res = cmd("set -- ${sh(join(users, " "))}\n" + """
+    t=$(mktemp -d)
+    for u in $1; do
+      (
+        for try in 1 2 3; do
+          if curl -sf -m 15 -A omalauncher "https://api.fxtwitter.com/2/profile/$u/statuses" -o "$t/$u.json" &&
+             jq -e '.code == 200' "$t/$u.json" >/dev/null; then exit 0; fi
+          sleep $((try * 2))
+        done
+        rm -f "$t/$u.json"; echo "$u" > "$t/$u.failed"
+      ) &
+      sleep 0.3
+    done
+    wait
+    {
+      for f in "$t"/*.json; do [ -f "$f" ] && jq -c --arg u "$(basename "$f" .json)" '.results[] | {
+          id, src: $u, at: .created_timestamp, text: .text[0:1500],
+          name: .author.name, handle: .author.screen_name, avatar: .author.avatar_url,
+          by: .reposted_by.name, reply: (.replying_to != null),
+          photo: ([.media.all[]? | .thumbnail_url // .url] | first),
+          likes, reposts, replies
+        }' "$f"; done | jq -sc .
+      cat "$t"/*.failed 2>/dev/null | jq -Rsc 'split("\n") | map(select(. != ""))'
+    } | jq -sc '{posts: .[0], failed: .[1]}'
+    rm -rf "$t"
+  """) every 24h json timeout 90s
+
+  // How often to check, picked with the slider in settings. The source runs when the widget
+  // starts and on refresh(); this trigger refreshes it once the chosen time has passed.
+  let rates = [5, 10, 15, 30, 60, 120, 240, 480]
+  let rateText = rate < 60 ? "${rate} min" : rate == 60 ? "hour" : "${rate / 60} hours"
+  every 1m {
+    if lastCheck == 0 {
+      lastCheck = now
+    } else if now - lastCheck >= rate * 60 - 30 {
+      lastCheck = now
+      refresh()
+    }
+  }
+
+  let failed = res.failed ?? []
+  let visible = posts.filter(p => (reposts || p.by == null) && (replies || !p.reply))
+  let unread = count(visible, p => p.at > seenAt)
+
+  // Fresh data replaces what's saved for the accounts that answered; the others keep theirs.
+  // A notification only for posts newer than the newest already seen from that account,
+  // so adding someone doesn't announce their last 20 posts.
+  on res first {
+    if len(value.posts ?? []) > 0 {
+      let got = value.posts
+      let ids = got.map(p => p.id)
+      let kept = posts.filter(p => indexOf(ids, p.id) < 0 && indexOf(users, p.src) >= 0)
+      let fresh = got.filter(p => get(newest, p.src, null) != null && p.at > get(newest, p.src, 0) && (reposts || p.by == null) && (replies || !p.reply))
+      if len(fresh) == 1 {
+        notify("${fresh[0].name} @${fresh[0].handle}", fresh[0].text)
+      } else if len(fresh) > 1 {
+        notify("xfeed", "${len(fresh)} new posts from ${join(unique(fresh.map(p => "@" + p.handle)), ", ")}")
+      }
+      newest = reduce(got, (m, p) => set(m, p.src, max(get(m, p.src, 0), p.at)), newest)
+      posts = take(sortBy(flatten([got, kept]), p => -p.at), 150)
+      if startsWith(note, "added @") { note = "" }
+    }
+  }
+
+  on users {
+    posts = posts.filter(p => indexOf(users, p.src) >= 0)
+    if only != "" && indexOf(users, only) < 0 { only = "" }
+  }
+
+  onTap: {
+    markFrom = seenAt
+    seenAt = now
+    tab = len(users) == 0 ? "settings" : "feed"
+    screen()
+  }
+
+  component Rule() {
+    Spacer { height: 1; fill: width; background: alpha(muted, 0.25) }
+  }
+
+  component Post(p, fresh = false, lines = 3, big = false) {
+    Row {
+      gap: 10
+      align: top
+      onTap: url("https://x.com/${enc(p.handle)}/status/${enc(p.id)}")
+      Box {
+        width: 32
+        height: 32
+        Image { src: p.avatar; size: 32; fit: cover; radius: 16 * corners + 4 }
+        if fresh {
+          Spacer { size: 9; radius: 5; background: accent; border: 2; borderColor: background }
+        }
+      }
+      Column {
+        gap: 1
+        weight: 1
+        if p.by != null {
+          Text { text: "↻ ${p.by} reposted"; style: label; color: muted; maxLines: 1 }
+        }
+        Row {
+          gap: 6
+          Text { text: p.name; bold: true; maxLines: 1; weight: 1 }
+          Text { text: fmtAgo(p.at, now); style: small; color: muted; width: 44; align: end }
+        }
+        Text { text: "@${p.handle}${p.reply ? " · reply" : ""}"; style: label; color: fresh ? accent : muted; maxLines: 1 }
+        Text { text: big ? p.text : replace(p.text, "\n\n", "\n"); style: small; maxLines: lines }
+        if big {
+          if p.photo != null {
+            Image { src: p.photo; fill: width; height: 180; fit: cover; radius: 8 * corners }
+          }
+          Text { text: "♡ ${fmtNum(p.likes, {compact: true})}   ↻ ${fmtNum(p.reposts, {compact: true})}   ↩ ${fmtNum(p.replies, {compact: true})}"; style: label; color: muted }
+        }
+      }
+    }
+  }
+
+  // Tile: the newest posts, as many as fit.
+  let shown = max(1, floor(((tileHeight ?? 300) - 56) / 78))
+  Column {
+    gap: 8
+    fill: true
+    Row {
+      align: center
+      Text { text: "xfeed · ${len(users)} people"; style: label; color: muted; weight: 1; maxLines: 1 }
+      Text { text: unread > 0 ? "${unread} new" : ""; style: label; color: accent; width: 70; align: end }
+      Button { text: "+ settings"; color: muted; onTap: { tab = "settings"; screen() } }
+    }
+    if len(users) == 0 {
+      Column {
+        weight: 1
+        justify: center
+        gap: 6
+        Text { text: "only the people you choose"; style: body }
+        Text { text: "tap to add usernames · no login or API key"; style: small; color: muted }
+      }
+    } else if len(visible) == 0 {
+      Column {
+        weight: 1
+        justify: center
+        Text { text: res == null ? "loading…" : len(failed) > 0 ? "couldn't load ${join(failed.map(u => "@" + u), ", ")}" : "no posts yet"; style: small; color: len(failed) > 0 ? red : muted }
+      }
+    } else {
+      for p in take(visible, shown) key p.id {
+        Post { p: p; fresh: p.at > seenAt; lines: cols < 4 ? 2 : 3 }
+      }
+      Spacer { weight: 1 }
+    }
+  }
+
+  screen {
+    title: "xfeed"
+    Column {
+      gap: 10
+      padding: [12, 8]
+      fill: true
+      Row {
+        gap: 8
+        Button { text: "feed"; color: tab == "feed" ? accent : muted; onTap: tab = "feed" }
+        Button { text: "settings"; color: tab == "settings" ? accent : muted; onTap: tab = "settings" }
+        Spacer { weight: 1 }
+        Button { text: "refresh"; color: muted; onTap: refresh() }
+      }
+
+      if tab == "feed" {
+        if len(users) > 1 {
+          Flow {
+            gap: 6
+            Button { text: "all"; color: only == "" ? accent : muted; onTap: only = "" }
+            for u in users key u {
+              Button { text: "@${u}"; color: only == u ? accent : muted; onTap: only = only == u ? "" : u }
+            }
+          }
+        }
+        if len(failed) > 0 {
+          Text { text: "couldn't load ${join(failed.map(u => "@" + u), ", ")} this time (wrong name, private, or the service is busy)"; style: small; color: yellow }
+        }
+        let list = visible.filter(p => only == "" || p.src == only)
+        if len(list) == 0 {
+          Text { text: len(users) == 0 ? "add people in settings" : res == null ? "loading…" : "no posts"; style: small; color: muted }
+        }
+        Column {
+          gap: 12
+          weight: 1
+          scroll: true
+          for p in take(list, 60) key p.id {
+            Post { p: p; fresh: p.at > markFrom; lines: 20; big: true }
+            Rule { }
+          }
+          if len(list) > 0 {
+            Text { text: "that's everything. checked every ${rateText} while this page is on screen"; style: small; color: muted; align: center }
+          }
+        }
+      } else {
+        Column {
+          gap: 10
+          weight: 1
+          scroll: true
+          Text { text: "people you follow here"; style: label; color: accent }
+          Input {
+            placeholder: "add a username, like @nasa or an x.com link"
+            clear: true
+            onSubmit: {
+              let h = lower(replace(first(split(last(split(trim(value), "x.com/")) ?? "", "/")) ?? "", "@", ""))
+              if match(h, "^[a-z0-9_]{1,15}$") == null {
+                note = "\"${value}\" isn't an X username"
+              } else if indexOf(users, h) >= 0 {
+                note = "@${h} is already on the list"
+              } else if len(users) >= 30 {
+                note = "30 people at most"
+              } else {
+                users = flatten([users, [h]])
+                note = "added @${h}, loading their posts…"
+              }
+            }
+          }
+          if note != "" {
+            Text { text: note; style: small; color: yellow }
+          }
+          if len(users) == 0 {
+            Text { text: "nobody yet"; style: small; color: muted }
+          }
+          for u, i in users key u {
+            Row {
+              align: center
+              Text { text: "@${u}"; weight: 1; maxLines: 1; color: indexOf(failed, u) >= 0 ? yellow : foreground }
+              Text { text: "${count(posts, p => p.src == u)} posts"; style: small; color: muted; width: 96; align: end; maxLines: 1 }
+              Button { text: "remove"; color: muted; onTap: { users = remove(users, i); note = "" } }
+            }
+          }
+          Rule { }
+          Text { text: "show"; style: label; color: accent }
+          Row {
+            gap: 8
+            Button { text: reposts ? "reposts: on" : "reposts: off"; color: reposts ? accent : muted; onTap: reposts = !reposts }
+            Button { text: replies ? "replies: on" : "replies: off"; color: replies ? accent : muted; onTap: replies = !replies }
+          }
+          Rule { }
+          Row {
+            align: center
+            Text { text: "refresh"; style: label; color: accent; weight: 1 }
+            Text { text: "every ${rateText}"; style: small; color: foreground; width: 120; align: end }
+          }
+          Slider {
+            value: max(0, indexOf(rates, rate))
+            min: 0
+            max: len(rates) - 1
+            step: 1
+            live: true
+            onChange: rate = rates[int(value)]
+          }
+          Row {
+            Text { text: "5 min"; style: label; color: muted; weight: 1 }
+            Text { text: "8 hours"; style: label; color: muted; width: 80; align: end }
+          }
+          Rule { }
+          Text { text: "posts come from api.fxtwitter.com, which reads public X profiles without an account. Tap a post to open it"; style: small; color: muted }
+          Button { text: "clear saved posts"; color: muted; onTap: { posts = []; newest = {} } }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,82 @@
+# TAGLINE
+
+Groff preprocessor for Gremlin graphics
+
+# TLDR
+
+**Process gremlin file**
+
+```grn [file.grn] | groff > output.ps```
+
+**Specify macro file**
+
+```grn -M [macrodir] [file.grn]```
+
+**Compatible mode**
+
+```grn -C [file.grn]```
+
+# SYNOPSIS
+
+**grn** [_options_] [_file_]
+
+# PARAMETERS
+
+_FILE_
+> Gremlin input file.
+
+**-M** _DIR_
+> Macro directory.
+
+**-C**
+> Compatible mode with older versions.
+
+**-F** _FILE_
+> Font file.
+
+**--help**
+> Display help information.
+
+# DESCRIPTION
+
+**grn** is a groff preprocessor for Gremlin graphics files. It converts Gremlin vector graphics format to groff commands for embedding line drawings and text in documents.
+
+The tool was originally developed for SunView and later adapted for groff. It handles line drawings, text labels, and other Gremlin primitives.
+
+# CAVEATS
+
+Part of groff suite. Gremlin format is largely obsolete. Limited to basic vector graphics.
+
+# HISTORY
+
+grn was created at **UC Berkeley** for the Gremlin drawing program, later included in **GNU groff** for compatibility.
+
+# INSTALL
+
+```apt: sudo apt install groff```
+
+```dnf: sudo dnf install groff```
+
+```pacman: sudo pacman -S groff```
+
+```apk: sudo apk add groff```
+
+```zypper: sudo zypper install groff```
+
+```brew: brew install groff```
+
+```nix: nix profile install nixpkgs#groff```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[groff](/man/groff)(1), [pic](/man/pic)(1), [grap](/man/grap)(1)
+
+# RESOURCES
+
+```[Source code](https://git.savannah.gnu.org/cgit/groff.git)```
+
+```[Homepage](https://www.gnu.org/software/groff/)```
+
+<!-- verified: 2026-07-17 -->

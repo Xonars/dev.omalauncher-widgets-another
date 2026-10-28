@@ -1,0 +1,90 @@
+# TAGLINE
+
+checks pathnames for validity and portability
+
+# TLDR
+
+**Check path for POSIX portability**
+
+```pathchk [/path/to/file]```
+
+**Check for portability to older systems**
+
+```pathchk -p [/path/to/file]```
+
+**Check for empty names and leading dashes**
+
+```pathchk -P [path]```
+
+**Check for full POSIX portability** (combines -p and -P)
+
+```pathchk --portability [path]```
+
+**Check multiple paths**
+
+```pathchk [path1] [path2] [path3]```
+
+# SYNOPSIS
+
+**pathchk** [_-p_] [_-P_] _pathname_...
+
+# PARAMETERS
+
+**-p**
+> Check against POSIX portable filename character set and minimum path length limits (14-character component limit).
+
+**-P**
+> Check for empty names and leading dashes.
+
+**--portability**
+> Check for portability to all POSIX systems (equivalent to -p -P).
+
+**--help**
+> Show help.
+
+**--version**
+> Show version.
+
+# DESCRIPTION
+
+**pathchk** checks pathnames for validity and portability. It identifies names that may cause problems on other systems.
+
+Default checking verifies the path is valid on the current system: proper length, valid characters, and accessible parent directories.
+
+POSIX portability mode (-p) enforces stricter limits. It checks for characters valid on all POSIX systems and limits component lengths to 14 characters (the historical minimum).
+
+The -P option adds checks for empty path components and names starting with hyphens, which can cause problems with command arguments.
+
+Exit code 0 means all paths passed checks. Non-zero indicates problems were found, with error messages describing issues.
+
+The tool helps ensure scripts and archives work across different Unix systems without pathname-related failures.
+
+# CAVEATS
+
+Portability mode is conservative. Modern systems accept longer names. Some checks may be overly strict for single-system use.
+
+# HISTORY
+
+**pathchk** is part of **GNU coreutils** and specified by **POSIX**. It provides a standard way to validate pathnames for cross-platform scripts and utilities.
+
+# INSTALL
+
+```apt: sudo apt install coreutils```
+
+```dnf: sudo dnf install coreutils```
+
+```pacman: sudo pacman -S coreutils```
+
+```apk: sudo apk add coreutils```
+
+```zypper: sudo zypper install coreutils```
+
+```brew: brew install coreutils```
+
+```nix: nix profile install nixpkgs#coreutils```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[basename](/man/basename)(1), [dirname](/man/dirname)(1), [realpath](/man/realpath)(1)

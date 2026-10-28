@@ -1,0 +1,82 @@
+# TAGLINE
+
+Command-line Todoist service client
+
+# TLDR
+
+**Add task**
+
+```todoist add "[task description]"```
+
+**List tasks**
+
+```todoist list```
+
+**Complete task**
+
+```todoist close [task-id]```
+
+**Add with due date**
+
+```todoist add "[task]" --date "[tomorrow]"```
+
+**Add to project**
+
+```todoist add "[task]" --project "[Project Name]"```
+
+**Sync**
+
+```todoist sync```
+
+# SYNOPSIS
+
+**todoist** _command_ [_--date date_] [_--project name_] [_options_]
+
+# PARAMETERS
+
+**add**
+> Create task.
+
+**list**
+> Show tasks.
+
+**close**
+> Complete task.
+
+**sync**
+> Sync with server.
+
+**--date** _DATE_
+> Due date.
+
+**--project** _NAME_
+> Target project.
+
+**--priority** _N_
+> Priority level.
+
+# DESCRIPTION
+
+**todoist** is a command-line client for the Todoist task management service, providing terminal access to your cloud-synced task lists. Tasks can be created with natural language due dates like "tomorrow" or "next week," organized into projects, and assigned priority levels.
+
+The tool syncs with the Todoist cloud service, so changes made from the CLI are immediately available on all other devices. An API token is required for authentication and is typically configured on first use.
+
+# CAVEATS
+
+Todoist account required. API token needed. Internet dependent.
+
+# HISTORY
+
+Various **todoist** CLI clients exist for the **Todoist** task management service, providing terminal access.
+
+# INSTALL
+
+```brew: brew install todoist```
+
+```nix: nix profile install nixpkgs#todoist```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[task](/man/task)(1), [todo.sh](/man/todo.sh)(1), [todoman](/man/todoman)(1)
