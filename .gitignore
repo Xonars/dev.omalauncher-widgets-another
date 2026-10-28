@@ -1,3 +1,13 @@
+index.json
+_site/
+base/
+changed.txt
+deps.txt
+apps.json
+store-icon.*
+collage/
+
+# Local collection build artifacts and credentials
 __pycache__/
 *.pyc
 .env

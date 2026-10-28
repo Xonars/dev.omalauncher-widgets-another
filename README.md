@@ -1,3 +1,9 @@
+# Private OWL collection
+
+Local apps and sources: [local/README.md](local/README.md). Catalog apps: [apps/xonars](apps/xonars).
+
+Based on `SimonSchubert/omarchy-widgets` main. Pinterest image collections and Cassette music are excluded.
+
 # omarchy widgets
 
 The widget store for [Omalauncher](https://github.com/SimonSchubert/omalauncher), the Android launcher that
