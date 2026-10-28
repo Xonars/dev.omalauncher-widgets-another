@@ -1,5 +1,5 @@
 app "Cassette" {
-  meta { owl: 16; description: "Yandex Music client with search, library, downloads and Android media controls. English and Russian UI."; version: "1.8"; license: "MIT"; category: "media" }
+  meta { owl: 15; description: "Yandex Music client with search, library, downloads and Android media controls. English and Russian UI."; version: "1.8"; license: "MIT"; category: "media" }
   requires { pacman: ["python", "mpv", "ffmpeg"] }
   title: ""
   icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="9" width="42" height="30" rx="4"/><circle cx="15" cy="22" r="5"/><circle cx="33" cy="22" r="5"/><path d="M20 22h8M11 39l4-9h18l4 9"/></svg>"""
