@@ -1,8 +1,13 @@
-# Private OWL collection
+# omarchy-widgets-another by Xonars
 
-Local apps and sources: [local/README.md](local/README.md). Catalog apps: [apps/xonars](apps/xonars).
+OWL apps и widgets Xonars: `apps/xonars/` и `widgets/xonars/`.
+`faces/xonars/` предназначен для собственных faces; сейчас их нет.
+Оригинальный каталог доступен отдельно как **omarchy-widgets by Simon Schubert**.
+Каталоги не смешиваются.
 
-Based on `SimonSchubert/omarchy-widgets` main. Pinterest image collections and Cassette music are excluded.
+Авторство подтверждено владельцем: APK Share, Cassette, Справочник разработчика, Pinterest wallswap и Тихая читалка написаны Xonars с нуля. Шахматы и APK Maker — приложения Xonars на основе сторонних виджетов; ссылки на оригиналы и атрибуция сохранены в их README. Локальные исходники и зависимости: [local/README.md](local/README.md).
+
+Инструменты, runtime и документация основаны на SimonSchubert/omarchy-widgets; лицензии сохранены.
 
 # omarchy widgets
 

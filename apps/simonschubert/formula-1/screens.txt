@@ -1,5 +1,0 @@
-# The store's screens of this app, one per line: the states set before each is drawn (scripts/store-previews.sh).
-view = "now"
-view = "calendar"
-view = "standings"
-view = "timing"

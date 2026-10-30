@@ -1,5 +1,5 @@
 app "Справочник разработчика" {
-  meta { owl: 11; version: "1.0"; description: "Офлайн база знаний: сборка Oma Launcher, SDK и собственная подпись"; category: "dev" }
+  meta { owl: 11; license: "MIT"; version: "1.0"; description: "Офлайн база знаний: сборка Oma Launcher, SDK и собственная подпись"; category: "dev" }
   icon: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M24 11C18 6 10 6 4 8v31c7-2 14-1 20 4 6-5 13-6 20-4V8c-6-2-14-2-20 3v32"/><path d="m13 18-4 5 4 5m22-10 4 5-4 5"/></svg>'
   state selected = ""
   state query = ""

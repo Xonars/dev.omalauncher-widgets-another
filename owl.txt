@@ -1,3 +1,6 @@
+17 supported 0.16.0
+16 supported 0.15.0
+15 supported 0.14.0
 # The owl levels the store takes, and the first launcher release that runs each.
 # A new widget or app, or an update to one, must declare a supported level in
 # meta { owl: N } (no owl: is level 1). Ones already on a deprecated level stay in

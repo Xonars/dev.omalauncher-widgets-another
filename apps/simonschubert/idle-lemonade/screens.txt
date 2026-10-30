@@ -1,2 +1,0 @@
-# The store's preview: a town with every business open (scripts/store-previews.sh). since is in the future, so the coins hold still.
-bank = 6834120; since = 9999999999; lv = [12, 7, 5, 3, 2, 1]

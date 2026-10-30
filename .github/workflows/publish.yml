@@ -29,23 +29,17 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
-      - name: Order
-        # The ids order.txt lists keep their place, and every other widget, face and app goes before
-        # its "...": the widgets rank.txt rates best first (tools/rank.py), so "all" and every category
-        # tab open on the best, and in their middle whatever it hasn't rated yet, faces and apps too, in
-        # a new shuffled order for every push. Seeded by the commit, so re-running a push publishes the
-        # same order.
+      - name: Owner-only catalog
         run: |
-          listed=$(sed 's/#.*//; s/[[:space:]]//g; /^$/d' order.txt)
-          all=$(ls -d widgets/*/*/ faces/*/*/ apps/*/*/ | cut -d/ -f2,3 | grep -vxF -f <(echo "$listed"))
-          ranked=$(sed 's/#.*//; s/[[:space:]]//g; /^$/d' rank.txt | grep -xF -f <(echo "$all"))
-          unranked=$(echo "$all" | grep -vxF -f <(echo "$ranked") \
-            | shuf --random-source=<(openssl enc -aes-256-ctr -pass pass:"$GITHUB_SHA" -nosalt </dev/zero 2>/dev/null))
-          half=$(( $(echo "$ranked" | grep -c .) / 2 ))
-          rest=$({ echo "$ranked" | head -n "$half"; echo "$unranked"; echo "$ranked" | tail -n +$((half + 1)); } | grep .)
-          grep -qx '\.\.\.' order.txt || echo ... >> order.txt
-          { sed '/^\.\.\.$/,$d' order.txt; echo "$rest"; sed -n '/^\.\.\.$/,$p' order.txt; } > order.tmp
-          mv order.tmp order.txt
+          python3 - <<'CHECK'
+          from pathlib import Path
+          for kind in ('widgets', 'faces', 'apps'):
+              root = Path(kind)
+              root.mkdir(exist_ok=True)
+              unexpected = [str(p) for p in root.iterdir() if p.is_dir() and p.name != 'xonars']
+              if unexpected:
+                  raise SystemExit(f'Unexpected catalog authors: {unexpected}')
+          CHECK
       - name: Catalog
         run: |
           java -jar tools/owl.jar index .

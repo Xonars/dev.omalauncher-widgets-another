@@ -1,6 +1,0 @@
-# The store's preview and screens, made by day (store-previews.sh with the emulator's clock at 12:00 on 2026-10-25,
-# which the planting times are counted back from): a farm in full swing, reeling in a bass, a golden koi landed, the book.
-bank = 12345; xp = 820; plots = 18; seed = 5; stock = 3; stockT = 1792926000; field = [{"k":6,"t":1792896600},{"k":6,"t":1792896600},{"k":5,"t":1792911000},{"k":5,"t":1792917360},{"k":4,"t":1792918200},{"k":4,"t":1792918200},{"k":3,"t":1792921800},{"k":3,"t":1792924560},{"k":2,"t":1792924200},{"k":2,"t":1792925160},{"k":1,"t":1792925100},{"k":1,"t":1792925925},{"k":0,"t":1792925340},{"k":0,"t":1792925997},{"k":-1,"t":0},{"k":1,"t":1792925850},{"k":3,"t":1792921800},{"k":-1,"t":0},{"k":-1,"t":0},{"k":-1,"t":0},{"k":-1,"t":0},{"k":-1,"t":0},{"k":-1,"t":0},{"k":-1,"t":0}]; caught = [14,9,6,4,3,0,2,0,1]; grown = [60,41,22,15,9,4,2]
-tab = 1; fs = 3; fish = 4; power = 0.7; reelT = 0; hits = 2; misses = 1
-fs = 4; fish = 8; fresh = true; endT = 99999
-tab = 2; fs = 0
