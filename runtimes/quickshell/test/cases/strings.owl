@@ -1,0 +1,8 @@
+widget "x" {
+  meta { owl: 16 }
+  strings {
+    en { feels: "feels"; items: n => "${n} items" }
+    id { feels: "terasa" }
+  }
+  Text { text: str.feels + " " + str.items(3) + " " + lang() }
+}

@@ -237,7 +237,7 @@ public class OwlOracle {
     fixRandom();
     String src = new String(Files.readAllBytes(Paths.get(a[0])), "UTF-8");
     fixture = (Obj) Json.INSTANCE.parse(new String(Files.readAllBytes(Paths.get(a[1])), "UTF-8"));
-    program = dev.omalauncher.widgets.lang.Compiler.Companion.compile(src);
+    program = dev.omalauncher.widgets.lang.Compiler.Companion.compile(src, "en");
     cache = new Value[program.getGlobals().size()];
     root = Env.Companion.root(HOST);
     // What the file says about itself: where it goes, and a face's status bar.

@@ -1,0 +1,5 @@
+widget "x" {
+  meta { owl: 17 }
+  source s = http("http://nas.local/x", pin: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+  Text { text: s }
+}

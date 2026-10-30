@@ -1,0 +1,8 @@
+widget "x" {
+  meta { owl: 15 }
+  source said = android.speech
+  state typed = ""
+  on said.final { typed = said.text }
+  every 60s { speech("stop") }
+  Button { text: typed; onTap: speech("toggle"); onPress: speech("cancel") }
+}

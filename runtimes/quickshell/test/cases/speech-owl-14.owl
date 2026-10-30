@@ -1,0 +1,5 @@
+widget "x" {
+  meta { owl: 14 }
+  source said = android.speech
+  Text { text: said.text }
+}

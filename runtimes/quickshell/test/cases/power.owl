@@ -1,0 +1,5 @@
+widget "x" {
+  meta { owl: 15 }
+  source p = android.power every 2s
+  Text { text: "${p.current}" }
+}

@@ -1,0 +1,5 @@
+widget "x" {
+  meta { owl: 17 }
+  source feed = ws("wss://example.com/feed", method: "GET")
+  Text { text: feed }
+}

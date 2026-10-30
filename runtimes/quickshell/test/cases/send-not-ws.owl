@@ -1,0 +1,5 @@
+widget "x" {
+  meta { owl: 17 }
+  source s = http("https://example.com/x")
+  Button { text: "a"; onTap: send(s, "hi") }
+}

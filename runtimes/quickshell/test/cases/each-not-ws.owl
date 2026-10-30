@@ -1,0 +1,7 @@
+widget "x" {
+  meta { owl: 17 }
+  source s = http("https://example.com/x")
+  state n = 0
+  on s each { n = n + 1 }
+  Text { text: "${n}" }
+}

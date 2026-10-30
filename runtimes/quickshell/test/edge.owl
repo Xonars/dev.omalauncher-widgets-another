@@ -1,5 +1,5 @@
 widget "edge" {
-  meta { owl: 13 }
+  meta { owl: 17 }
   source raw = cmd("printf '%s' '{\"b\":2,\"a\":[1,\"2\",null,true],\"10\":\"x\",\"2\":\"y\",\"n\":-0.5}'") json
   source txt = cmd("printf ' 81%% \n\nnext line \n'")
   source now = clock every 1s
@@ -14,6 +14,10 @@ widget "edge" {
   asset face = base64"AAEAAAA="
   on count first { seed = random(1, 6); open = shuffle([1, 2]) == [1, 2] }
   onTap: { let v = random(); if v > 0.5 { count = count + 1 } }
+  strings {
+    en { hello: "hello"; items: (n, what) => "${n} ${what}s"; only: "only en" }
+    id { hello: "halo"; items: (n, what) => "${what} ${n}" }
+  }
   Column {
     for e, i in [
       1 + 2, 1 / 0, 7 % -3, -7 % 3, 0.1 + 0.2, 10000000 + 0.5, 1000000000000000000000, 123456789012345678, 0.0001, 2 / 3, -0, 0.0000001,
@@ -142,5 +146,6 @@ widget "edge" {
     Column {
       Text { text: "hold"; onLongPress: { let a = x; let b = a + y; if b > 100 { count = int(b) } } }
     }
+    Text { text: str.hello + ", " + str.items(3, "item") + ", " + str.only + ", " + lang() + ", " + keys(str).join("/") }
   }
 }

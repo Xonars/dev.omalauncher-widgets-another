@@ -1,0 +1,6 @@
+widget "x" {
+  meta { owl: 15 }
+  source said = android.speech
+  every 60s { speech("start") }
+  Text { text: said.text }
+}

@@ -40,7 +40,8 @@ Canvas {
   readonly property var deps: [root.node, root.width, root.height,
     root.widget ? root.widget.renders : 0,
     root.widget && root.drawsTime ? root.widget.frame : 0,
-    root.widget ? root.widget.palette : null, root.widget ? root.widget.fontsLoaded : 0]
+    root.widget ? root.widget.palette : null, root.widget ? root.widget.fontsLoaded : 0,
+    root.widget ? root.widget.filesLoaded : 0]
   onDepsChanged: root.prepare()
 
   // The drawing's calls, worked out when anything it may read changed, and
@@ -75,7 +76,7 @@ Canvas {
     }
     // Colours and fonts are part of the picture without being in the calls.
     var key = JSON.stringify(ops) + "|" + width + "x" + height + "|"
-              + (root.widget ? JSON.stringify(root.widget.palette) + root.widget.fontsLoaded : "")
+              + (root.widget ? JSON.stringify(root.widget.palette) + root.widget.fontsLoaded + "|" + root.widget.filesLoaded : "")
     if (key === root.opsKey) return
     root.ops = ops
     root.opsKey = key
@@ -86,7 +87,7 @@ Canvas {
   // for one skips it and the next frame, after onImageLoaded, has it.
   readonly property var images: ({
     get: function(src) {
-      var url = L.url(src, root.widget ? root.widget.home : "")
+      var url = root.widget ? root.widget.localUrl(src) : ""
       if (!url) return null
       if (root.isImageLoaded(url)) return url
       if (!root.isImageLoading(url) && !root.isImageError(url)) root.loadImage(url)

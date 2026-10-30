@@ -1,0 +1,4 @@
+widget "x" {
+  meta { owl: 16 }
+  Grid { lazy: true; onPull: refresh(); Text { text: "a" } }
+}

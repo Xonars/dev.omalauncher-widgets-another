@@ -1,0 +1,4 @@
+widget "x" {
+  meta { owl: 17 }
+  Row { onPull: refresh(); Text { text: "a" } }
+}
