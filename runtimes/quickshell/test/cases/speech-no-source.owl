@@ -1,0 +1,4 @@
+widget "x" {
+  meta { owl: 15 }
+  Button { text: "a"; onTap: speech("toggle") }
+}

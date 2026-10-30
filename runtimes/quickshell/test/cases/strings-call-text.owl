@@ -1,0 +1,5 @@
+widget "x" {
+  meta { owl: 16 }
+  strings { en { a: "a" } }
+  Text { text: str.a(1) }
+}

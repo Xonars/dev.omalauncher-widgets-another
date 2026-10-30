@@ -108,6 +108,16 @@ Where it differs, because Android is not here:
   setting and the brightness from brightnessctl. **torch()** does nothing, and
   **volume()** has only the media stream. **android.sim** is a tablet's: no
   mobile service. **android.network** counts every interface but loopback.
+- **android.power** reads nothing, every field null, and **android.speech**
+  is a desktop's without a recognizer: `available` false, so `speech("start")`
+  reports that there is none. **pickImages()** reports that there are no phone
+  photos to pick.
+- **ws(...)** sources don't connect: they stay null, `send(...)` goes nowhere
+  and `on … each` never runs. `pin:` is taken and not checked: a request goes
+  out with the system's certificates, which a server with one of its own fails.
+- **strings** and `lang()` take the language of Qt's locale, as the launcher
+  takes the phone's.
+- **onPull** never runs: a desktop list is scrolled, not pulled.
 - `gapsIn`, `gapsOut` and `borderWidth` are the OwlHost's, Omarchy's Hyprland
   gaps and borders by default, and `tileOpacity` 1 and `tileFrost` 0.
 - **lazy** Columns and Grids scroll, but build every row: the launcher's lazy

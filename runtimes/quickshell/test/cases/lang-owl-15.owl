@@ -1,0 +1,4 @@
+widget "x" {
+  meta { owl: 15 }
+  Text { text: lang() }
+}

@@ -1,0 +1,5 @@
+widget "x" {
+  meta { owl: 16 }
+  strings { en { n: x => "${x} items" } }
+  Text { text: str.n(1, 2) }
+}

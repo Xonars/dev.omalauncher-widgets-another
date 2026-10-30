@@ -9,6 +9,9 @@
 # needing a newer launcher, and doesn't offer it as an update.
 #
 # owl  status      launcher
+17     supported   0.16.0
+16     supported   0.15.0
+15     supported   0.14.0
 14     supported   0.13.0
 13     supported   0.12.0
 12     supported   0.11.0

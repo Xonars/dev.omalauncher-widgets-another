@@ -11,7 +11,9 @@ pragma ComponentBehavior: Bound
 //                    Linux: the battery from UPower, media and the
 //                    device/system/volume/modes/network command from the OwlHost;
 //                    alarm is never set, as Linux keeps no next alarm, there's
-//                    no SIM, and no key bar holds a modifier
+//                    no SIM, no key bar holds a modifier, power reads nothing
+//                    and speech never listens
+//   ws("...")        not connected here: it stays null, and send(...) goes nowhere
 //
 // `status` sources (cmd and http) get {out, err, code, ok}, as the language
 // guide has it: the output, stderr, the exit code or HTTP status (124 when it
@@ -258,6 +260,10 @@ Item {
   // A desktop has no mobile service (owl 13), as a Wi-Fi tablet has none, and no key bar latching modifiers (owl 12).
   readonly property var noSim: ({ available: false, present: false, carrier: null, signal: null, data: null, roaming: false })
   readonly property var noModifiers: ({ ctrl: "off", alt: "off", shift: "off" })
+  // No battery current or charger to read here, every field null as on a phone that doesn't say (owl 15).
+  readonly property var noPower: ({ current: null, currentAvg: null, watts: null, charge: null, chargeTime: null, maxCurrent: null, maxVoltage: null })
+  // No speech recognizer on a desktop, so speech(...) never listens (owl 15).
+  readonly property var noSpeech: ({ available: false, listening: false, text: "", final: null, error: null })
 
   // The sources that are pushed rather than polled, as they start.
   function pushNow() {
@@ -271,6 +277,8 @@ Item {
     if (root.kind === "android.alarm") root.widget.sourceObject(root.spec.slot, root.noAlarm)
     if (root.kind === "android.sim") root.widget.sourceObject(root.spec.slot, root.noSim)
     if (root.kind === "android.modifiers") root.widget.sourceObject(root.spec.slot, root.noModifiers)
+    if (root.kind === "android.power") root.widget.sourceObject(root.spec.slot, root.noPower)
+    if (root.kind === "android.speech") root.widget.sourceObject(root.spec.slot, root.noSpeech)
     if (root.kind === "android.media") root.widget.sourceObject(root.spec.slot, root.media)
   }
   onActiveChanged: root.pushNow()

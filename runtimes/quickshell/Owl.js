@@ -587,8 +587,8 @@ function lex(src, start, end) {
 
 // ------------------------------------------------------------------ parser
 
-var BLOCK_DECLS = ["meta", "requires"]
-var DECLS = ["source", "state", "let", "asset", "component", "meta", "requires"]
+var BLOCK_DECLS = ["meta", "requires", "strings"]
+var DECLS = ["source", "state", "let", "asset", "component", "meta", "requires", "strings"]
 var TRIGGERS = ["every", "at", "when", "on"]
 var LEVELS = [["??"], ["||"], ["&&"], ["==", "!="], ["<", "<=", ">", ">="], ["+", "-"], ["*", "/", "%"]]
 
@@ -667,11 +667,12 @@ Parser.prototype = {
         if (!top) this.fail("'" + word + "' is only allowed at the top of the widget")
         this.next()
         var e = this.expr()
-        // `on x first { }`: for x's first value too.
+        // `on x first { }`: for x's first value too; `on x each { }`: for every message of a ws(...) source.
         var first = word === "on" && this.isId(this.t(), "first")
-        if (first) this.next()
+        var each = word === "on" && this.isId(this.t(), "each")
+        if (first || each) this.next()
         if (!this.isP(this.t(), "{")) this.fail("expected '{' with the statements to run: " + word + " ... { ... }")
-        b.decls.push({ kind: "trigger", trigger: word, expr: e, stmts: this.handler(), pos: start.pos, first: first })
+        b.decls.push({ kind: "trigger", trigger: word, expr: e, stmts: this.handler(), pos: start.pos, first: first, each: each })
       } else if (word === "if") {
         b.items.push(this.ifItem())
       } else if (word === "for") {
@@ -756,8 +757,36 @@ Parser.prototype = {
     return { kind: "for", name: name, index: index, list: list, key: key, body: b, pos: pos }
   },
 
+  // `strings { en { feels: "feels" } id { feels: "terasa" } }`: a set of texts per language.
+  strings: function(kw) {
+    this.punct("{")
+    var sets = []
+    while (!this.isP(this.t(), "}")) {
+      if (this.accept(";") || this.accept(",")) continue
+      var first = this.t()
+      var language = this.ident("language, like en")
+      if (!/^[a-z]{2,3}$/.test(language)) this.fail("a language is its code in lowercase, like en, id or pt", first)
+      if (sets.some(function(x) { return x.language === language })) this.fail("strings has " + language + " twice", first)
+      this.punct("{")
+      var fields = []
+      while (!this.isP(this.t(), "}")) {
+        if (this.accept(";") || this.accept(",")) continue
+        var at = this.t()
+        var name = this.ident("string name")
+        if (fields.some(function(f) { return f.name === name })) this.fail(language + " has " + name + " twice", at)
+        this.punct(":")
+        fields.push({ name: name, value: this.expr(), pos: at.pos })
+      }
+      this.punct("}")
+      sets.push({ language: language, fields: fields })
+    }
+    this.punct("}")
+    return { kind: "strings", name: STRINGS, sets: sets, pos: kw.pos }
+  },
+
   decl: function() {
     var kw = this.next()
+    if (kw.text === "strings") return this.strings(kw)
     if (BLOCK_DECLS.indexOf(kw.text) >= 0) {
       this.punct("{")
       var fields = []
@@ -1045,8 +1074,8 @@ var ACTIONS = {
   terminal: [1, 2], app: [1, 1], run: [1, 1], post: [1, 3], url: [1, 1], launcher: [1, 1], refresh: [0, 1],
   media: [1, 1], androidApp: [1, 1], copy: [1, 1], notify: [1, 2], volume: [1, 2],
   notification: [1, 3], screen: [0, 0], close: [0, 0], torch: [1, 1], dnd: [1, 1], share: [1, 1], haptic: [0, 0], sound: [1, 1],
-  open: [1, 1], ask: [1, 2], appAction: [2, 2], workApps: [1, 1], shortcuts: [1, 1],
-  pressKey: [1, 1], typeText: [1, 1], latch: [1, 2], settings: [1, 1]
+  open: [1, 1], ask: [1, 2], appAction: [2, 2], workApps: [1, 1], shortcuts: [1, 1], send: [2, 2],
+  pressKey: [1, 1], typeText: [1, 1], latch: [1, 2], settings: [1, 1], pickImages: [0, 0], speech: [1, 1]
 }
 
 function Args(args, host) {
@@ -2425,6 +2454,8 @@ var BUILTINS = {
     return hi < lo ? lo : lo + Math.floor(r * (hi - lo + 1))
   }, false),
   // hash(values...): a number in [0, 1) that's always the same for the same values, for noise in lets and canvases.
+  // owl 16: lang(), the language, like en or id; the compiler gives the one it compiled for.
+  lang: B(0, 0, function() { return "en" }),
   hash: B(1, 16, function(a) { return hashOf(a.args) }),
   keys: B(1, 1, function(a) {
     var v = a.get(0)
@@ -2603,7 +2634,7 @@ var OPERATORS = {
 
 // ---------------------------------------------------------------- compiler
 
-var LEVEL = 14
+var LEVEL = 17
 var MAX_NODES = 500
 var MAX_SCREEN_NODES = 1000
 var MAX_ASSET_BYTES = 2097152
@@ -2726,6 +2757,27 @@ var FACE_EDGE = "a face's edge"
 // owl 14: a face whose nodes run on under the status bar and the camera cutout, which screenTop, screenLeft and
 // screenRight measure; no ripple under the finger, for a node that shows its press itself.
 ;[FACE_EDGE, "screenLeft", "screenRight", "ripple"].forEach(function(k) { SINCE[k] = 14 })
+var PANEL_KEYBOARD = "panel keyboard"
+// owl 15: a drawer that leaves the keyboard down as it opens; photos picked on Android pasted into the Linux window
+// being typed in; dictation, what the user says on a tap becoming text the widget reads; the battery's current,
+// charge and time to full, and the charger's.
+;[PANEL_KEYBOARD, "pickImages", "android.speech", "speech", "android.power"].forEach(function(k) { SINCE[k] = 15 })
+var STRINGS_DECL = "strings { }"
+// owl 16: texts per language, the phone's picked, and the language itself, for an API that takes it.
+;[STRINGS_DECL, "lang"].forEach(function(k) { SINCE[k] = 16 })
+var HTTP_PIN = "pin:"
+var ON_EACH = "on … each"
+// owl 17: a list pulled down past its top, to fetch again; servers with a certificate of their own, pinned;
+// WebSockets, and a trigger for each of their messages.
+;["onPull", HTTP_PIN, "ws", "send", ON_EACH].forEach(function(k) { SINCE[k] = 17 })
+// The name a widget reads its strings { } by: str.feels.
+var STRINGS = "str"
+
+// A pin: value as 64 lowercase hex digits, without openssl's colons or spaces; null if it isn't a SHA-256.
+function normalizePin(pin) {
+  var h = pin.toLowerCase().replace(/[:\s]/g, "")
+  return /^[0-9a-f]{64}$/.test(h) ? h : null
+}
 
 var MANAGERS = { pacman: /^[a-z0-9@_+][a-z0-9@._+-]*$/ }
 // onLongPress only off the home grid: on a tile, long-press belongs to the home screen, which lifts it to move it.
@@ -2735,13 +2787,17 @@ var HANDLER_PARAMS = { onTap: ["x", "y"], onLongPress: ["x", "y"],
   onDrag: ["dx", "dy", "x", "y"],
   // How fast the finger was moving as it let go, in dp a second.
   onDragEnd: ["vx", "vy"],
+  // A Column or Grid that scrolls, pulled down past its top and let go there: refresh(), mostly.
+  onPull: [],
   onChange: ["value"], onSubmit: ["value"], onDismiss: [],
   // A panel's, at its top: a key pressed in the prompt bar while it's open.
   onKey: ["value"] }
-var HANDLER_KINDS = { onChange: ["Slider", "Input"], onSubmit: ["Input"], onDismiss: ["Popup"] }
+var HANDLER_KINDS = { onChange: ["Slider", "Input"], onSubmit: ["Input"], onDismiss: ["Popup"], onPull: ["Column", "Grid"] }
 var TRIGGER_PARAMS = { on: ["value", "old"] }
-var ANDROID = ["battery", "device", "media", "notifications", "volume", "system", "network", "sim", "alarm", "modes", "apps",
-  "agents", "recent", "drawer", "modifiers"]
+var ANDROID = ["battery", "device", "media", "notifications", "volume", "system", "network", "power", "sim", "alarm", "modes",
+  "apps", "agents", "recent", "drawer", "modifiers", "speech"]
+// speech(...)'s words that work from anywhere, a trigger or a press too: they only turn the microphone off.
+var SPEECH_ANYWHERE = ["stop", "cancel"]
 // The words an action's first value may be, when it's written out; `numbers` also allows a number. `forms` are
 // the words that take another number of values than the action's usual: how many, and how they're written.
 function words(list, message, numbers, forms) { return { words: list, message: message, numbers: !!numbers, forms: forms || {} } }
@@ -2773,6 +2829,7 @@ var ACTION_WORDS = {
   settings: words(SETTINGS_PAGES, "settings takes " + SETTINGS_PAGES.join(", ")),
   appAction: words(["pin", "info", "uninstall", "remove", "edit", "share"], "appAction takes pin, info, uninstall, remove, edit, share and an app's key"),
   workApps: words(["pause", "resume", "toggle"], "workApps takes pause, resume, toggle"),
+  speech: words(["start", "stop", "toggle", "cancel"], "speech takes start, stop, toggle, cancel; what's heard is in source x = android.speech"),
   latch: words(LATCHES, "latch takes ctrl, alt, shift, and optionally once, locked or off")
 }
 // volume(...)'s second value; media without one.
@@ -2826,7 +2883,7 @@ function keyCombo(t) {
 
 // A URL's scheme, host and port, written out so no value can send it elsewhere: what a secret is bound to. No
 // `user@` before the host, and the host ends where the text does or at a /, ? or #.
-var FIXED_HOST = /^https?:\/\/[A-Za-z0-9.-]+(:[0-9]+)?(?=[\/?#]|$)/
+var FIXED_HOST = /^(https?|wss?):\/\/[A-Za-z0-9.-]+(:[0-9]+)?(?=[\/?#]|$)/
 
 // Strings in the order java's HashSet<String> walks them (16 buckets, by String.hashCode), for the one
 // secret a message names when a request sends several.
@@ -2911,8 +2968,14 @@ function Scope(parent, names, visible) {
   this.visible = visible === undefined ? names.length : visible
 }
 
-function Compiler(ast) {
+function Compiler(ast, language) {
   this.ast = ast
+  // The language strings { } and lang() give, like en or id.
+  this.language = language
+  // What str.x names, from strings { }: the language's, or en's where it has none; null without strings.
+  this.texts = null
+  // The handler whose statements are compiling, like onTap; null outside one.
+  this.handlerName = null
   this.root = new Scope(null, [])
   this.globals = []
   this.slots = {}
@@ -3030,6 +3093,7 @@ Compiler.prototype = {
     var host = this.server(e, s)
     if (host === null) this.fail(name + " is a secret, so the server it goes to is written out: \"https://api.example.com/…\", not a value", e.pos)
     if (host.indexOf("http://") === 0) this.fail(name + " is a secret, so it goes only to an https:// server, where nothing on the way can read it", e.pos)
+    if (host.indexOf("ws://") === 0) this.fail(name + " is a secret, so it goes only to a wss:// server, where nothing on the way can read it", e.pos)
     return [host]
   },
 
@@ -3047,8 +3111,9 @@ Compiler.prototype = {
     var self = this
     return this.inRequestUrl(function() {
       var url = self.whole(function() { return self.ex(e, scope) })
-      if (url.k && typeof url.c === "string" && url.c.indexOf("https://") !== 0 && url.c.indexOf("http://") !== 0)
-        self.fail(name + " takes an http:// or https:// URL", e.pos)
+      var schemes = name === "ws" ? ["ws://", "wss://"] : ["http://", "https://"]
+      if (url.k && typeof url.c === "string" && schemes.every(function(p) { return url.c.indexOf(p) !== 0 }))
+        self.fail(name + " takes a " + schemes.join(" or ") + " URL", e.pos)
       self.commands.push(what + " " + (url.k && typeof url.c === "string" ? url.c : "(a URL built from widget values)"))
       return url
     })
@@ -3136,6 +3201,10 @@ Compiler.prototype = {
         if (self.components.hasOwnProperty(d.name) || KINDS.hasOwnProperty(d.name))
           self.fail("'" + d.name + "' is already a node", d.pos)
         self.components[d.name] = self.component(d)
+      } else if (d.kind === "strings") {
+        var sg = self.strings(d)
+        self.reserve(d.name, d.pos)
+        self.globals[self.slots[d.name]] = sg
       }
     })
     var triggers = body.decls.filter(function(d) { return d.kind === "trigger" }).map(function(d) { return self.trigger(d) })
@@ -3268,8 +3337,8 @@ Compiler.prototype = {
   source: function(d) {
     var e = d.expr
     var isCall = e.k === "call"
-    if (d.status && !(isCall && (e.name === "cmd" || e.name === "http")))
-      this.fail("status only works on cmd(...) and http(...)", d.pos)
+    if (d.status && !(isCall && ["cmd", "http", "ws"].indexOf(e.name) >= 0))
+      this.fail("status only works on cmd(...), http(...) and ws(...)", d.pos)
     if (d.optional) {
       if (!isCall || ["cmd", "stream", "file"].indexOf(e.name) < 0)
         this.fail("optional only works on cmd(...), stream(...) and file(...), which need Linux", d.pos)
@@ -3285,16 +3354,34 @@ Compiler.prototype = {
       if (tv !== null) timeout = toInt(tv)
     }
     var src = { type: "source", name: d.name, kind: null, arg: null, every: 0, json: d.json,
-      timeout: clampNum(timeout, 1, 300), status: d.status, headers: null, optional: d.optional }
+      timeout: clampNum(timeout, 1, 300), status: d.status, headers: null, optional: d.optional, pin: null }
+    var self = this
     if (isCall && e.name === "http") {
-      if (e.args.length < 1 || e.args.length > 2 || e.named.length)
+      if (e.args.length < 1 || e.args.length > 2)
         this.fail("http(\"https://...\") takes a URL and optionally a map of headers", e.pos)
-      var self = this
+      this.onlyNamed(e, ["pin"])
       return this.request(e.args[0], this.root, function() {
         src.kind = "http"
         src.arg = self.requestUrl("http GET", "http", e.args[0], self.root)
         src.every = Math.max(every === null ? 60 : every, 5)
         src.headers = e.args.length > 1 ? self.withSecrets(function() { return self.ex(e.args[1], self.root) }) : null
+        src.pin = self.pin(e, src.arg, self.root)
+        return src
+      })
+    }
+    if (isCall && e.name === "ws") {
+      if (e.args.length < 1 || e.args.length > 2)
+        this.fail("ws(\"wss://...\") takes a URL and optionally a map of headers", e.pos)
+      if (d.every || d.timeout) this.fail("ws(...) listens for messages; it takes no every or timeout", d.pos)
+      this.onlyNamed(e, ["pin"])
+      this.since("ws", e.pos)
+      return this.request(e.args[0], this.root, function() {
+        src.kind = "ws"
+        src.arg = self.requestUrl("websocket", "ws", e.args[0], self.root)
+        src.every = 0
+        src.timeout = 0
+        src.headers = e.args.length > 1 ? self.withSecrets(function() { return self.ex(e.args[1], self.root) }) : null
+        src.pin = self.pin(e, src.arg, self.root)
         return src
       })
     }
@@ -3336,6 +3423,7 @@ Compiler.prototype = {
       if (e.name === "apps") this.commands.push("read installed Android apps (names, packages and icons)")
       if (e.name === "recent") this.commands.push("read the recently opened apps")
       if (e.name === "drawer") this.commands.push("read the launcher's apps (names and icons)")
+      if (e.name === "speech") this.commands.push("listen through the microphone after a tap, and read what you say")
       src.kind = "android." + e.name
       src.every = Math.max(every === null ? 60 : every, 1)
       src.timeout = 0
@@ -3379,6 +3467,65 @@ Compiler.prototype = {
     return { type: "asset", name: d.name, base64: b }
   },
 
+  // strings { en { ... } id { ... } } as str: the set for the language, with en's for any it lacks. A text that takes
+  // values, items: n => "${n} items", isn't in the map: str.items(count) applies it where it's called.
+  strings: function(d) {
+    var self = this
+    this.since(STRINGS_DECL, d.pos)
+    var en = d.sets.filter(function(x) { return x.language === "en" })[0]
+    if (!en) this.fail("strings needs en { }: every text in English, which shows where another language has none", d.pos)
+    var english = {}
+    en.fields.forEach(function(f) { english[f.name] = f })
+    d.sets.forEach(function(set) {
+      set.fields.forEach(function(f) {
+        var e = english.hasOwnProperty(f.name) ? english[f.name] : null
+        if (!e) self.fail(set.language + " has " + f.name + ", which en doesn't: en has every text, in English", f.pos)
+        var n = e.value.k === "lambda" ? e.value.params.length : null
+        if ((f.value.k === "lambda" ? f.value.params.length : null) !== n)
+          self.fail(n === null ? f.name + " is text in en, so it is in " + set.language + " too"
+            : f.name + " takes " + n + " value" + (n === 1 ? "" : "s") + " in en, so it does in " + set.language + " too", f.pos)
+      })
+    })
+    var mine = {}
+    d.sets.filter(function(x) { return x.language === self.language }).forEach(function(set) {
+      set.fields.forEach(function(f) { mine[f.name] = f })
+    })
+    var chosen = {}
+    en.fields.forEach(function(f) { chosen[f.name] = (mine.hasOwnProperty(f.name) ? mine[f.name] : f).value })
+    this.texts = chosen
+    var entries = en.fields.filter(function(f) { return chosen[f.name].k !== "lambda" }).map(function(f) { return [f.name, chosen[f.name]] })
+    return { type: "let", name: d.name, value: this.ex({ k: "map", entries: entries, pos: d.pos }, this.root) }
+  },
+
+  // Whether e is str, the file's strings { }, and not a local of that name.
+  isTexts: function(e, s) {
+    if (this.texts === null || e.k !== "name" || e.name !== STRINGS) return false
+    var ref = this.lookup(STRINGS, s)
+    return ref !== null && !ref.local
+  },
+
+  text: function(name, pos) {
+    if (!this.texts.hasOwnProperty(name)) this.fail("strings has no " + name + "; add it to en { }", pos)
+    return this.texts[name]
+  },
+
+  // str.items(count): the text that takes values, applied to them.
+  textCall: function(e, s) {
+    var self = this
+    var f = this.text(e.name, e.pos)
+    if (f.k !== "lambda") this.fail("str." + e.name + " is text; it takes no values: str." + e.name, e.pos)
+    var args = e.args.slice(1).map(function(a) { return self.ex(a, s) })
+    var n = f.params.length
+    if (args.length !== n || e.named.length)
+      this.fail("str." + e.name + " takes " + n + " value" + (n === 1 ? "" : "s") + ", like str." + e.name + "(" + f.params.join(", ") + ")", e.pos)
+    var body = this.ex(f.body, new Scope(this.root, f.params))
+    return new Ev(function(env) {
+      var slots = []
+      for (var i = 0; i < n; i++) slots.push(run(args[i], env))
+      return run(body, new Env(env.host, env, slots))
+    })
+  },
+
   let: function(d) {
     var v = d.value
     if (v.k === "call" && (v.name === "history" || v.name === "prev")) {
@@ -3412,13 +3559,25 @@ Compiler.prototype = {
       if (expr.k) this.fail(d.trigger + " needs a value that changes, like a state or a source", d.expr.pos)
     }
     if (d.first) this.since(ON_FIRST, d.pos)
+    var each = null
+    if (d.each) {
+      this.since(ON_EACH, d.pos)
+      each = this.wsSlot(d.expr, this.root)
+      if (each === null) this.fail("on … each runs for every message of a ws(...) source, by its name: on feed each { ... }", d.expr.pos)
+    }
+    var dictation = d.trigger === "on" && d.expr.k === "member" && d.expr.name === "final" && d.expr.e.k === "name"
+      && this.speechSources().indexOf(d.expr.e.name) >= 0
     return {
       kind: d.trigger,
       expr: expr,
       action: this.handler({ name: d.trigger, stmts: d.stmts, pos: d.pos }, this.root, TRIGGER_PARAMS[d.trigger] || []),
       pos: d.pos,
       // `on x first`: also for x's first value, with `old` null.
-      first: !!d.first
+      first: !!d.first,
+      // `on said.final` for a source said = android.speech: runs as a dictation ends, and may type what was heard.
+      dictation: dictation,
+      // `on feed each`: the slot of the ws(...) source whose every message runs it, with `value` the message.
+      each: each
     }
   },
 
@@ -3564,6 +3723,8 @@ Compiler.prototype = {
         self.fail("onDragEnd runs when an onDrag drag ends: add onDrag", h.pos)
       var kinds = HANDLER_KINDS[h.name]
       if (kinds && kinds.indexOf(n.type) < 0) self.fail(h.name + " only works on " + kinds.join(" and "), h.pos)
+      if (h.name === "onPull" && !body.props.some(function(p) { return p.name === "lazy" || n.type === "Column" && p.name === "scroll" }))
+        self.fail("onPull runs when a list is pulled down past its top: add " + (n.type === "Column" ? "scroll: true or " : "") + "lazy: true", h.pos)
       if (h.name === "onLongPress" && self.inScreen === false && !self.isFace)
         self.fail("long-press on a tile belongs to the home screen, which lifts it to move and resize it; onLongPress works in faces, apps and a screen { }", h.pos)
       self.since(h.name, h.pos)
@@ -3678,7 +3839,14 @@ Compiler.prototype = {
     var self = this
     var params = paramsIn || HANDLER_PARAMS[h.name] || []
     var inner = new Scope(scope, params)
-    var body = this.chancy(function() { return self.block(h.stmts, inner) })
+    var outer = this.handlerName
+    this.handlerName = h.name
+    var body
+    try {
+      body = this.chancy(function() { return self.block(h.stmts, inner) })
+    } finally {
+      this.handlerName = outer
+    }
     var hname = h.name
     return {
       params: params,
@@ -3761,6 +3929,7 @@ Compiler.prototype = {
     }
     var c = st.call
     if (c.name === "post") return this.post(c, scope, null)
+    if (c.name === "send") return this.send(c, scope)
     if (c.name === "shortcuts")
       this.fail("shortcuts(...) puts an app's shortcuts into a state, when they've loaded: menuShortcuts = shortcuts(a.key)", c.pos)
     var arity = ACTIONS[c.name]
@@ -3790,6 +3959,24 @@ Compiler.prototype = {
     }
     if (c.name === "sound") this.webFile(c.args[0], scope, "sound")
     if (c.name === "pressKey" && first !== null && keyCombo(first) === null) this.fail(KEY_HELP, c.args[0].pos)
+    if (c.name === "pickImages") {
+      // The picker would cover the node before the finger lifts: home then sees a long press under it.
+      if (this.handlerName === "onPress" || this.handlerName === "onRelease")
+        this.fail("pickImages() opens Android's photo picker over the widget, before the finger lifts: put it in onTap", c.pos)
+      this.commands.push("paste images you pick on Android into the Linux window you're typing in")
+    }
+    if (c.name === "speech") {
+      // It hands what's heard to the source, not back to the handler.
+      if (!this.speechSources().length)
+        this.fail("speech(...) needs a source to hear with: source said = android.speech, then said.text, or on said.final { ... }", c.pos)
+      // Starting may ask for the microphone, over the widget before the finger lifts: home then sees a long press.
+      var anywhere = first !== null && SPEECH_ANYWHERE.indexOf(first) >= 0
+      if ((this.handlerName === "onPress" || this.handlerName === "onRelease") && !anywhere)
+        this.fail("speech(\"" + (first !== null ? first : "…") + "\") may ask for the microphone over the widget before the finger lifts: start it in onTap", c.pos)
+      // The microphone opens only for a touch, never on a timer or a fetched value.
+      if (TRIGGERS.indexOf(this.handlerName) >= 0 && first !== null && !anywhere)
+        this.fail("speech(\"" + first + "\") works in onTap, not in a trigger; stop and cancel work anywhere", c.pos)
+    }
     if (c.name === "latch" && args.length > 1 && args[1].k && typeof args[1].c === "string" && LATCH_HOWS.indexOf(args[1].c) < 0)
       this.fail("latch's second value is " + LATCH_HOWS.join(", "), c.args[1].pos)
     if ((c.name === "screen" || c.name === "close") && this.screenAction === null) this.screenAction = c.pos
@@ -3810,7 +3997,7 @@ Compiler.prototype = {
     var self = this
     if (call.args.length < 1 || call.args.length > 3)
       this.fail("post(\"https://...\", body, headers) takes a URL, optionally a body and a map of headers", call.pos)
-    call.named.forEach(function(n) { if (n[0] !== "method") self.fail("post takes method: and no other named arguments", n[1].pos) })
+    this.onlyNamed(call, ["pin", "method"])
     this.since("post", call.pos)
     // A constant, so the reviewer reads what it does: "http DELETE https://…".
     var method = "POST"
@@ -3829,13 +4016,77 @@ Compiler.prototype = {
       ]
     })
     var url = parts[0], body = parts[1], headers = parts[2]
+    var pin = this.pin(call, url, scope)
     return function(env) {
       var target = run(url, env)
       // Like any action whose value hasn't loaded: a null URL sends nothing.
       if (target === null) return
       var h = headers ? run(headers, env) : null
-      env.host.post(show(target), body ? run(body, env) : null, h instanceof Map ? toJson(h) : {}, slot, method)
+      var p = pin ? run(pin, env) : null
+      env.host.post(show(target), body ? run(body, env) : null, h instanceof Map ? toJson(h) : {}, slot, method, p === null ? null : show(p))
     }
+  },
+
+  // send(source, message): a message on a ws(...) source's connection, a map or list as JSON. A secret may go
+  // into it, as into a request's body, bound to the servers the source connects to.
+  send: function(call, scope) {
+    var self = this
+    if (call.args.length !== 2 || call.named.length) this.fail("send(source, message) takes a ws(...) source and a message", call.pos)
+    this.since("send", call.pos)
+    var slot = this.wsSlot(call.args[0], scope)
+    if (slot === null) this.fail("send's first value is a ws(...) source, by its name: send(feed, {type: \"hello\"})", call.args[0].pos)
+    var url = this.wsUrl(slot)
+    var message = this.request(url, this.root, function() { return self.withSecrets(function() { return self.ex(call.args[1], scope) }) })
+    return function(env) { env.host.send(slot, run(message, env)) }
+  },
+
+  // The slot of the ws(...) source e names, or null when it isn't one.
+  wsSlot: function(e, scope) {
+    if (e.k !== "name") return null
+    var ref = this.lookup(e.name, scope)
+    if (ref === null || ref.local) return null
+    var g = this.globals[ref.slot]
+    return g && g.type === "source" && g.kind === "ws" ? ref.slot : null
+  },
+
+  // The URL the ws(...) source in slot is declared with, which a secret sent on it is bound to.
+  wsUrl: function(slot) {
+    var name = this.globals[slot].name
+    return this.ast.body.decls.filter(function(d) { return d.kind === "source" && d.name === name })[0].expr.args[0]
+  },
+
+  // The names of the sources that read android.speech: speech(...) needs one, and `on said.final` may type.
+  speechSources: function() {
+    if (!this.speechNames) {
+      this.speechNames = this.ast.body.decls.filter(function(d) {
+        return d.kind === "source" && d.expr.k === "member" && d.expr.name === "speech" && d.expr.e.k === "name" && d.expr.e.name === "android"
+      }).map(function(d) { return d.name })
+    }
+    return this.speechNames
+  },
+
+  // Fails on a named argument of call other than allowed.
+  onlyNamed: function(call, allowed) {
+    var self = this
+    call.named.forEach(function(n) {
+      if (allowed.indexOf(n[0]) < 0)
+        self.fail(call.name + " takes " + allowed.map(function(a) { return a + ":" }).join(" and ") + ", and no other named arguments", n[1].pos)
+    })
+  },
+
+  // pin: "…" on http(...), post(...) or ws(...): the SHA-256 of the one certificate its server may show, as hex
+  // (colons allowed, as openssl prints it), checked here when it's a constant.
+  pin: function(call, url, scope) {
+    var n = call.named.filter(function(x) { return x[0] === "pin" })[0]
+    if (!n) return null
+    var e = n[1]
+    this.since(HTTP_PIN, e.pos)
+    if (url.k && typeof url.c === "string" && url.c.indexOf("https://") !== 0 && url.c.indexOf("wss://") !== 0)
+      this.fail("pin: needs an https:// or wss:// URL", call.args[0].pos)
+    var pin = this.ex(e, scope)
+    if (pin.k && typeof pin.c === "string" && normalizePin(pin.c) === null)
+      this.fail("pin: is a certificate's SHA-256 as 64 hex digits, like openssl x509 -noout -fingerprint -sha256 prints it", e.pos)
+    return pin
   },
 
   // An image src or a sound that is, or starts as, an https URL: it needs owl 8, and it's listed like http(...).
@@ -3976,6 +4227,10 @@ Compiler.prototype = {
       return new Ev(function(env) { return truthy(run(c, env)) ? run(p, env) : run(q, env) })
     }
     case "member": {
+      if (this.isTexts(e.e, s) && this.text(e.name, e.pos).k === "lambda") {
+        var tn = this.text(e.name, e.pos).params.length
+        this.fail("str." + e.name + " takes " + tn + " value" + (tn === 1 ? "" : "s") + ": str." + e.name + "(…)", e.pos)
+      }
       var o = this.ex(e.e, s)
       var name = e.name
       return this.fold([o], function(env) { return member(run(o, env), name) })
@@ -4055,6 +4310,11 @@ Compiler.prototype = {
 
   call: function(e, s) {
     var self = this
+    // str.count(n) is a text that takes values; get(str, key) and the like are the built-ins they are.
+    if (e.args.length && this.isTexts(e.args[0], s) && (this.texts.hasOwnProperty(e.name) || !BUILTINS.hasOwnProperty(e.name)))
+      return this.textCall(e, s)
+    if (e.name === "speech")
+      this.fail("speech(...) is an action and gives nothing back: tap with onTap: speech(\"toggle\"), and read what's heard from source said = android.speech", e.pos)
     if (ACTIONS.hasOwnProperty(e.name)) this.fail(e.name + "(...) is an action; use it in a handler like onTap", e.pos)
     if (e.name === "history" || e.name === "prev")
       this.fail(e.name + "(...) keeps samples over time, so it only works as: let x = " + e.name + "(...)", e.pos)
@@ -4078,6 +4338,8 @@ Compiler.prototype = {
     if (e.named.length) this.fail(e.name + " takes no named arguments", e.named[0][1].pos)
     if (e.args.length < b.min || e.args.length > b.max)
       this.fail(e.name + " takes " + (b.min === b.max ? String(b.min) : b.min + "-" + b.max) + " arguments, not " + e.args.length, e.pos)
+    // The language the file is compiled for, the one strings picks.
+    if (e.name === "lang") return evOf(this.language)
     // A secret in a request's URL, as enc(token).
     var urlSecret = e.name === "enc" && this.inUrl && e.args.length === 1 && this.isSecret(e.args[0], s) ? e.args[0] : null
     var args = urlSecret !== null ? [this.withSecrets(function() { return self.ex(urlSecret, s) })] : e.args.map(function(a) { return self.ex(a, s) })
@@ -4109,8 +4371,9 @@ Compiler.prototype = {
   }
 }
 
-function compile(src) {
-  return new Compiler(parse(src)).program()
+// language is the one strings { } picks and lang() gives, like en or id; English unless the host says.
+function compile(src, language) {
+  return new Compiler(parse(src), language || "en").program()
 }
 
 // Line and column of a compile error, with the line and a caret, as the
@@ -4229,7 +4492,9 @@ Instance.prototype = {
       },
       act: function(name, args) { self.host.act(name, args) },
       runInto: function(cmd, slot) { self.host.runInto(cmd, slot) },
-      post: function(url, body, headers, slot, method) { self.host.post(url, body, headers, slot, method || "POST") },
+      post: function(url, body, headers, slot, method, pin) { self.host.post(url, body, headers, slot, method || "POST", pin || null) },
+      // A message on a ws(...) source's connection; a host without one drops it.
+      send: function(slot, message) { if (self.host.send) self.host.send(slot, message) },
       shortcutsInto: function(key, slot) {
         if (self.host.shortcutsInto) self.host.shortcutsInto(key, slot)
         else self.setState(slot, [])
@@ -4354,6 +4619,14 @@ Instance.prototype = {
     this.changed()
   },
 
+  // A ws(...) source's message: its value, and each `on … each` trigger on it runs with it, repeats too.
+  message: function(slot, raw) {
+    var self = this
+    this.setSource(slot, raw)
+    var v = this.values[slot]
+    this.program.triggers.forEach(function(t) { if (t.each === slot) t.action.run(self.env, [v, null]) })
+  },
+
   sample: function() {
     var self = this
     this.program.globals.forEach(function(g, slot) {
@@ -4385,6 +4658,8 @@ Instance.prototype = {
     try {
       this.program.triggers.forEach(function(t, i) {
         if (t.kind !== "on" && t.kind !== "when") return
+        // `on feed each` runs per message of its ws(...) source, which the host hands to message(), and watches nothing else.
+        if (t.each !== null && t.each !== undefined) return
         var v = self.guard(t.kind, function() { return run(t.expr, self.env) }, null)
         // Null is "still loading": neither a change nor something to compare with.
         if (t.kind === "on" && v === null) return

@@ -1,0 +1,7 @@
+widget "x" {
+  meta { owl: 17 }
+  source feed = ws("wss://example.com/feed", {Authorization: "x"}, pin: "AB:CD:EF:01:23:45:67:89:ab:cd:ef:01:23:45:67:89:ab:cd:ef:01:23:45:67:89:ab:cd:ef:01:23:45:67:89") json status
+  state last = null
+  on feed each { last = value }
+  Button { text: last ?? "hi"; onTap: send(feed, {type: "hello"}) }
+}

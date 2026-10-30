@@ -1,0 +1,5 @@
+widget "x" {
+  meta { owl: 17 }
+  source s = http("https://nas.local/x", pin: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+  Button { text: s; onTap: post("https://nas.local/y", {}, pin: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", method: "PUT") }
+}
