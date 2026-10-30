@@ -45,6 +45,22 @@ jobs:
           java -jar tools/owl.jar index .
           java -jar tools/owl.jar index . --faces
           java -jar tools/owl.jar index . --apps
+      - name: Verify catalog previews
+        run: |
+          python3 - <<'CHECK'
+          import json
+          from pathlib import Path
+          for filename, kind in [('index.json', 'widgets'), ('apps.json', 'apps'), ('faces.json', 'faces')]:
+              for entry in json.loads(Path(filename).read_text())[kind]:
+                  preview = entry.get('preview')
+                  if not preview or not Path(preview).is_file():
+                      raise SystemExit(f"Missing preview: {entry['id']}")
+                  if Path(preview).stat().st_size > 300 * 1024:
+                      raise SystemExit(f"Preview too large: {preview}")
+                  for theme, image in entry.get('themes', {}).items():
+                      if not Path(image).is_file() or Path(image).stat().st_size > 100 * 1024:
+                          raise SystemExit(f"Invalid theme preview: {entry['id']} / {theme}")
+          CHECK
       - name: Site
         run: |
           mkdir _site
