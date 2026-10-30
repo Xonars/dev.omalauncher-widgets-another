@@ -1,5 +1,5 @@
 app "Тихая читалка" {
-  meta { owl: 13; description: "EPUB, MOBI и TXT: только книга, плавная прокрутка и три темы"; version: "1.3"; license: "MIT AND GPL-3.0-only"; category: "productivity" }
+  meta { owl: 13; description: "EPUB, MOBI и TXT: только книга, плавная прокрутка и три темы"; version: "1.3.1"; license: "MIT AND GPL-3.0-only"; category: "productivity" }
   title: ""
   statusBar: false
   edge: true
@@ -13,8 +13,8 @@ app "Тихая читалка" {
   let ink = theme == "night" ? #e0dfd8 : #282c30
   let soft = theme == "night" ? #9bbdb4 : #45675d
   let script = "~/.config/omalauncher/widgets/quiet-reader/main.py"
-  source listing = cmd(menu ? "python ${script} list ${sh(folder)}" : null) json
-  source content = cmd(book == "" ? null : "python ${script} read ${sh(book)}") every 24h json timeout 60s
+  source listing = cmd(menu ? "python ${script} list ${sh(folder)}" : "") json
+  source content = cmd(book == "" ? "" : "python ${script} read ${sh(book)}") every 24h json timeout 60s
   back: !menu && book != ""
   onBack: menu = true
   Box {
