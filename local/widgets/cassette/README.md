@@ -10,7 +10,7 @@
 
 ## Совместимость
 
-Приложение объявляет OWL 15. Нужна сборка omalauncher с `mediaSession` из [PR #227](https://github.com/SimonSchubert/omalauncher/pull/227): одного номера OWL 15 в другой сборке недостаточно. Уровень API ещё согласуется с сопровождающим.
+Версия для OMA Another объявляет OWL 18. Нужна сборка omalauncher с `mediaSession` из [PR #227](https://github.com/SimonSchubert/omalauncher/pull/227): В Another API перенесён как расширение OWL 18. Python-код встроен в `cassette.owl`; отдельный `player.py` для запуска не нужен.
 
 28.10.2026 пользователь подтвердил работу обновлённого APK и Cassette с OWL 15 на Nothing Phone (1), вручную, без ADB. Android-переключение следующего/предыдущего трека этим не проверялось: приложение не публикует эти команды.
 
