@@ -1,5 +1,5 @@
 app "Cassette" {
-  meta { owl: 19; description: "Yandex Music client with search, library, downloads and Android media controls. English and Russian UI."; version: "1.10"; license: "MIT"; category: "media" }
+  meta { owl: 19; description: "Yandex Music client with search, library, downloads and Android media controls. English and Russian UI."; version: "1.11"; license: "MIT"; category: "media" }
   let backend = """
 #!/usr/bin/env python3
 '''Token-free mpv IPC bridge for Cassette OWL.'''
@@ -145,6 +145,7 @@ def local_tracks():
         cover = path.with_suffix('.cover.jpg')
         tracks.append({
             **saved,
+            'sourceId': saved.get('sourceId') or saved.get('id'),
             'coverPath': str(cover) if cover.is_file() else None,
             'id': 'local:' + path.name,
             'local': True,
@@ -389,6 +390,8 @@ if __name__ == '__main__':
   source artworkLookup = http(token == null || artworkCandidate == null ? null : "https://api.music.yandex.net/search?text=${enc(join((artworkCandidate.artists ?? []).map(a => a.name), ", ") + " " + artworkCandidate.title)}&type=track&page=0", {Authorization: "OAuth ${token}"}) json status
   let current = queue[index]
   let currentDetails = current.local ? ((localTracks ?? []).filter(t => t.id == current.id)[0] ?? current) : current
+  let currentSongId = current.local ? currentDetails.sourceId : current.id
+  let currentSongLink = currentSongId == null ? "" : currentDetails.albums[0].id != null ? "https://music.yandex.ru/album/${enc(currentDetails.albums[0].id)}/track/${enc(split(str(currentSongId), ":")[0])}" : "https://music.yandex.ru/track/${enc(split(str(currentSongId), ":")[0])}"
   let currentArt = currentDetails.coverPath
   let currentArtist = join((current.artists ?? []).map(a => a.name), ", ")
   let currentCover = currentDetails.coverUri == null ? "" : "https://${replace(currentDetails.coverUri, "%%", "600x600")}"
@@ -637,6 +640,11 @@ if __name__ == '__main__':
               visible: trackMenu
               onDismiss: trackMenu = false
               Column { width: 270; gap: 4; padding: 6
+                if currentSongLink != "" {
+                  Text { text: english ? "Share" : "Поделиться"; padding: [12, 14]; onTap: {
+                    copy(currentSongLink); trackMenu = false; haptic()
+                  } }
+                }
                 if currentDetails.albums[0].id != null {
                   Text { text: english ? "Open album" : "Открыть страницу альбома"; padding: [12, 14]; onTap: {
                     trackMenu = false; collection = str(currentDetails.albums[0].id); owner = ""; heading = currentDetails.albums[0].title ?? current.title; artistId = ""; artistName = ""; playerView = false

@@ -108,3 +108,8 @@ when fetched/search metadata matches their exact generated filename; missing
 covers are also looked up through the authenticated Android HTTP source. Account
 credentials are never sent to the Python bridge. Artwork failures preserve the
 complete downloaded audio and are reported in the download result.
+
+Version 1.11 adds **Share** to the playing view's ⋮ menu. It copies the current
+song's Yandex Music link to the clipboard. Downloaded tracks retain their original
+service ID separately from their local queue ID, so the action also works for
+saved tracks with service metadata.
