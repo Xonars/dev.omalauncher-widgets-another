@@ -4,7 +4,7 @@ An independent OWL client for Yandex Music, inspired by
 [Rirusha/Cassette](https://github.com/Rirusha/Cassette). This is an original OWL/Python
 implementation, not a GTK port. No GTK binaries or upstream artwork are bundled.
 
-In OMA Another, requires **OWL 18** with `mediaSession`, plus Arch packages `python`, `mpv` and
+In OMA Another, requires **OWL 19** with `mediaSession`, plus Arch packages `python`, `mpv` and
 `ffmpeg`. Ported from [Cassette PR #368](https://github.com/SimonSchubert/omarchy-widgets/pull/368)
 and [MediaSession PR #227](https://github.com/SimonSchubert/omalauncher/pull/227).
 The upstream submission remains separate; install `app.owl` as `cassette.owl`
@@ -89,3 +89,27 @@ stop callbacks have not been manually exercised. Their wiring is implemented,
 but these interactions are not claimed as device-tested.
 
 License: MIT.
+
+## Background playback (Another OWL 19)
+
+Version 1.9 requires Another OWL 19. The explicit media-session background lease keeps queue transitions and authenticated download-info requests running when the view is hidden, without exporting the Yandex token to Linux. Android Next/Previous and the app buttons control the same queue through `owl-send`; Stop releases the background lease. Artwork and track metadata update in the Android notification and lock screen. Phone sensors remain subject to normal visibility. Playback survives closing the view, but not stopping Linux or the launcher process.
+
+## Track navigation and downloaded artwork (1.10)
+
+Artist labels in track lists, the mini player and the playing view are plain text.
+Use the playing view's ⋮ menu to open the current album or artist. Selecting an
+artist explicitly from artist search still opens that artist.
+
+Downloads keep public track metadata in a `.json` sidecar, a local `.cover.jpg`,
+and an ID3 front-cover image embedded in the MP3. Audio is stream-copied without
+re-encoding. Cassette uses the local image offline, including for a track already
+in the queue before its artwork was repaired. Existing downloads are enriched
+when fetched/search metadata matches their exact generated filename; missing
+covers are also looked up through the authenticated Android HTTP source. Account
+credentials are never sent to the Python bridge. Artwork failures preserve the
+complete downloaded audio and are reported in the download result.
+
+Version 1.11 adds **Share** to the playing view's ⋮ menu. It copies the current
+song's Yandex Music link to the clipboard. Downloaded tracks retain their original
+service ID separately from their local queue ID, so the action also works for
+saved tracks with service metadata.
