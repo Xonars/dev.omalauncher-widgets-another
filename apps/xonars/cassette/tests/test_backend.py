@@ -56,5 +56,55 @@ class BackendTest(unittest.TestCase):
         self.assertNotIn('token', result)
 
 
+class ArtworkTest(unittest.TestCase):
+    setUp = BackendTest.setUp
+    def test_downloaded_cover_is_embedded_and_available_offline_in_library(self):
+        import base64
+        import io
+        import subprocess
+        music = self.bridge['MUSIC']
+        music.mkdir(parents=True)
+        audio = music / 'Artist - Title.mp3'
+        subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i',
+                        'anullsrc=r=44100:cl=stereo', '-t', '0.15', str(audio)], check=True)
+        png = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aE1sAAAAASUVORK5CYII=')
+        track = {'id': '42', 'title': 'Title', 'artists': [{'id': '7', 'name': 'Artist'}],
+                 'albums': [{'id': '8', 'title': 'Album'}], 'coverUri': 'avatars.yandex.net/cover/%%'}
+        with patch('urllib.request.build_opener') as opener:
+            opener.return_value.open.return_value = io.BytesIO(png)
+            self.assertTrue(self.bridge['save_track_art'](audio, track))
+        result = json.loads(subprocess.check_output(['ffprobe', '-v', 'error', '-show_streams', '-show_format', '-of', 'json', str(audio)]))
+        self.assertTrue(any(s.get('disposition', {}).get('attached_pic') == 1 for s in result['streams']))
+        self.assertEqual('Album', result['format']['tags']['album'])
+        offline = self.bridge['local_tracks']()[0]
+        self.assertTrue(Path(offline['coverPath']).is_file())
+        self.assertEqual('7', offline['artists'][0]['id'])
+        self.assertEqual('8', offline['albums'][0]['id'])
+        self.assertEqual('local:Artist - Title.mp3', offline['id'])
+
+    def test_legacy_repair_only_matches_the_exact_download_filename(self):
+        from unittest.mock import Mock
+        music = self.bridge['MUSIC']
+        music.mkdir(parents=True)
+        (music / 'Artist - Title.mp3').write_bytes(b'audio')
+        save = Mock(return_value=True)
+        self.bridge['save_track_art'] = save
+        tracks = [{'title': 'Other', 'artists': [{'name': 'Artist'}], 'coverUri': 'avatars.yandex.net/a/%%'},
+                  {'title': 'Title', 'artists': [{'name': 'Artist'}], 'coverUri': 'avatars.yandex.net/b/%%'}]
+        self.assertEqual(1, self.bridge['repair_downloads'](tracks))
+        save.assert_called_once_with(music / 'Artist - Title.mp3', tracks[1])
+
+    def test_cover_failure_does_not_lose_the_downloaded_audio(self):
+        import io
+        from unittest.mock import Mock
+        self.bridge['ensure_player'] = lambda: None
+        self.bridge['resolve'] = lambda url: 'https://storage.yandex.net/audio'
+        self.bridge['save_track_art'] = Mock(side_effect=OSError('offline'))
+        with patch('urllib.request.build_opener') as opener, patch('sys.stdout'):
+            opener.return_value.open.return_value = io.BytesIO(b'complete audio')
+            self.bridge['main'](['download', 'https://storage.yandex.net/info', 'Artist - Title', '{}'])
+        self.assertEqual(b'complete audio', (self.bridge['MUSIC'] / 'Artist - Title.mp3').read_bytes())
+
+
 if __name__ == '__main__':
     unittest.main()

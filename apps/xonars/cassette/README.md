@@ -93,3 +93,18 @@ License: MIT.
 ## Background playback (Another OWL 19)
 
 Version 1.9 requires Another OWL 19. The explicit media-session background lease keeps queue transitions and authenticated download-info requests running when the view is hidden, without exporting the Yandex token to Linux. Android Next/Previous and the app buttons control the same queue through `owl-send`; Stop releases the background lease. Artwork and track metadata update in the Android notification and lock screen. Phone sensors remain subject to normal visibility. Playback survives closing the view, but not stopping Linux or the launcher process.
+
+## Track navigation and downloaded artwork (1.10)
+
+Artist labels in track lists, the mini player and the playing view are plain text.
+Use the playing view's ⋮ menu to open the current album or artist. Selecting an
+artist explicitly from artist search still opens that artist.
+
+Downloads keep public track metadata in a `.json` sidecar, a local `.cover.jpg`,
+and an ID3 front-cover image embedded in the MP3. Audio is stream-copied without
+re-encoding. Cassette uses the local image offline, including for a track already
+in the queue before its artwork was repaired. Existing downloads are enriched
+when fetched/search metadata matches their exact generated filename; missing
+covers are also looked up through the authenticated Android HTTP source. Account
+credentials are never sent to the Python bridge. Artwork failures preserve the
+complete downloaded audio and are reported in the download result.

@@ -1,5 +1,5 @@
 app "Cassette" {
-  meta { owl: 19; description: "Yandex Music client with search, library, downloads and Android media controls. English and Russian UI."; version: "1.9"; license: "MIT"; category: "media" }
+  meta { owl: 19; description: "Yandex Music client with search, library, downloads and Android media controls. English and Russian UI."; version: "1.10"; license: "MIT"; category: "media" }
   let backend = """
 #!/usr/bin/env python3
 '''Token-free mpv IPC bridge for Cassette OWL.'''
@@ -51,6 +51,80 @@ def local_path(value):
         raise ValueError('Недопустимый локальный файл')
     return path
 
+
+def download_name(value):
+    return ''.join(c for c in value if c.isalnum() or c in ' ._-')[:150].strip('.') or 'track'
+
+def save_track_art(path, track):
+    lock_path = CACHE / ('art-' + hashlib.sha256(str(path).encode()).hexdigest() + '.lock')
+    with lock_path.open('w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _save_track_art(path, track)
+
+def _save_track_art(path, track):
+    # Public metadata only. Account credentials remain in Android's secret state.
+    write_json(path.with_suffix('.json'), track)
+    cover_uri = track.get('coverUri', '')
+    if not cover_uri:
+        return False
+    cover = path.with_suffix('.cover.jpg')
+    if not cover.is_file():
+        address = 'https://' + cover_uri.replace('%%', '600x600')
+        opener = urllib.request.build_opener(YandexRedirect())
+        with opener.open(trusted_url(address), timeout=20) as response:
+            data = response.read(4 * 1024 * 1024 + 1)
+        if len(data) > 4 * 1024 * 1024:
+            raise ValueError('Слишком большая обложка')
+        raw = cover.with_name(f'.{cover.name}.{os.getpid()}.raw')
+        image = cover.with_name(f'.{cover.name}.{os.getpid()}.jpg')
+        try:
+            raw.write_bytes(data)
+            subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', str(raw),
+                            '-vf', 'scale=600:600:force_original_aspect_ratio=decrease',
+                            '-frames:v', '1', str(image)],
+                           check=True, capture_output=True, timeout=30)
+            image.replace(cover)
+        finally:
+            raw.unlink(missing_ok=True)
+            image.unlink(missing_ok=True)
+    tagged = path.with_name(f'.{path.stem}.{os.getpid()}.tags.mp3')
+    original = path.stat()
+    try:
+        artists = ', '.join(a.get('name', '') for a in track.get('artists', []))
+        albums = track.get('albums') or [{}]
+        subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', str(path), '-i', str(cover),
+                        '-map', '0:a:0', '-map', '1:v:0', '-c', 'copy',
+                        '-id3v2_version', '3', '-disposition:v:0', 'attached_pic',
+                        '-metadata', 'title=' + track.get('title', path.stem),
+                        '-metadata', 'artist=' + artists,
+                        '-metadata', 'album=' + albums[0].get('title', ''),
+                        '-metadata:s:v', 'title=Album cover',
+                        '-metadata:s:v', 'comment=Cover (front)', str(tagged)],
+                       check=True, capture_output=True, timeout=45)
+        tagged.replace(path)
+        os.utime(path, ns=(original.st_atime_ns, original.st_mtime_ns))
+    finally:
+        tagged.unlink(missing_ok=True)
+    write_json(path.with_suffix('.json'), {**track, '_artEmbedded': True})
+    return True
+
+def repair_downloads(tracks):
+    if not isinstance(tracks, list):
+        tracks = [tracks]
+    repaired = 0
+    for track in tracks:
+        if not isinstance(track, dict) or not track.get('coverUri') or not isinstance(track.get('title'), str):
+            continue
+        artists = ', '.join(a.get('name', '') for a in track.get('artists', []))
+        path = MUSIC / (download_name(artists + ' - ' + track.get('title', '')) + '.mp3')
+        if path.is_file() and (not path.with_suffix('.cover.jpg').is_file() or not read_json(path.with_suffix('.json'), {}).get('_artEmbedded')):
+            try:
+                repaired += int(save_track_art(path, track))
+            except Exception:
+                # Keep the downloaded audio playable even when artwork is offline.
+                pass
+    return repaired
+
 def local_tracks():
     MUSIC.mkdir(mode=0o700, parents=True, exist_ok=True)
     tracks = []
@@ -67,12 +141,16 @@ def local_tracks():
             duration_ms = round(float(probe.stdout.strip() or 0) * 1000)
         except (ValueError, subprocess.SubprocessError):
             duration_ms = 0
+        saved = read_json(path.with_suffix('.json'), {})
+        cover = path.with_suffix('.cover.jpg')
         tracks.append({
+            **saved,
+            'coverPath': str(cover) if cover.is_file() else None,
             'id': 'local:' + path.name,
             'local': True,
             'path': str(path),
-            'title': title or stem,
-            'artists': [{'name': artist or 'Локальный файл'}],
+            'title': saved.get('title') or title or stem,
+            'artists': saved.get('artists') or [{'name': artist or 'Локальный файл'}],
             'durationMs': duration_ms,
         })
     return tracks
@@ -153,6 +231,9 @@ def main(args):
     if not args:
         raise ValueError('Не указана команда')
     action = args[0]
+    if action == 'cache-metadata':
+        print(repair_downloads(json.loads(args[1])))
+        return
     if action == 'library':
         print(json.dumps(local_tracks(), ensure_ascii=False))
         return
@@ -221,9 +302,9 @@ def main(args):
         NOW_PLAYING.unlink(missing_ok=True)
     elif action == 'download':
         url = resolve(args[1])
-        target = Path.home() / 'Music/Cassette'
+        target = MUSIC
         target.mkdir(parents=True, exist_ok=True)
-        name = ''.join(c for c in args[2] if c.isalnum() or c in ' ._-')[:150].strip('.') or 'track'
+        name = download_name(args[2])
         dest = target / (name + '.mp3')
         temp = dest.with_name(f'.{dest.name}.{os.getpid()}.part')
         opener = urllib.request.build_opener(YandexRedirect())
@@ -234,7 +315,13 @@ def main(args):
             temp.replace(dest)
         finally:
             temp.unlink(missing_ok=True)
-        print('Сохранено: ' + str(dest))
+        artwork_ok = False
+        if len(args) > 3:
+            try:
+                artwork_ok = save_track_art(dest, json.loads(args[3]))
+            except Exception:
+                pass
+        print('Сохранено: ' + str(dest) + (' · с обложкой' if artwork_ok else ' · без обложки'))
     else:
         raise ValueError('Неизвестная команда')
     ERROR.unlink(missing_ok=True)
@@ -278,6 +365,8 @@ if __name__ == '__main__':
   state ready = false
   state wasPlaying = false
   state playerView = false
+  state trackMenu = false
+  state artworkAttempted = []
   state sessionRunning = false
   state mediaControl = null
   source account = http(token == null ? null : "https://api.music.yandex.net/account/status", {Authorization: "OAuth ${token}"}) json status
@@ -295,9 +384,14 @@ if __name__ == '__main__':
   source wave = http(token == null || tab != "Волна" || waveRequest == 0 ? null : "https://api.music.yandex.net/rotor/station/user:onyourwave/tracks?settings2=true&reload=${int(waveRequest)}", {Authorization: "OAuth ${token}"}) json status
   source player = cmd("python -c ${sh(backend)} status") every 1s json
   source localTracks = cmd("python -c ${sh(backend)} library") every 30s json
+  let artworkCandidates = (localTracks ?? []).filter(t => t.coverPath == null && !contains(artworkAttempted, t.id))
+  let artworkCandidate = artworkCandidates[0]
+  source artworkLookup = http(token == null || artworkCandidate == null ? null : "https://api.music.yandex.net/search?text=${enc(join((artworkCandidate.artists ?? []).map(a => a.name), ", ") + " " + artworkCandidate.title)}&type=track&page=0", {Authorization: "OAuth ${token}"}) json status
   let current = queue[index]
+  let currentDetails = current.local ? ((localTracks ?? []).filter(t => t.id == current.id)[0] ?? current) : current
+  let currentArt = currentDetails.coverPath
   let currentArtist = join((current.artists ?? []).map(a => a.name), ", ")
-  let currentCover = current.coverUri == null ? "" : "https://${replace(current.coverUri, "%%", "600x600")}"
+  let currentCover = currentDetails.coverUri == null ? "" : "https://${replace(currentDetails.coverUri, "%%", "600x600")}"
   let currentLiked = current.id != null && (likePendingId == str(current.id) ? likePendingAdd : contains(allLikedIds, str(current.id)))
   source download = http(current.id == null || str(current.id) == "" || current.local ? null : "https://api.music.yandex.net/tracks/${enc(current.id)}/download-info", {Authorization: "OAuth ${token}"}) json status
   let audio = (download.out.result ?? []).filter(d => d.codec == "mp3").sortBy(d => -d.bitrateInKbps)[0]
@@ -306,9 +400,11 @@ if __name__ == '__main__':
   let emptyHint = artistId != "" ? (english ? "No tracks available for this artist" : "У исполнителя нет доступных треков") : tab == "Очередь" ? (english ? "The queue is empty — add tracks with +" : "Очередь пуста — добавьте треки через +") : tab == "Скачанное" ? (english ? "Downloaded tracks will appear here" : "Здесь появятся сохранённые треки") : tab == "Любимое" ? (english ? "No liked tracks yet" : "В избранном пока нет треков") : tab == "Волна" ? (english ? "No recommendations available" : "Не удалось подобрать музыку") : (english ? "Enter a search to find music" : "Введите запрос, чтобы найти музыку")
   let apiError = account != null && !account.ok ? (english ? "Sign-in failed: HTTP ${account.code}. Check your token and connection." : "Вход не выполнен: HTTP ${account.code}. Проверьте токен и доступность сервиса.") : account.out.error != null ? "${account.out.error.message}" : ""
   let contentError = artistId != "" && artistInfo != null && !artistInfo.ok ? (english ? "Could not load artist · HTTP ${artistInfo.code}" : "Не удалось загрузить исполнителя · HTTP ${artistInfo.code}") : artistId != "" && artistTracks != null && !artistTracks.ok ? (english ? "Could not load artist tracks · HTTP ${artistTracks.code}" : "Не удалось загрузить треки исполнителя · HTTP ${artistTracks.code}") : collection != "" && owner != "" && playlist != null && !playlist.ok ? (english ? "Could not load playlist · HTTP ${playlist.code}" : "Не удалось загрузить плейлист · HTTP ${playlist.code}") : collection != "" && owner == "" && album != null && !album.ok ? (english ? "Could not load album · HTTP ${album.code}" : "Не удалось загрузить альбом · HTTP ${album.code}") : tab == "Волна" && wave != null && !wave.ok ? (english ? "My Wave is unavailable · HTTP ${wave.code}" : "Моя волна сейчас недоступна · HTTP ${wave.code}") : tab == "Любимое" && likes != null && !likes.ok ? (english ? "Could not read likes · HTTP ${likes.code}" : "Не удалось прочитать любимое · HTTP ${likes.code}") : tab == "Любимое" && likedTracks != null && !likedTracks.ok ? (english ? "Could not load liked tracks · HTTP ${likedTracks.code}" : "Не удалось загрузить любимое · HTTP ${likedTracks.code}") : tab == "Плейлисты" && playlists != null && !playlists.ok ? (english ? "Could not load playlists · HTTP ${playlists.code}" : "Не удалось загрузить плейлисты · HTTP ${playlists.code}") : tab == "Поиск" && search != null && !search.ok ? (english ? "Search unavailable · HTTP ${search.code}" : "Поиск недоступен · HTTP ${search.code}") : ""
-  back: playerView || artistId != "" || collection != "" || tab != "Главная"
-  onBack: { if playerView { playerView = false } else if artistId != "" { artistId = ""; artistName = "" } else { collection = ""; tab = "Главная" } }
+  back: trackMenu || playerView || artistId != "" || collection != "" || tab != "Главная"
+  onBack: { if trackMenu { trackMenu = false } else if playerView { playerView = false } else if artistId != "" { artistId = ""; artistName = "" } else { collection = ""; tab = "Главная" } }
   on current {
+    trackMenu = false
+    if value != null && !value.local { run("python -c ${sh(backend)} cache-metadata ${sh(toJson([value]))}") }
     ready = false
     wasPlaying = false
     sessionRunning = value.id != null
@@ -318,7 +414,7 @@ if __name__ == '__main__':
         art: currentCover,
         title: current.title ?? "",
         artist: currentArtist,
-        album: current.albums[0].title ?? "",
+        album: currentDetails.albums[0].title ?? "",
         duration: current.durationMs / 1000 ?? 0,
         position: 0,
         playing: false,
@@ -352,7 +448,7 @@ if __name__ == '__main__':
         art: currentCover,
         title: current.title ?? "",
         artist: currentArtist,
-        album: current.albums[0].title ?? "",
+        album: currentDetails.albums[0].title ?? "",
         duration: current.durationMs / 1000 ?? 0,
         position: 0,
         playing: false,
@@ -415,7 +511,7 @@ if __name__ == '__main__':
         art: currentCover,
         title: current.title ?? "",
         artist: currentArtist,
-        album: current.albums[0].title ?? "",
+        album: currentDetails.albums[0].title ?? "",
         duration: str(value.id) == str(current.id) ? (value.duration ?? current.durationMs / 1000) : current.durationMs / 1000,
         position: str(value.id) == str(current.id) ? (value.position ?? 0) : 0,
         playing: value.connected && !value.idle && !value.paused && str(value.id) == str(current.id),
@@ -429,6 +525,18 @@ if __name__ == '__main__':
         },
       })
     }
+  }
+  on artworkLookup first {
+    if value.ok && artworkCandidate != null {
+      run("python -c ${sh(backend)} cache-metadata ${sh(toJson((value.out.result.tracks.results ?? []).map(t => {id: t.id, title: t.title, coverUri: t.coverUri, artists: (t.artists ?? []).map(a => {id: a.id, name: a.name}), albums: (t.albums ?? []).map(a => {id: a.id, title: a.title})})))}")
+      artworkAttempted = flatten([artworkAttempted, [artworkCandidate.id]])
+    }
+  }
+  on likedTracks first {
+    if value.ok { run("python -c ${sh(backend)} cache-metadata ${sh(toJson((value.out.result ?? []).map(t => {id: t.id, title: t.title, coverUri: t.coverUri, artists: (t.artists ?? []).map(a => {id: a.id, name: a.name}), albums: (t.albums ?? []).map(a => {id: a.id, title: a.title})})))}") }
+  }
+  on search first {
+    if value.ok { run("python -c ${sh(backend)} cache-metadata ${sh(toJson((value.out.result.tracks.results ?? []).map(t => {id: t.id, title: t.title, coverUri: t.coverUri, artists: (t.artists ?? []).map(a => {id: a.id, name: a.name}), albums: (t.albums ?? []).map(a => {id: a.id, title: a.title})})))}") }
   }
   on mutation {
     message = value.ok && value.out.error == null ? (likePendingAdd ? (english ? "Added to liked tracks" : "Добавлено в любимое") : (english ? "Removed from liked tracks" : "Удалено из любимого")) : (english ? "Error: ${value.out.error.message ?? value.err ?? value.code}" : "Ошибка: ${value.out.error.message ?? value.err ?? value.code}")
@@ -460,16 +568,15 @@ if __name__ == '__main__':
     Row {
       gap: 10; padding: [4, 10]; fill: width
       onTap: { queue = items; index = indexOf(items.map(x => str(x.id)), str(t.id)); message = "" }
+      let coverPath = t.coverPath ?? (localTracks ?? []).filter(l => l.id == t.id)[0].coverPath
       Box {
         width: 48; height: 48; background: alpha(accent, 0.12); radius: 9; clip: true; align: center
-        if t.coverUri != null { Image { src: "https://${replace(t.coverUri, "%%", "100x100")}"; fill: true; fit: cover; label: (english ? "Cover for ${t.title}" : "Обложка ${t.title}") } }
+        if coverPath != null || t.coverUri != null { Image { src: coverPath ?? "https://${replace(t.coverUri, "%%", "100x100")}"; fill: true; fit: cover; label: (english ? "Cover for ${t.title}" : "Обложка ${t.title}") } }
         else { Text { text: t.local ? "↓" : "♪"; align: center; color: accent; fontSize: 20 } }
       }
       Column { weight: 1; gap: 3
         Text { text: t.title ?? (english ? "Unavailable track" : "Недоступный трек"); maxLines: 1; bold: current.id == t.id; color: current.id == t.id ? accent : foreground }
-        Text { text: join((t.artists ?? []).map(a => a.name), ", "); style: small; color: muted; maxLines: 1; onTap: {
-          if !t.local && t.artists[0].id != null { artistId = str(t.artists[0].id); artistName = t.artists[0].name; collection = "" }
-        } }
+        Text { text: join((t.artists ?? []).map(a => a.name), ", "); style: small; color: muted; maxLines: 1 }
       }
       Text { text: fmtTime((t.durationMs ?? 0) / 1000, "m:ss", "UTC"); style: small; color: muted }
       Box { size: 40; radius: 20; background: alpha(accent, 0.1); align: center; onTap: {
@@ -507,7 +614,7 @@ if __name__ == '__main__':
         Box { size: big ? 56 : 48; radius: 28; background: alpha(foreground, 0.08); align: center; onTap: { haptic(); run("python -c ${sh(backend)} next") }
           Text { text: "⏭"; fontSize: big ? 29 : 25; align: center }
         }
-        Box { size: big ? 52 : 46; radius: 26; background: current.local ? alpha(green, 0.16) : alpha(foreground, 0.06); align: center; onTap: { haptic(); if !current.local && audio.downloadInfoUrl != null { message = run("python -c ${sh(backend)} download ${sh(audio.downloadInfoUrl)} ${sh(join((current.artists ?? []).map(a => a.name), ", ") + " - " + current.title)}") } }
+        Box { size: big ? 52 : 46; radius: 26; background: current.local ? alpha(green, 0.16) : alpha(foreground, 0.06); align: center; onTap: { haptic(); if !current.local && audio.downloadInfoUrl != null { message = run("python -c ${sh(backend)} download ${sh(audio.downloadInfoUrl)} ${sh(join((current.artists ?? []).map(a => a.name), ", ") + " - " + current.title)} ${sh(toJson(current))}") } }
           Text { text: current.local ? "✓" : "↓"; fontSize: big ? 26 : 23; color: current.local ? green : foreground; align: center }
         }
       }
@@ -522,17 +629,39 @@ if __name__ == '__main__':
           Text { text: "‹"; fontSize: 34; padding: 8; onTap: playerView = false }
           Text { text: (english ? "Now playing" : "Сейчас играет"); style: title; weight: 1; align: center }
           FavoriteButton { big: true }
+          Box {
+            size: 48; radius: 24; background: surface; align: center
+            onTap: { haptic(); trackMenu = !trackMenu }
+            Text { text: "⋮"; fontSize: 30; align: center }
+            Popup {
+              visible: trackMenu
+              onDismiss: trackMenu = false
+              Column { width: 270; gap: 4; padding: 6
+                if currentDetails.albums[0].id != null {
+                  Text { text: english ? "Open album" : "Открыть страницу альбома"; padding: [12, 14]; onTap: {
+                    trackMenu = false; collection = str(currentDetails.albums[0].id); owner = ""; heading = currentDetails.albums[0].title ?? current.title; artistId = ""; artistName = ""; playerView = false
+                  } }
+                }
+                if currentDetails.artists[0].id != null {
+                  Text { text: english ? "Open artist" : "Открыть исполнителя"; padding: [12, 14]; onTap: {
+                    trackMenu = false; artistId = str(currentDetails.artists[0].id); artistName = currentDetails.artists[0].name; collection = ""; playerView = false
+                  } }
+                }
+                if currentDetails.albums[0].id == null && currentDetails.artists[0].id == null {
+                  Text { text: english ? "No album or artist details" : "Нет данных об альбоме и исполнителе"; color: muted; padding: 12; maxLines: 2 }
+                }
+              }
+            }
+          }
         }
         Box {
           weight: 1; fill: width; align: center; background: linear(0, 0, 1, 1, [alpha(accent, 0.24), surface]); radius: 22; clip: true
-          if current.coverUri != null { Image { src: "https://${replace(current.coverUri, "%%", "600x600")}"; fill: true; fit: cover; label: (english ? "Cover for ${current.title}" : "Обложка ${current.title}") } }
+          if currentArt != null || currentCover != "" { Image { src: currentArt ?? currentCover; fill: true; fit: cover; label: (english ? "Cover for ${current.title}" : "Обложка ${current.title}") } }
           else { Text { text: "♪"; fontSize: 120; color: alpha(accent, 0.75); align: center } }
         }
         Column { gap: 5
           Text { text: current.title; fontSize: 28; bold: true; align: center; maxLines: 2 }
-          Text { text: join((current.artists ?? []).map(a => a.name), ", "); fontSize: 18; color: accent; align: center; maxLines: 2; onTap: {
-            if !current.local && current.artists[0].id != null { artistId = str(current.artists[0].id); artistName = current.artists[0].name; collection = ""; playerView = false }
-          } }
+          Text { text: join((current.artists ?? []).map(a => a.name), ", "); fontSize: 18; color: accent; align: center; maxLines: 2 }
           if current.local { Text { text: (english ? "Downloaded to this device" : "Скачано на устройство"); style: small; color: green; align: center } }
         }
         Transport { big: true }
@@ -579,7 +708,7 @@ if __name__ == '__main__':
           Text { text: english ? get(labels, "Настройки") : "Настройки"; style: title }
           Text { text: (english ? "Quality: best available MP3.\nDownloads: ~/Music/Cassette\nMP3, M4A, OGG, OPUS, FLAC and WAV supported.\nAudio keeps playing after you close this screen." : "Качество: лучший доступный MP3.\nЗагрузки: ~/Music/Cassette\nПоддерживаются MP3, M4A, OGG, OPUS, FLAC и WAV.\nЗвук продолжает играть после закрытия окна."); color: muted }
           Button { text: (english ? "Downloaded tracks (${len(localTracks ?? [])})" : "Скачанные треки (${len(localTracks ?? [])})"); onTap: { tab = "Скачанное"; collection = "" } }
-          Button { text: (english ? "Stop playback" : "Остановить музыку"); onTap: { ready = false; wasPlaying = false; run("python -c ${sh(backend)} stop") } }
+          Button { text: (english ? "Stop playback" : "Остановить музыку"); onTap: { sessionRunning = false; mediaSession(null); ready = false; wasPlaying = false; run("python -c ${sh(backend)} stop") } }
           Button { text: (english ? "Sign out" : "Выйти из аккаунта"); onTap: { sessionRunning = false; mediaSession(null); run("python -c ${sh(backend)} stop"); token = null; queue = []; index = -1; loadedId = ""; tab = "Главная"; collection = ""; query = ""; ready = false; wasPlaying = false } }
           Text { text: (english ? "Inspired by Rirusha/Cassette. This is an independent OWL app. Playback depends on your subscription and Yandex API availability." : "Создано по функциональности Rirusha/Cassette. Это отдельное OWL-приложение. Воспроизведение зависит от подписки и доступности API Яндекса."); style: small; color: muted }
           Button { text: (english ? "Original project" : "Исходный проект"); onTap: url("https://github.com/Rirusha/Cassette") }
@@ -689,9 +818,7 @@ if __name__ == '__main__':
           Row { onTap: playerView = true
             Column { weight: 1; gap: 2
               Text { text: current.title; bold: true; maxLines: 1 }
-              Text { text: join((current.artists ?? []).map(a => a.name), ", "); style: small; color: accent; maxLines: 1; onTap: {
-                if !current.local && current.artists[0].id != null { artistId = str(current.artists[0].id); artistName = current.artists[0].name; collection = "" }
-              } }
+              Text { text: join((current.artists ?? []).map(a => a.name), ", "); style: small; color: accent; maxLines: 1 }
             }
             FavoriteButton { }
             Text { text: "⌃"; color: muted; fontSize: 22; padding: 6 }
