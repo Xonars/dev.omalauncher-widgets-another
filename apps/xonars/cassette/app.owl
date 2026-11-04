@@ -1,5 +1,5 @@
 app "Cassette" {
-  meta { owl: 18; description: "Yandex Music client with search, library, downloads and Android media controls. English and Russian UI."; version: "1.8"; license: "MIT"; category: "media" }
+  meta { owl: 19; description: "Yandex Music client with search, library, downloads and Android media controls. English and Russian UI."; version: "1.9"; license: "MIT"; category: "media" }
   let backend = """
 #!/usr/bin/env python3
 '''Token-free mpv IPC bridge for Cassette OWL.'''
@@ -42,7 +42,7 @@ def read_json(path, fallback):
 def metadata(args, start=2, local=False):
     values = list(args[start:start + 4]) + ['', '', '', '']
     return {'id': values[0], 'title': values[1], 'artist': values[2],
-            'cover': values[3], 'local': local}
+            'cover': values[3], 'local': local, 'source': args[1]}
 
 def local_path(value):
     '''Return a media path only when it is a direct child of our download folder.'''
@@ -174,8 +174,22 @@ def main(args):
             raise ValueError('Не указан адрес аудио')
         print(resolve(args[1]))
         return
+    if action in ('next', 'previous', 'stop-control'):
+        # The Android owner keeps OWL's queue live; no token ever leaves Android.
+        subprocess.run(['owl-send', 'cassette.owl', 'set', 'mediaControl',
+                        json.dumps({'action': action, 'nonce': time.time_ns()})],
+                       check=True, timeout=8, capture_output=True)
+        return
     ensure_player()
-    if action == 'play':
+    if action == 'replay':
+        track = read_json(NOW_PLAYING, {})
+        source = track.get('source')
+        if not source:
+            raise ValueError('Нет трека для повторного воспроизведения')
+        target = str(local_path(source)) if track.get('local') else resolve(source)
+        ipc(['loadfile', target, 'replace'])
+        ipc(['set_property', 'pause', False])
+    elif action == 'play':
         if len(args) < 2:
             raise ValueError('Не указан адрес аудио')
         url = resolve(args[1])
@@ -264,6 +278,8 @@ if __name__ == '__main__':
   state ready = false
   state wasPlaying = false
   state playerView = false
+  state sessionRunning = false
+  state mediaControl = null
   source account = http(token == null ? null : "https://api.music.yandex.net/account/status", {Authorization: "OAuth ${token}"}) json status
   let uid = account.out.result.account.uid
   source search = http(token == null || query == "" ? null : "https://api.music.yandex.net/search?text=${enc(query)}&type=${enc(kind)}&page=0", {Authorization: "OAuth ${token}"}) json status
@@ -295,6 +311,27 @@ if __name__ == '__main__':
   on current {
     ready = false
     wasPlaying = false
+    sessionRunning = value.id != null
+    if sessionRunning {
+      mediaSession({
+        background: true,
+        art: currentCover,
+        title: current.title ?? "",
+        artist: currentArtist,
+        album: current.albums[0].title ?? "",
+        duration: current.durationMs / 1000 ?? 0,
+        position: 0,
+        playing: false,
+        commands: {
+          play: "python -c ${sh(backend)} play-control",
+          pause: "python -c ${sh(backend)} pause-control",
+          stop: "python -c ${sh(backend)} stop-control",
+          previous: "python -c ${sh(backend)} previous",
+          next: "python -c ${sh(backend)} next",
+          seek: "python -c ${sh(backend)} seek",
+        },
+      })
+    }
     if value.local {
       loadedId = str(value.id)
       run("python -c ${sh(backend)} play-local ${sh(value.path)} ${sh(value.id)} ${sh(value.title)} ${sh(join((value.artists ?? []).map(a => a.name), ", "))} ${sh("")}")
@@ -302,45 +339,95 @@ if __name__ == '__main__':
     }
   }
   on download first {
-    if value.ok && audio.downloadInfoUrl != null && loadedId != str(current.id) {
+    if sessionRunning && value.ok && audio.downloadInfoUrl != null && loadedId != str(current.id) {
       loadedId = str(current.id)
       run("python -c ${sh(backend)} play ${sh(audio.downloadInfoUrl)} ${sh(current.id)} ${sh(current.title)} ${sh(currentArtist)} ${sh(currentCover)}")
       ready = true
     }
   }
-  on player first {
-    if !value.connected || value.idle {
-      mediaSession(null)
-    } else {
+  on sessionRunning {
+    if value && current != null {
       mediaSession({
-        title: value.title ?? current.title ?? "",
-        artist: value.artist ?? currentArtist,
+        background: true,
+        art: currentCover,
+        title: current.title ?? "",
+        artist: currentArtist,
         album: current.albums[0].title ?? "",
-        duration: value.duration ?? current.durationMs / 1000,
-        position: value.position ?? 0,
-        playing: value.connected && !value.idle && !value.paused,
+        duration: current.durationMs / 1000 ?? 0,
+        position: 0,
+        playing: false,
         commands: {
           play: "python -c ${sh(backend)} play-control",
           pause: "python -c ${sh(backend)} pause-control",
-          stop: "python -c ${sh(backend)} stop",
+          stop: "python -c ${sh(backend)} stop-control",
+          previous: "python -c ${sh(backend)} previous",
+          next: "python -c ${sh(backend)} next",
           seek: "python -c ${sh(backend)} seek",
         },
       })
+    } else { mediaSession(null) }
+  }
+  on mediaControl {
+    if value.action == "stop-control" {
+      sessionRunning = false
+      ready = false
+      wasPlaying = false
+      run("python -c ${sh(backend)} stop")
+      mediaSession(null)
+    } else if value.action == "next" {
+      if index + 1 < len(queue) { index = index + 1 }
+      else if repeatMode && len(queue) > 1 { index = 0 }
+      else if repeatMode && current != null {
+        run("python -c ${sh(backend)} replay")
+        sessionRunning = true
+        ready = true
+        wasPlaying = false
+      }
+    } else if value.action == "previous" {
+      if index > 0 { index = index - 1 }
+      else if current != null {
+        if player.idle { run("python -c ${sh(backend)} replay"); sessionRunning = true; ready = true }
+        else { run("python -c ${sh(backend)} seek 0") }
+      }
     }
-    if ready && value.connected && !value.idle { wasPlaying = true }
-    if ready && wasPlaying && value.idle && value.error == "" {
+  }
+  on player first {
+    // Never mistake the previous track (still resolving/loading) for the new one.
+    if ready && value.connected && !value.idle && str(value.id) == str(current.id) { wasPlaying = true }
+    if sessionRunning && ready && wasPlaying && value.idle && value.error == "" {
       wasPlaying = false
       ready = false
       if index + 1 < len(queue) { index = index + 1 }
-      else if repeatMode {
-        if len(queue) == 1 && current.local {
-          run("python -c ${sh(backend)} play-local ${sh(current.path)} ${sh(current.id)} ${sh(current.title)} ${sh(currentArtist)} ${sh(currentCover)}")
-          ready = true
-        } else if len(queue) == 1 && audio.downloadInfoUrl != null {
-          run("python -c ${sh(backend)} play ${sh(audio.downloadInfoUrl)} ${sh(current.id)} ${sh(current.title)} ${sh(currentArtist)} ${sh(currentCover)}")
-          ready = true
-        } else { index = 0 }
-      }
+      else if repeatMode && len(queue) > 1 { index = 0 }
+      else if repeatMode && current != null {
+        run("python -c ${sh(backend)} replay")
+        ready = true
+      } else { sessionRunning = false }
+    }
+    if sessionRunning && value.idle && value.error != "" { sessionRunning = false }
+    if !sessionRunning {
+      mediaSession(null)
+    } else {
+      // Keep ownership through EOF -> link resolution -> mpv load. Releasing at
+      // EOF would suspend the very HTTP source that must start the next track.
+      mediaSession({
+        background: true,
+        art: currentCover,
+        title: current.title ?? "",
+        artist: currentArtist,
+        album: current.albums[0].title ?? "",
+        duration: str(value.id) == str(current.id) ? (value.duration ?? current.durationMs / 1000) : current.durationMs / 1000,
+        position: str(value.id) == str(current.id) ? (value.position ?? 0) : 0,
+        playing: value.connected && !value.idle && !value.paused && str(value.id) == str(current.id),
+        commands: {
+          play: "python -c ${sh(backend)} play-control",
+          pause: "python -c ${sh(backend)} pause-control",
+          stop: "python -c ${sh(backend)} stop-control",
+          previous: "python -c ${sh(backend)} previous",
+          next: "python -c ${sh(backend)} next",
+          seek: "python -c ${sh(backend)} seek",
+        },
+      })
     }
   }
   on mutation {
@@ -407,16 +494,17 @@ if __name__ == '__main__':
         Box { size: big ? 52 : 46; radius: 26; background: repeatMode ? alpha(accent, 0.2) : alpha(foreground, 0.06); align: center; onTap: { haptic(); repeatMode = !repeatMode }
           Text { text: "↻"; fontSize: big ? 27 : 23; color: repeatMode ? accent : muted; align: center }
         }
-        Box { size: big ? 56 : 48; radius: 28; background: alpha(foreground, 0.08); align: center; onTap: { haptic(); if index > 0 { index = index - 1 } else { run("python -c ${sh(backend)} seek 0") } }
+        Box { size: big ? 56 : 48; radius: 28; background: alpha(foreground, 0.08); align: center; onTap: { haptic(); run("python -c ${sh(backend)} previous") }
           Text { text: "⏮"; fontSize: big ? 29 : 25; align: center }
         }
         Box { size: big ? 68 : 56; radius: 34; background: accent; align: center; onTap: {
           haptic()
+          sessionRunning = current != null
           if player.idle && current.local { run("python -c ${sh(backend)} play-local ${sh(current.path)} ${sh(current.id)} ${sh(current.title)} ${sh(currentArtist)} ${sh(currentCover)}"); ready = true }
           else if player.idle && audio.downloadInfoUrl != null { run("python -c ${sh(backend)} play ${sh(audio.downloadInfoUrl)} ${sh(current.id)} ${sh(current.title)} ${sh(currentArtist)} ${sh(currentCover)}"); ready = true }
           else { run("python -c ${sh(backend)} toggle") }
         } Text { text: player.paused || player.idle ? "▶" : "Ⅱ"; fontSize: big ? 30 : 25; color: background; align: center } }
-        Box { size: big ? 56 : 48; radius: 28; background: alpha(foreground, 0.08); align: center; onTap: { haptic(); if index + 1 < len(queue) { index = index + 1 } else if repeatMode { index = 0 } }
+        Box { size: big ? 56 : 48; radius: 28; background: alpha(foreground, 0.08); align: center; onTap: { haptic(); run("python -c ${sh(backend)} next") }
           Text { text: "⏭"; fontSize: big ? 29 : 25; align: center }
         }
         Box { size: big ? 52 : 46; radius: 26; background: current.local ? alpha(green, 0.16) : alpha(foreground, 0.06); align: center; onTap: { haptic(); if !current.local && audio.downloadInfoUrl != null { message = run("python -c ${sh(backend)} download ${sh(audio.downloadInfoUrl)} ${sh(join((current.artists ?? []).map(a => a.name), ", ") + " - " + current.title)}") } }
@@ -492,7 +580,7 @@ if __name__ == '__main__':
           Text { text: (english ? "Quality: best available MP3.\nDownloads: ~/Music/Cassette\nMP3, M4A, OGG, OPUS, FLAC and WAV supported.\nAudio keeps playing after you close this screen." : "Качество: лучший доступный MP3.\nЗагрузки: ~/Music/Cassette\nПоддерживаются MP3, M4A, OGG, OPUS, FLAC и WAV.\nЗвук продолжает играть после закрытия окна."); color: muted }
           Button { text: (english ? "Downloaded tracks (${len(localTracks ?? [])})" : "Скачанные треки (${len(localTracks ?? [])})"); onTap: { tab = "Скачанное"; collection = "" } }
           Button { text: (english ? "Stop playback" : "Остановить музыку"); onTap: { ready = false; wasPlaying = false; run("python -c ${sh(backend)} stop") } }
-          Button { text: (english ? "Sign out" : "Выйти из аккаунта"); onTap: { run("python -c ${sh(backend)} stop"); token = null; queue = []; index = -1; loadedId = ""; tab = "Главная"; collection = ""; query = ""; ready = false; wasPlaying = false } }
+          Button { text: (english ? "Sign out" : "Выйти из аккаунта"); onTap: { sessionRunning = false; mediaSession(null); run("python -c ${sh(backend)} stop"); token = null; queue = []; index = -1; loadedId = ""; tab = "Главная"; collection = ""; query = ""; ready = false; wasPlaying = false } }
           Text { text: (english ? "Inspired by Rirusha/Cassette. This is an independent OWL app. Playback depends on your subscription and Yandex API availability." : "Создано по функциональности Rirusha/Cassette. Это отдельное OWL-приложение. Воспроизведение зависит от подписки и доступности API Яндекса."); style: small; color: muted }
           Button { text: (english ? "Original project" : "Исходный проект"); onTap: url("https://github.com/Rirusha/Cassette") }
         }
