@@ -1,15 +1,13 @@
 name: runtime
 
-# Holds the Quickshell runtime (runtimes/quickshell) to the language's
-# reference implementation, tools/owl.jar: same output on every store widget,
-# same verdicts from the checker. Runs when either side changes, and when a
-# widget does, since every widget is one of the cases.
+# Quickshell remains OWL 17 and uses a pinned matching oracle/fixture tree.
+# The published Another catalogue is checked separately with tools/owl.jar (OWL 19).
 on:
   pull_request:
-    paths: ["runtimes/**", "tools/owl.jar", "widgets/**"]
+    paths: ["runtimes/**", "tools/owl.jar", "tools/check-quickshell.sh", "widgets/**", "faces/**", ".github/workflows/runtime.yml"]
   push:
     branches: [main]
-    paths: ["runtimes/**", "tools/owl.jar", "widgets/**"]
+    paths: ["runtimes/**", "tools/owl.jar", "tools/check-quickshell.sh", "widgets/**", "faces/**", ".github/workflows/runtime.yml"]
 
 permissions:
   contents: read
@@ -19,6 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -26,5 +26,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Owl.js matches owl.jar
-        run: runtimes/quickshell/test/run.sh
+      - name: Validate Another catalogue with the current compiler
+        run: |
+          java -jar tools/owl.jar index .
+          java -jar tools/owl.jar index . --faces
+          java -jar tools/owl.jar index . --apps
+      - name: Owl.js matches its supported upstream oracle
+        run: tools/check-quickshell.sh

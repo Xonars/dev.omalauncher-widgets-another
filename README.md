@@ -11,9 +11,11 @@ OWL apps и widgets Xonars: `apps/xonars/` и `widgets/xonars/`.
 
 Синхронизация upstream: `a981ae7f` (30 октября 2026). Quickshell runtime поддерживает OWL 15–17. Правила каталога и `tools/owl.jar`
 поддерживают OWL 19 из OMA Another 0.18.0 (сборка 35): `mediaSession`, фоновые медиаприложения и обложки. Cassette 1.11 включает фоновую очередь, офлайн-обложки, меню альбома/исполнителя и копирование ссылки на песню. Каталог Xonars и локальные исходники сохранены отдельно.
-Upstream-тест `runtimes/quickshell/test/run.sh` требует оригинальные widgets/faces
-Simon: для полного conformance используйте временную копию с этими каталогами
-из того же upstream, не добавляя их в публикуемый каталог Xonars.
+`tools/check-quickshell.sh` проверяет Quickshell OWL 17 с соответствующими
+эталонным `owl.jar` и fixtures из upstream `a981ae7f` во временном каталоге.
+Текущий `tools/owl.jar` OWL 19 отдельно проверяет каталог Another. Исходные
+widgets/faces Simon не добавляются в публикуемый каталог Xonars. CI получает
+полную Git-историю для закреплённого эталона; тесты runtime не отключены.
 На ARM64 Java 25 / Node проверка 30 октября дала 296 успешных сравнений;
 `random-walk` расходится в последних знаках чисел (~1e-9). Проверки принятия
 и отклонения всех OWL-файлов совпали. Все OWL Xonars прошли `owl.jar review`.
