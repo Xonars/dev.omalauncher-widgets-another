@@ -10,7 +10,7 @@ OWL apps и widgets Xonars: `apps/xonars/` и `widgets/xonars/`.
 Инструменты, runtime и документация основаны на SimonSchubert/omarchy-widgets; лицензии сохранены.
 
 Синхронизация upstream: `a981ae7f` (30 октября 2026). Quickshell runtime поддерживает OWL 15–17. Правила каталога и `tools/owl.jar`
-поддерживают OWL 18 из OMA Another 0.18.0, включая расширение `mediaSession`. Каталог Xonars и локальные исходники сохранены отдельно.
+поддерживают OWL 19 из OMA Another 0.18.0 (сборка 35): `mediaSession`, фоновые медиаприложения и обложки. Cassette 1.11 включает фоновую очередь, офлайн-обложки, меню альбома/исполнителя и копирование ссылки на песню. Каталог Xonars и локальные исходники сохранены отдельно.
 Upstream-тест `runtimes/quickshell/test/run.sh` требует оригинальные widgets/faces
 Simon: для полного conformance используйте временную копию с этими каталогами
 из того же upstream, не добавляя их в публикуемый каталог Xonars.

@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-APP = Path(__file__).resolve().parents[1] / 'app.owl'
+APP = Path(__file__).resolve().parents[2] / 'apps/xonars/cassette/app.owl'
 
 
 class BackendTest(unittest.TestCase):
