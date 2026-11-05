@@ -1,0 +1,832 @@
+widget "wallpapers" {
+  size: 3x3
+  minSize: 2x2
+  padding: 0
+  meta { description: "Pick the home screen's wallpaper: the theme's own, every Omarchy background, open community art from OpenDesktop and Wikimedia Commons photos"; version: "3.1"; license: "MIT"; category: "system"; owl: 7 }
+  requires { pacman: ["python", "python-pillow"] }
+
+  // The helper is written out by this command, in full and fixed, so this file is all the widget needs and a
+  // reviewer reads what runs. It then lists the theme's wallpapers; the other commands run the same file.
+  source mine = cmd("""f=~/.cache/omalauncher-wallpapers/helper.py
+mkdir -p ~/.cache/omalauncher-wallpapers
+cat > "$f.tmp" <<'OWL_PY'
+# Wallpaper picker helper: lists, thumbnails, browses and sets wallpapers.
+# Sources match omarchy-theme-manager: Omarchy's bundled backgrounds, OpenDesktop's
+# wallpaper category (CC-licensed, free, unbranded) and Wikimedia Commons featured landscapes.
+import hashlib, json, os, re, sys, time
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from urllib.parse import quote, urlencode, urlparse
+from urllib.request import Request, urlopen
+
+HOME = Path.home()
+STYLE = HOME / ".config/omalauncher/style/style.toml"
+THEME_DIRS = [HOME / ".config/omarchy/themes", HOME / ".local/share/omarchy/themes"]
+USER_BG = HOME / ".config/omarchy/backgrounds"
+CACHE = HOME / ".cache/omalauncher-wallpapers"
+THUMBS = CACHE / "thumbs"
+EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+UA = "omalauncher wallpaper picker"
+PER_PAGE = 24
+# Each page of thumbnails is one contact sheet: the launcher keeps at most 32 images per widget and
+# reloads them all past that, so one image per page (not per card) keeps the grid from flickering.
+# 8 x 3 cells of 480 x 300: under 1080 px tall, so the launcher decodes it at full size.
+CELL_W, CELL_H, SHEET_COLS, SHEET_ROWS = 480, 300, 8, 3
+SHEETS = CACHE / "sheets"
+HERO = CACHE / "tile.jpg"
+# The launcher points this at the wallpaper it shows, as Omarchy does.
+APPLIED = HOME / ".local/state/omarchy/current/background"
+SEEDS = {
+    "abstract": ["", "gradient", "geometric"],
+    "minimal": ["minimal", "simple", "gradient"],
+    "dark": ["dark", "night", "black"],
+    "space": ["space", "cosmic", "galaxy"],
+    "neon": ["neon", "synthwave", "cyberpunk"],
+}
+BRANDING = re.compile(r"(^|[^a-z])(gnome|ubuntu|debian|fedora|manjaro|nixos|windows|mac ?os|linux ?mint|kde|plasma desktop|tux|logo)([^a-z]|$)", re.I)
+NL = chr(10)
+SAFE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def out(value):
+    sys.stdout.write(json.dumps(value, separators=(",", ":")))
+
+
+def style_values():
+    text = STYLE.read_text() if STYLE.exists() else ""
+    found = {}
+    for line in text.splitlines():
+        if line.strip().startswith("["):
+            break
+        m = re.match(r' *(theme|background) *= *"(.*)" *$', line)
+        if m:
+            found[m.group(1)] = m.group(2)
+    theme = found.get("theme")
+    if not theme:
+        try:
+            theme = (HOME / ".local/state/omarchy/current/theme.name").read_text().strip()
+        except OSError:
+            theme = "tokyo-night"
+    return text, theme, found.get("background", "")
+
+
+def theme_dir(theme):
+    for root in THEME_DIRS:
+        if (root / theme).is_dir():
+            return root / theme
+    return None
+
+
+def images(folder):
+    if not folder or not folder.is_dir():
+        return []
+    return sorted((p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in EXTS
+                   and p.stem.lower() != "omarchy" and p.stat().st_size > 4096), key=lambda p: p.name.lower())
+
+
+def thumb_path(path, size):
+    st = path.stat()
+    key = hashlib.sha1(f"{path}|{st.st_size}|{st.st_mtime_ns}|{size}".encode()).hexdigest()[:20]
+    return THUMBS / f"{key}.jpg"
+
+
+def make_thumb(args):
+    path, size = args
+    target = thumb_path(path, size)
+    if target.exists():
+        touch(target)
+        return str(target)
+    from PIL import Image
+    try:
+        with Image.open(path) as im:
+            im.draft("RGB", (size, size))
+            im = im.convert("RGB")
+            im.thumbnail((size, size), Image.Resampling.BILINEAR, reducing_gap=2.0)
+            tmp = target.with_suffix(".tmp")
+            im.save(tmp, "JPEG", quality=82, optimize=False)
+            os.replace(tmp, target)
+        return str(target)
+    except Exception:
+        return ""
+
+
+def touch(path):
+    # Marks a cached file as used, at most once an hour, so prune() keeps it.
+    try:
+        if time.time() - path.stat().st_mtime > 3600:
+            os.utime(path)
+    except OSError:
+        pass
+
+
+def prune():
+    # Once a day: cached thumbnails, sheets and searches unused for 30 days go, and so do the
+    # credits of downloads that were removed.
+    stamp = CACHE / "pruned"
+    try:
+        if stamp.exists() and time.time() - stamp.stat().st_mtime < 86400:
+            return
+        CACHE.mkdir(parents=True, exist_ok=True)
+        stamp.touch()
+        old = time.time() - 30 * 86400
+        for folder in (THUMBS, SHEETS, CACHE / "search", CACHE / "dl"):
+            for f in folder.glob("*") if folder.is_dir() else []:
+                if f.is_file() and f.stat().st_mtime < old:
+                    f.unlink()
+        downloads = {p.name for p in USER_BG.glob("*/*")}
+        for f in (CACHE / "credits").glob("*.json"):
+            if f.name[:-5] not in downloads:
+                f.unlink()
+    except OSError:
+        pass
+
+
+def thumbs(jobs):
+    THUMBS.mkdir(parents=True, exist_ok=True)
+    todo = [j for j in jobs if not thumb_path(*j).exists()]
+    if len(todo) > 2:
+        # Forked workers: Python 3.14's default (forkserver) re-imports the script, which came on stdin and can't be.
+        import multiprocessing
+        from concurrent.futures import ProcessPoolExecutor
+        try:
+            with ProcessPoolExecutor(max_workers=min(6, os.cpu_count() or 2), mp_context=multiprocessing.get_context("fork")) as pool:
+                list(pool.map(make_thumb, todo, chunksize=2))
+        except Exception:
+            pass
+    return [make_thumb(j) for j in jobs]
+
+
+def sheet(items):
+    # The page's thumbnails, cover-cropped into one image; named by its contents, so it's built once.
+    key = hashlib.sha1("|".join(i["id"] + "=" + i["thumb"] for i in items).encode()).hexdigest()[:20]
+    target = SHEETS / f"{key}.jpg"
+    if target.exists():
+        touch(target)
+        return str(target)
+    from PIL import Image, ImageOps
+    SHEETS.mkdir(parents=True, exist_ok=True)
+    canvas = Image.new("RGB", (CELL_W * SHEET_COLS, CELL_H * SHEET_ROWS), (24, 24, 28))
+    for i, item in enumerate(items[:SHEET_COLS * SHEET_ROWS]):
+        try:
+            with Image.open(item["thumb"]) as im:
+                cell = ImageOps.fit(im.convert("RGB"), (CELL_W, CELL_H), Image.Resampling.BILINEAR)
+            canvas.paste(cell, ((i % SHEET_COLS) * CELL_W, (i // SHEET_COLS) * CELL_H))
+        except Exception:
+            pass
+    tmp = target.with_suffix(".tmp")
+    canvas.save(tmp, "JPEG", quality=85)
+    os.replace(tmp, target)
+    return str(target)
+
+
+def chunked(items, prefix):
+    size = SHEET_COLS * SHEET_ROWS
+    return [{"id": f"{prefix}|{n}|{len(items[n:n + size])}", "items": items[n:n + size], "sheet": sheet(items[n:n + size])}
+            for n in range(0, len(items), size)]
+
+
+def hero(path):
+    # The tile's picture, always at one path: the tile's Image redraws in place instead of taking a new slot.
+    stamp = CACHE / "tile.src"
+    st = path.stat()
+    mark = f"{path}|{st.st_size}|{st.st_mtime_ns}"
+    if HERO.exists() and stamp.exists() and stamp.read_text() == mark:
+        return str(HERO)
+    from PIL import Image
+    with Image.open(path) as im:
+        im.draft("RGB", (1080, 1080))
+        im = im.convert("RGB")
+        im.thumbnail((1080, 1080), Image.Resampling.BILINEAR)
+        tmp = HERO.with_suffix(".tmp")
+        im.save(tmp, "JPEG", quality=85)
+    os.replace(tmp, HERO)
+    stamp.write_text(mark)
+    return str(HERO)
+
+
+def pretty(stem):
+    # Downloads are named <source>-<id>-<slug>: show the title they had in the catalog.
+    m = re.match(r"(ocs|commons)-[0-9]+-", stem)
+    if m:
+        try:
+            return json.loads((CACHE / "items.json").read_text())[m.group(0)[:-1]]["name"]
+        except Exception:
+            stem = stem[m.end():]
+    return re.sub(r"^[0-9]+[-_ ]*", "", stem).replace("-", " ").replace("_", " ").strip() or stem
+
+
+def cmd_local():
+    prune()
+    _, theme, background = style_values()
+    own = images(theme_dir(theme) and theme_dir(theme) / "backgrounds")
+    mine = images(USER_BG / theme)
+    names = {p.name for p in mine}
+    files = [p for p in own if p.name not in names] + mine
+    names = [p.name for p in files]
+    # What the launcher shows, from its link; else what style.toml asks for; else the theme's first.
+    shown = applied()
+    current = shown if shown in names else background if background in names else (names[0] if names else "")
+    small = thumbs([(p, 560) for p in files])
+    tile = ""
+    for p in files:
+        if p.name == current:
+            tile = hero(p)
+    items = [{"id": "local:" + p.name, "file": p.name, "name": pretty(p.stem), "thumb": t,
+              "user": p.parent == USER_BG / theme} for p, t in zip(files, small) if t]
+    out({"theme": theme, "current": current, "hero": tile, "items": items, "chunks": chunked(items, "theme")})
+
+
+def omarchy_items():
+    groups = []
+    for root in THEME_DIRS:
+        if not root.is_dir():
+            continue
+        for d in sorted(root.iterdir(), key=lambda p: p.name):
+            if d.name in {g[0] for g in groups}:
+                continue
+            files = images(d / "backgrounds")
+            if files:
+                groups.append((d.name, files))
+    rows = []
+    for i in range(max((len(g[1]) for g in groups), default=0)):
+        rows.extend((t, f[i]) for t, f in groups if i < len(f))
+    return rows
+
+
+def omarchy_page(query, page):
+    rows = [(t, p) for t, p in omarchy_items() if not query or query.lower() in (t + " " + p.stem).lower()]
+    shown = rows[(page - 1) * PER_PAGE:page * PER_PAGE]
+    small = thumbs([(p, 560) for _, p in shown])
+    return [{"id": f"omarchy:{t}/{p.name}", "file": p.name, "name": pretty(p.stem), "by": t.replace("-", " "),
+             "thumb": s} for (t, p), s in zip(shown, small) if s], len(rows) > page * PER_PAGE
+
+
+def fetch(url, limit=4 << 20, timeout=20):
+    # Download links can hold raw spaces and the like in their file names.
+    url = quote(url, safe=":/?&=%#~@!,;+[]")
+    with urlopen(Request(url, headers={"User-Agent": UA}), timeout=timeout) as r:
+        data = r.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError("response too large")
+    return data
+
+
+def remote_thumb(item):
+    target = THUMBS / (item["id"] + ".jpg")
+    if target.exists():
+        touch(target)
+    else:
+        try:
+            raw = CACHE / "dl" / (item["id"] + ".src")
+            raw.parent.mkdir(parents=True, exist_ok=True)
+            raw.write_bytes(fetch(item.pop("thumbURL"), 12 << 20))
+            made = make_thumb((raw, 560))
+            os.replace(made, target)
+            raw.unlink()
+        except Exception:
+            return None
+    item.pop("thumbURL", None)
+    item["thumb"] = str(target)
+    return item
+
+
+def ocs_license(tags):
+    for t in tags.lower().split(","):
+        if t.strip() in ("cc0", "cc-by", "cc-by-sa"):
+            return {"cc0": "CC0", "cc-by": "CC BY", "cc-by-sa": "CC BY-SA"}[t.strip()]
+    return ""
+
+
+def ocs_download(rec):
+    best, score = None, -1 << 62
+    for i in range(1, 51):
+        url, name = str(rec.get(f"downloadlink{i}") or ""), str(rec.get(f"downloadname{i}") or "")
+        if not url:
+            continue
+        price = str(rec.get(f"downloadprice{i}") or "0")
+        mime = str(rec.get(f"downloadtags{i}") or "")
+        if price not in ("0", "0.00", "") or Path(name).suffix.lower() not in EXTS or (
+                "mimetype=" in mime and not re.search(r"mimetype=image/(jpeg|png|webp)", mime)):
+            continue
+        q = int(float(rec.get(f"downloadsize{i}") or 0))
+        low = name.lower().replace("-", " ").replace("_", " ")
+        q += 10 ** 9 if ("no logo" in low or "without logo" in low) else -10 ** 9 if "with logo" in low else 0
+        if q > score:
+            best, score = {"url": url, "name": name}, q
+    return best
+
+
+def ocs_item(rec):
+    lic = ocs_license(str(rec.get("tags") or ""))
+    dl = ocs_download(rec)
+    name = str(rec.get("name") or "")
+    thumb = str(rec.get("previewpic1") or "")
+    if not lic or not dl or not thumb.startswith("https://") or not str(rec.get("id", "")).isdigit():
+        return None
+    if BRANDING.search(" ".join([name, str(rec.get("summary") or ""), dl["name"]])):
+        return None
+    return {"id": f"ocs-{rec['id']}", "name": name[:80], "by": str(rec.get("personid") or "")[:40], "license": lic,
+            "page": str(rec.get("detailpage") or ""), "thumbURL": thumb}
+
+
+def search_ocs(collection, query, page):
+    def seed(s):
+        q = " ".join(x for x in (s, query) if x)
+        params = {"categories": "296", "sortmode": "high", "pagesize": 48, "page": page - 1, "format": "json"}
+        if q:
+            params["search"] = q
+        data = json.loads(fetch("https://api.opendesktop.org/ocs/v1/content/data?" + urlencode(params)))
+        return [i for i in (ocs_item(r) for r in data.get("data") or [] if isinstance(r, dict)) if i], int(data.get("totalitems") or 0)
+
+    with ThreadPoolExecutor(3) as pool:
+        groups = list(pool.map(seed, SEEDS.get(collection, [""])))
+    items, seen, authors = [], set(), {}
+    for i in range(max((len(g[0]) for g in groups), default=0)):
+        for g, _ in groups:
+            if i < len(g) and len(items) < PER_PAGE:
+                it, a = g[i], g[i]["by"].lower()
+                if it["id"] in seen or authors.get(a, 0) >= 6:
+                    continue
+                seen.add(it["id"]); authors[a] = authors.get(a, 0) + 1; items.append(it)
+    return items, any(t > page * 48 for _, t in groups)
+
+
+def strip_html(s):
+    return re.sub(r"<[^>]+>", "", s or "").strip()
+
+
+def search_commons(query, page):
+    params = {"action": "query", "format": "json", "formatversion": "2", "generator": "search", "gsrnamespace": "6",
+              "gsrlimit": PER_PAGE, "gsroffset": (page - 1) * PER_PAGE,
+              "gsrsearch": " ".join(x for x in (query, 'incategory:"Featured pictures of landscapes"') if x),
+              "prop": "imageinfo", "iiprop": "url|size|mime|extmetadata", "iiurlwidth": "640",
+              "iiextmetadatafilter": "Artist|LicenseShortName"}
+    data = json.loads(fetch("https://commons.wikimedia.org/w/api.php?" + urlencode(params)))
+    pages = sorted((data.get("query") or {}).get("pages") or [], key=lambda p: p.get("index", 0))
+    items = []
+    for p in pages:
+        info = (p.get("imageinfo") or [{}])[0]
+        meta = info.get("extmetadata") or {}
+        if info.get("mime") not in ("image/jpeg", "image/png", "image/webp") or not info.get("thumburl"):
+            continue
+        items.append({"id": f"commons-{p['pageid']}", "name": re.sub(r"[.][a-zA-Z]+$", "", p["title"][5:])[:80],
+                      "by": strip_html((meta.get("Artist") or {}).get("value"))[:40],
+                      "license": strip_html((meta.get("LicenseShortName") or {}).get("value")),
+                      "page": info.get("descriptionurl", ""), "thumbURL": info["thumburl"]})
+    return items, "continue" in data
+
+
+def remember(items):
+    # Every item's details, so setting one can name it and credit it later.
+    known = CACHE / "items.json"
+    try:
+        db = json.loads(known.read_text())
+    except Exception:
+        db = {}
+    db.update({i["id"]: i for i in items})
+    known.write_text(json.dumps(dict(list(db.items())[-1000:])))
+
+
+def remote_page(collection, query, page):
+    cache = CACHE / "search" / (hashlib.sha1(f"{collection}|{query}|{page}".encode()).hexdigest()[:20] + ".json")
+    if cache.exists() and time.time() - cache.stat().st_mtime < 6 * 3600:
+        result = json.loads(cache.read_text())
+        if all(Path(i["thumb"]).exists() for i in result["items"]):
+            return result["items"], result["more"]
+    items, more = search_commons(query, page) if collection == "photos" else search_ocs(collection, query, page)
+    with ThreadPoolExecutor(8) as pool:
+        items = [i for i in pool.map(remote_thumb, items) if i]
+    remember(items)
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps({"items": items, "more": more}))
+    return items, more
+
+
+def cmd_browse(collection, query, pages):
+    query = query.strip()[:80]
+    pages = max(1, min(20, int(pages or 1)))
+    base = f"{collection}|{query}"
+    result = {"key": f"{base}|{pages}", "base": base, "pages": pages, "items": [], "chunks": [], "more": False}
+    if collection != "omarchy" and collection != "photos" and collection not in SEEDS:
+        return out(result)
+    THUMBS.mkdir(parents=True, exist_ok=True)
+    seen = set()
+    for page in range(1, pages + 1):
+        try:
+            items, more = omarchy_page(query, page) if collection == "omarchy" else remote_page(collection, query, page)
+        except Exception as e:
+            # Keep what loaded; say why the rest didn't.
+            result["error"] = f"couldn't reach the catalog ({type(e).__name__})"
+            result["pages"] = page - 1
+            result["more"] = page > 1
+            break
+        fresh = [i for i in items if i["id"] not in seen and not seen.add(i["id"])]
+        result["items"] += fresh
+        if fresh:
+            result["chunks"].append({"id": f"{base}|{page}|{len(fresh)}", "items": fresh, "sheet": sheet(fresh)})
+        result["more"] = more
+        if not more:
+            result["pages"] = page
+            break
+    out(result)
+
+
+def replace_style(text):
+    # Written to a copy and renamed over it, so the launcher never reads a half-written file.
+    tmp = STYLE.with_name(".style.toml.wallpapers")
+    tmp.write_text(text)
+    os.replace(tmp, STYLE)
+
+
+def applied():
+    try:
+        return Path(os.readlink(APPLIED)).name
+    except OSError:
+        return ""
+
+
+def wait_applied(name, limit=60):
+    # The launcher applies a new style.toml a moment later (longer while Android holds it in the
+    # background). Its link to the wallpaper it shows says when: wait for that, unless a newer pick
+    # replaced this one first.
+    end = time.time() + limit
+    while time.time() < end:
+        if applied() == name:
+            return "ok"
+        if style_values()[2] != name:
+            return "replaced"
+        time.sleep(0.25)
+    return "slow"
+
+
+def write_background(text, name):
+    lines = text.splitlines()
+    head = next((i for i, l in enumerate(lines) if l.strip().startswith("[")), len(lines))
+    entry = f'background = "{name}"'
+    for i in range(head):
+        if re.match(r" *background *=", lines[i]):
+            lines[i] = entry
+            break
+    else:
+        at = next((i + 1 for i in range(head) if re.match(r" *theme *=", lines[i])), head)
+        lines.insert(at, entry)
+    replace_style(NL.join(lines) + NL)
+
+
+def fitted(data):
+    # A checked image, at most 3840 px on its long side; big or lossless ones become JPEG.
+    from io import BytesIO
+    from PIL import Image
+    with Image.open(BytesIO(data)) as im:
+        im.verify()
+    with Image.open(BytesIO(data)) as im:
+        ext = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}[im.format]
+        if max(im.size) <= 3840 and len(data) <= 6 << 20:
+            return data, ext
+        im.draft("RGB", (3840, 3840))
+        im = im.convert("RGB")
+        im.thumbnail((3840, 3840), Image.Resampling.LANCZOS)
+        buf = BytesIO()
+        im.save(buf, "JPEG", quality=90)
+        return buf.getvalue(), ".jpg"
+
+
+def cmd_set(target):
+    if target in ("", "null", "…"):
+        return print(f"noop||{time.time()}")
+    # Taps that come quickly after another wait their turn, so the last one wins.
+    import fcntl
+    CACHE.mkdir(parents=True, exist_ok=True)
+    lock = open(CACHE / "set.lock", "w")
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    text, theme, _ = style_values()
+    dest = USER_BG / theme
+    if target.startswith("local:"):
+        name = Path(target[6:]).name
+    elif target.startswith("omarchy:"):
+        src_theme, _, fname = target[8:].partition("/")
+        src = theme_dir(Path(src_theme).name)
+        src = src and src / "backgrounds" / Path(fname).name
+        if not src or not src.is_file():
+            return print(f"error|that wallpaper is gone|{time.time()}")
+        own = theme_dir(theme)
+        if own and src.parent == own / "backgrounds":
+            name = src.name
+        else:
+            name = src.name if not (own and (own / "backgrounds" / src.name).exists()) else f"{src_theme}-{src.name}"
+            dest.mkdir(parents=True, exist_ok=True)
+            if not (dest / name).exists():
+                (dest / (name + ".tmp")).write_bytes(src.read_bytes())
+                os.replace(dest / (name + ".tmp"), dest / name)
+    elif re.fullmatch(r"(ocs|commons)-[0-9]{1,20}", target):
+        have = [p for p in images(dest) if p.name.startswith(target + "-")]
+        if have:
+            name = have[0].name
+        else:
+            try:
+                item = json.loads((CACHE / "items.json").read_text()).get(target, {})
+                kind, num = target.split("-")
+                if kind == "ocs":
+                    rec = json.loads(fetch(f"https://api.opendesktop.org/ocs/v1/content/data/{num}?format=json"))["data"][0]
+                    url = ocs_download(rec)["url"]
+                else:
+                    q = {"action": "query", "format": "json", "formatversion": "2", "pageids": num, "prop": "imageinfo",
+                         "iiprop": "url|size", "iiurlwidth": "2560"}
+                    info = json.loads(fetch("https://commons.wikimedia.org/w/api.php?" + urlencode(q)))["query"]["pages"][0]["imageinfo"][0]
+                    url = info["thumburl"] if info.get("width", 0) > 2560 else info["url"]
+                if urlparse(url).scheme != "https":
+                    raise ValueError("not https")
+                data, ext = fitted(fetch(url, 64 << 20, timeout=120))
+                slug = SAFE.sub("-", (item.get("name") or "wallpaper").lower()).strip("-.")[:40] or "wallpaper"
+                name = f"{target}-{slug}{ext}"
+                dest.mkdir(parents=True, exist_ok=True)
+                (dest / (name + ".tmp")).write_bytes(data)
+                os.replace(dest / (name + ".tmp"), dest / name)
+                credit = CACHE / "credits"
+                credit.mkdir(parents=True, exist_ok=True)
+                (credit / (name + ".json")).write_text(json.dumps({k: item.get(k) for k in ("name", "by", "license", "page")}))
+            except Exception as e:
+                return print(f"error|download failed ({type(e).__name__})|{time.time()}")
+    else:
+        return print(f"error|unknown wallpaper|{time.time()}")
+    write_background(text, name)
+    lock.close()
+    print(f"{wait_applied(name)}|{name}|{time.time()}")
+
+
+def cmd_remove(fname):
+    fname = fname.removeprefix("local:")
+    if fname in ("", "null", "…"):
+        return print(f"noop||{time.time()}")
+    _, theme, background = style_values()
+    path = USER_BG / theme / Path(fname).name
+    if path.is_file():
+        path.unlink()
+    (CACHE / "credits" / (path.name + ".json")).unlink(missing_ok=True)
+    if background == path.name:
+        text, _, _ = style_values()
+        lines = [l for l in text.splitlines() if not re.match(r" *background *=", l)]
+        replace_style(NL.join(lines) + NL)
+    print(f"ok|removed|{time.time()}")
+
+
+if __name__ == "__main__":
+    cmd, args = sys.argv[1], sys.argv[2:]
+    {"local": cmd_local, "browse": cmd_browse, "set": cmd_set, "remove": cmd_remove, "noop": lambda *_: print(f"noop||{time.time()}")}[cmd](*args)
+OWL_PY
+mv "$f.tmp" "$f" && python3 "$f" local""") every 5m json timeout 90s
+
+  state tab = "theme" persist
+  state collection = "abstract" persist
+  state query = ""
+  // How many pages of the open tab are loaded; "load more" adds one below the others.
+  state pages = 1
+  // The last list the catalog returned: a new command (another page, tab or search) can blank `cat` while it runs.
+  state shownCat = null
+  state busy = ""
+  state msg = ""
+  // The last tap on a grid: which page, where, and a count so tapping the same spot twice still counts.
+  state tap = null
+  // A downloaded wallpaper whose ✕ was tapped: its card asks before anything is deleted.
+  state armed = ""
+  // The lock screen card: Android only lets the launcher's live wallpaper reach it, so the card explains and links there.
+  state lockHint = true persist
+
+  let coll = tab == "omarchy" ? "omarchy" : tab == "community" ? collection : tab == "photos" ? "photos" : "none"
+  let base = "${coll}|${trim(query)}"
+  let want = "${base}|${pages}"
+
+  // No file() source on style.toml: the launcher watches that folder itself, and Android keeps one
+  // watch per folder per app, so a widget watching it too would take the launcher's change events
+  // away. The wallpaper actually showing is the launcher's link instead, checked cheaply.
+  source shown = cmd("readlink ~/.local/state/omarchy/current/background") every 10s
+  // Handlers that change tab, collection, query or pages call refresh(): the command only picks up new state when it runs.
+  // It returns pages 1..n, each with one contact sheet of its thumbnails.
+  // On a first start it waits a moment for the helper above to be written out.
+  source cat = cmd("f=~/.cache/omalauncher-wallpapers/helper.py; for i in 1 2 3 4 5 6 7 8 9 10; do [ -f $f ] && break; sleep 1; done; python3 $f browse ${sh(coll)} ${sh(trim(query))} ${int(pages)}") every 6h json timeout 120s
+
+  let items = mine.items ?? []
+  let current = last(split(shown ?? "", "/")) || mine.current
+  let at = max(0, items.indexOf(items.find(i => i.file == current)))
+  let currentItem = items[at]
+  let prevItem = items[(at - 1 + len(items)) % max(len(items), 1)]
+  let nextItem = items[(at + 1) % max(len(items), 1)]
+  // Same tab, collection and search as asked: keep its pages up, even while another one loads.
+  // `on` skips a source's first value, so read `cat` itself whenever it has one.
+  let latest = cat ?? shownCat
+  let fresh = latest != null && latest.base == base
+  let loading = !fresh
+  let loadingMore = fresh && latest.key != want
+  let chunks = tab == "theme" ? mine.chunks ?? [] : fresh ? latest.chunks ?? [] : []
+  let failed = startsWith(msg, "error|") ? split(msg, "|")[1] : startsWith(msg, "slow|") ? "the launcher is taking a while to switch" : ""
+
+  // The grid's geometry, shared by the drawing and the tap. Cards are 16:10, like the contact sheets' cells.
+  let gap = 8
+  let gridW = (screenWidth ?? 360) - 16
+  let n = gridW >= 584 ? 3 : 2
+  let cardW = (gridW - gap * (n - 1)) / n
+  let cardH = cardW * 0.625
+  let capH = 34
+
+  // What the last tap hit, and where on its card.
+  let tapChunk = chunks.find(c => c.id == tap.chunk)
+  let tapCol = min(n - 1, floor((tap.x ?? 0) / (cardW + gap)))
+  let tapRow = floor((tap.y ?? 0) / (cardH + gap))
+  let tapItem = tapChunk.items[tapRow * n + tapCol]
+  let tapLx = (tap.x ?? 0) - tapCol * (cardW + gap)
+  let tapLy = (tap.y ?? 0) - tapRow * (cardH + gap)
+  // Removing takes two taps: the ✕ (a downloaded wallpaper not in use) asks, then "remove" deletes.
+  // While a card asks, a tap anywhere else, or on "keep", only puts the question away.
+  let tapCross = tab == "theme" && tapItem.user == true && tapItem.file != current && tapLx < 44 && tapLy < 40
+  let asking = armed != ""
+  let tapRemove = asking && armed == tapItem.id && tapLx >= cardW / 2 && tapLy >= cardH - 44
+  let tapPick = !asking && !tapCross && tapItem != null
+
+  on tap {
+    haptic()
+    msg = ""
+    busy = tapPick ? tapItem.id : ""
+    msg = run("python3 ~/.cache/omalauncher-wallpapers/helper.py ${sh(tapRemove ? "remove" : tapPick ? "set" : "noop")} ${sh(tapItem.id ?? "")}")
+    armed = !asking && tapCross ? tapItem.id : ""
+  }
+  // Taps clear msg before running; only the command's answer (never empty) ends "applying…".
+  on msg { busy = value == "" ? busy : "" }
+  on cat { shownCat = value }
+  // A new wallpaper or theme, from here or the Style menu: list that theme's wallpapers again.
+  on shown { refresh() }
+
+  onTap: screen()
+
+  // The tile: the wallpaper in use, with the theme's others a tap away.
+  Box {
+    fill: true
+    clip: true
+    background: surface
+    if mine.hero {
+      Image { src: mine.hero; fit: cover; fill: true }
+    }
+    Column {
+      align: start
+      padding: 8
+      fill: width
+      Text { text: "wallpaper"; width: 84; align: center; style: label; color: foreground; background: alpha(background, 0.7); padding: [6, 2] }
+    }
+    Column {
+      fill: true
+      justify: end
+      Row {
+        fill: width
+        align: center
+        gap: 0
+        background: alpha(background, 0.88)
+        padding: [2, 2]
+        Text {
+          text: "‹"; fontSize: 22; width: 36; align: center; color: accent
+          onTap: { haptic(); msg = ""; busy = prevItem.id; msg = run("python3 ~/.cache/omalauncher-wallpapers/helper.py set ${sh(prevItem.id)}") }
+        }
+        Column {
+          gap: 0
+          weight: 1
+          Text { text: busy != "" ? "applying…" : currentItem.name ?? "…"; style: small; bold: true; align: center; maxLines: 1 }
+          Text { text: len(items) ? "${at + 1} of ${len(items)} · ${mine.theme}" : mine.theme; style: label; color: alpha(foreground, 0.7); align: center; maxLines: 1 }
+        }
+        Text {
+          text: "›"; fontSize: 22; width: 36; align: center; color: accent
+          onTap: { haptic(); msg = ""; busy = nextItem.id; msg = run("python3 ~/.cache/omalauncher-wallpapers/helper.py set ${sh(nextItem.id)}") }
+        }
+      }
+    }
+  }
+
+  screen {
+    title: "wallpapers"
+    Column {
+      gap: 8
+      padding: 8
+      fill: true
+      Row {
+        gap: 6
+        for t in [["theme", "this theme"], ["omarchy", "omarchy"], ["community", "community"], ["photos", "photos"]] {
+          Text {
+            text: t[1]; weight: 1; style: small; bold: tab == t[0]; align: center; maxLines: 1; padding: [10, 5]; radius: 3 * corners
+            color: tab == t[0] ? background : foreground; background: tab == t[0] ? accent : alpha(surface, 0.6)
+            onTap: { tab = t[0]; pages = 1; query = ""; msg = ""; armed = ""; refresh() }
+          }
+        }
+      }
+      if tab == "theme" && lockHint {
+        Column {
+          gap: 6
+          padding: [12, 10]
+          border: 1
+          borderColor: alpha(accent, 0.5)
+          background: alpha(surface, 0.6)
+          Text { text: "lock screen too"; style: small; bold: true; color: accent }
+          Text { text: "Android won't let a widget set the lock screen. Where the phone allows a live wallpaper there (not every phone does), make the launcher's own wallpaper the phone's: every pick here then shows on the lock screen as well."; style: small; maxLines: 5 }
+          Text { text: "In Style, tap [ use as android wallpaper + system colors ], then pick Home and lock screens."; style: small; color: muted; maxLines: 3 }
+          Row {
+            gap: 8
+            Button { text: "open style"; weight: 1; onTap: launcher("style") }
+            Button { text: "hide"; width: 96; onTap: lockHint = false }
+          }
+        }
+      }
+      if tab == "community" {
+        Row {
+          gap: 6
+          for c in ["abstract", "minimal", "dark", "space", "neon"] {
+            Text {
+              text: c; weight: 1; style: small; bold: collection == c; align: center; maxLines: 1; padding: [10, 5]; radius: 3 * corners
+              color: collection == c ? background : foreground; background: collection == c ? accent : alpha(surface, 0.6)
+              onTap: { collection = c; pages = 1; msg = ""; refresh() }
+            }
+          }
+        }
+      }
+      if tab != "theme" {
+        Input {
+          text: query
+          placeholder: tab == "photos" ? "search landscapes…" : tab == "omarchy" ? "filter by name or theme…" : "search ${collection} art…"
+          border: 1; borderColor: alpha(muted, 0.4); padding: [10, 8]
+          onSubmit: { query = trim(value); pages = 1; refresh() }
+        }
+      }
+      if failed != "" || (fresh && latest.error) {
+        Text { text: failed != "" ? failed : latest.error; style: small; color: red; maxLines: 2 }
+      }
+      if loading && tab != "theme" {
+        Column {
+          weight: 1
+          justify: center
+          align: center
+          Text { text: tab == "omarchy" ? "making previews…" : "fetching wallpapers…"; style: body; color: muted; align: center }
+        }
+      } else {
+        Column {
+          scroll: true
+          weight: 1
+          gap: gap
+          if len(chunks) == 0 {
+            Text { text: tab == "theme" ? "no wallpapers in ${mine.theme}" : "nothing found"; color: muted; align: center; padding: 24 }
+          }
+          // One Canvas per page, drawing each card as its cell of the page's contact sheet.
+          for chunk in chunks key chunk.id {
+            Canvas {
+              width: gridW
+              height: ceil(len(chunk.items) / n) * (cardH + gap) - gap
+              onTap: { tap = {chunk: chunk.id, x: x, y: y, count: (tap.count ?? 0) + 1} }
+              let chars = floor((cardW - 16) / 6.4)
+              for i in range(len(chunk.items)) {
+                let it = chunk.items[i]
+                let cx = (i % n) * (cardW + gap)
+                let cy = floor(i / n) * (cardH + gap)
+                let on = tab == "theme" || tab == "omarchy" ? it.file == current : startsWith(current ?? "", it.id + "-")
+                let credit = [it.by, it.license].filter(s => s).join(" · ")
+                clip(cx, cy, cardW, cardH) {
+                  rect(cx, cy, cardW, cardH, fill: surface)
+                  image(chunk.sheet, cx - (i % 8) * cardW, cy - floor(i / 8) * cardH, 8 * cardW, 3 * cardH)
+                  rect(cx, cy + cardH - capH, cardW, capH, fill: alpha(background, 0.85))
+                  text(len(it.name) > chars ? sub(it.name, 0, chars - 1) + "…" : it.name, cx + 8, cy + cardH - capH + (credit ? 11 : 17), size: 12, color: foreground)
+                  if credit {
+                    text(len(credit) > chars + 2 ? sub(credit, 0, chars + 1) + "…" : credit, cx + 8, cy + cardH - 10, size: 10, color: alpha(foreground, 0.65))
+                  }
+                }
+                rect(cx + 0.5, cy + 0.5, cardW - 1, cardH - 1, stroke: on ? accent : alpha(muted, 0.3), width: on ? 2 : 1, radius: 6 * corners)
+                if busy == it.id {
+                  rect(cx + cardW - 84, cy + 6, 78, 20, fill: accent, radius: 3 * corners)
+                  text("applying…", cx + cardW - 45, cy + 16, size: 11, color: background, align: center)
+                } else if on {
+                  rect(cx + cardW - 30, cy + 6, 24, 20, fill: accent, radius: 3 * corners)
+                  path([[cx + cardW - 24, cy + 16], [cx + cardW - 19.5, cy + 20.5], [cx + cardW - 11, cy + 11]], stroke: background, width: 2, cap: round)
+                }
+                if tab == "theme" && it.user && !on && armed != it.id {
+                  rect(cx + 6, cy + 6, 28, 24, fill: alpha(background, 0.75), radius: 3 * corners)
+                  line(cx + 15, cy + 13, cx + 25, cy + 23, stroke: foreground, width: 1.6, cap: round)
+                  line(cx + 25, cy + 13, cx + 15, cy + 23, stroke: foreground, width: 1.6, cap: round)
+                }
+                if armed == it.id {
+                  let bw = cardW / 2 - 12
+                  rect(cx, cy, cardW, cardH, fill: alpha(background, 0.97), radius: 6 * corners)
+                  text("remove this download?", cx + cardW / 2, cy + (cardH - 44) / 2, size: 12, color: foreground, align: center)
+                  rect(cx + 8, cy + cardH - 38, bw, 30, stroke: alpha(muted, 0.6), width: 1, radius: 3 * corners)
+                  text("keep", cx + 8 + bw / 2, cy + cardH - 23, size: 12, color: foreground, align: center)
+                  rect(cx + cardW / 2 + 4, cy + cardH - 38, bw, 30, fill: red, radius: 3 * corners)
+                  text("remove", cx + cardW / 2 + 4 + bw / 2, cy + cardH - 23, size: 12, color: background, align: center, bold: true)
+                }
+              }
+            }
+          }
+          if tab != "theme" && fresh && (latest.more || loadingMore) {
+            Button { text: loadingMore ? "loading…" : "load more"; fill: width; onTap: { pages = num(latest.pages, 1) + 1; refresh() } }
+          }
+          if tab == "theme" && !lockHint {
+            Text { text: "use these on the lock screen too…"; style: small; color: accent; align: center; padding: [8, 6]; onTap: lockHint = true }
+          }
+          if tab == "community" || tab == "photos" {
+            Text { text: tab == "photos" ? "Featured landscapes from Wikimedia Commons" : "CC-licensed art from OpenDesktop's wallpaper category"; style: label; color: muted; align: center }
+          }
+        }
+      }
+    }
+  }
+}
