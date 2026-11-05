@@ -1,0 +1,108 @@
+# TAGLINE
+
+decodes Opus audio files to WAV or raw PCM
+
+# TLDR
+
+**Decode Opus to WAV**
+
+```opusdec [input.opus] [output.wav]```
+
+**Decode to raw PCM**
+
+```opusdec --raw [input.opus] [output.pcm]```
+
+**Decode to stdout**
+
+```opusdec [input.opus] - | aplay```
+
+**Set output sample rate**
+
+```opusdec --rate [48000] [input.opus] [output.wav]```
+
+**Force stereo output**
+
+```opusdec --force-stereo [input.opus] [output.wav]```
+
+# SYNOPSIS
+
+**opusdec** [_options_] _input_ [_output_]
+
+# PARAMETERS
+
+**--rate** _Hz_
+> Output sample rate.
+
+**--raw**
+> Output raw PCM.
+
+**--force-stereo**
+> Force stereo output.
+
+**--float**
+> 32-bit float output.
+
+**--gain** _dB_
+> Apply gain.
+
+**--no-dither**
+> Disable dithering.
+
+**--force-wav**
+> Force including a WAV header on output (even for non-standard rates).
+
+**--packet-loss** _%_
+> Simulate packet loss percentage for testing.
+
+**--quiet**
+> Suppress program output.
+
+**--save-range** _FILE_
+> Save decoder range data to file for debugging.
+
+# DESCRIPTION
+
+**opusdec** decodes Opus audio files to WAV or raw PCM. If no output file is specified, opusdec attempts to play the audio directly. Use `-` for stdin/stdout. Opus is a versatile audio codec designed for both speech and music, widely used in WebRTC and streaming.
+
+# EXAMPLE
+
+```bash
+# Decode to WAV
+opusdec music.opus music.wav
+
+# Play directly
+opusdec music.opus - | aplay -f cd
+
+# Convert with specific rate
+opusdec --rate 44100 input.opus output.wav
+```
+
+# CAVEATS
+
+Output defaults to same channels as input. Resampling may affect quality. Use --float for highest precision.
+
+# HISTORY
+
+Opus was developed by the **IETF** Codec Working Group, standardized as RFC 6716 in **2012**, combining SILK and CELT technologies.
+
+# INSTALL
+
+```apt: sudo apt install opus-tools```
+
+```dnf: sudo dnf install opus-tools```
+
+```pacman: sudo pacman -S opus-tools```
+
+```apk: sudo apk add opus-tools```
+
+```zypper: sudo zypper install opus-tools```
+
+```brew: brew install opus-tools```
+
+```nix: nix profile install nixpkgs#opus-tools```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[opusenc](/man/opusenc)(1), [ffmpeg](/man/ffmpeg)(1)

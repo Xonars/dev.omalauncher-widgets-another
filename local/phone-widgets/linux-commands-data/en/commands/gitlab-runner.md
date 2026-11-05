@@ -1,0 +1,138 @@
+# TAGLINE
+
+CI/CD job execution agent for GitLab
+
+# TLDR
+
+**Register a new runner**
+
+```sudo gitlab-runner register```
+
+**List configured runners**
+
+```gitlab-runner list```
+
+**Start the runner service**
+
+```sudo gitlab-runner start```
+
+**Stop the runner service**
+
+```sudo gitlab-runner stop```
+
+**Run in foreground** (for debugging)
+
+```gitlab-runner run```
+
+**Verify runner connections**
+
+```gitlab-runner verify```
+
+**Unregister a runner**
+
+```sudo gitlab-runner unregister --name [runner_name]```
+
+**Check runner status**
+
+```gitlab-runner status```
+
+**Reset runner authentication token**
+
+```sudo gitlab-runner reset-token --name [runner_name]```
+
+# SYNOPSIS
+
+**gitlab-runner** _command_ [_options_]
+
+# PARAMETERS
+
+**register**
+> Register a new runner with GitLab instance.
+
+**list**
+> List all configured runners.
+
+**start**
+> Start the runner service.
+
+**stop**
+> Stop the runner service.
+
+**restart**
+> Restart the runner service.
+
+**status**
+> Show runner service status.
+
+**run**
+> Run the runner in foreground.
+
+**run-single**
+> Execute a single build from a GitLab instance.
+
+**verify**
+> Verify runner connections to GitLab.
+
+**unregister**
+> Remove a runner from GitLab.
+
+**reset-token**
+> Reset a runner's authentication token.
+
+**install**
+> Install as system service.
+
+**uninstall**
+> Remove system service.
+
+**--debug**
+> Enable debug logging.
+
+**--log-level** _level_
+> Log level: debug, info, warn, error, fatal, panic.
+
+**--log-format** _format_
+> Log format: runner, text, json.
+
+**--config** _file_
+> Use alternate config file.
+
+**--working-directory** _path_
+> Set custom working directory.
+
+# DESCRIPTION
+
+**gitlab-runner** is the agent that runs CI/CD jobs for GitLab. It connects to a GitLab instance, receives job requests, executes them in isolated environments, and reports results back. Runners can be shared across projects or dedicated to specific ones.
+
+The runner supports multiple executors: **shell** (directly on host), **docker** (in containers), **docker-machine** (auto-scaled Docker), **kubernetes** (in K8s pods), **virtualbox**, **parallels**, and **ssh**. The Docker executor is most common for isolated, reproducible builds.
+
+Registration requires a GitLab URL and registration token from the project/group/admin CI settings. Runners can operate as a system service or run in the foreground for debugging.
+
+# CONFIGURATION
+
+**/etc/gitlab-runner/config.toml**
+> Main configuration file where each registered runner appears as a `[[runners]]` section with its URL, token, executor, and settings.
+
+# CAVEATS
+
+Shell executor provides no isolation between jobs. Docker executor requires Docker installed. Registration tokens should be kept secret. Runners have access to whatever secrets are passed to jobs. Resource limits should be configured to prevent runaway jobs.
+
+# HISTORY
+
+**GitLab Runner** was developed by GitLab Inc. as part of their CI/CD platform, which became part of GitLab around **2015** when GitLab CI was integrated into the main product. The runner has evolved from simple shell execution to supporting multiple sophisticated executors, making it one of the most versatile CI job runners available.
+
+# INSTALL
+
+```pacman: sudo pacman -S gitlab-runner```
+
+```apk: sudo apk add gitlab-runner```
+
+```brew: brew install gitlab-runner```
+
+```nix: nix profile install nixpkgs#gitlab-runner```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[docker](/man/docker)(1), [gitlab-ctl](/man/gitlab-ctl)(8), [jenkins](/man/jenkins)(1), [kubectl](/man/kubectl)(1)

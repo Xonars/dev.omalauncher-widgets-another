@@ -1,0 +1,111 @@
+# TAGLINE
+
+change file attributes on Linux filesystems
+
+# TLDR
+
+Make **immutable**
+
+```sudo chattr +i path/to/file```
+
+Remove **immutable**
+
+```sudo chattr -i path/to/file```
+
+**Recursive** immutable
+
+```sudo chattr -R +i path/to/dir```
+
+**Case-folding** directory
+
+```chattr +F path/to/dir```
+
+**Append-only** mode
+
+```sudo chattr +a path/to/file```
+
+# SYNOPSIS
+
+**chattr** [_OPTIONS_] [_mode_] _files_...
+
+# DESCRIPTION
+
+**chattr** changes file attributes on Linux filesystems. These extended attributes provide security and administrative controls beyond standard permissions, such as making files immutable or append-only.
+
+The immutable attribute (+i) is particularly useful for protecting critical system files, as even root cannot modify, delete, or rename an immutable file until the attribute is removed. The append-only attribute (+a) is commonly used for log files to prevent tampering while still allowing new entries to be written.
+
+# PARAMETERS
+
+**+attribute**
+> Add attribute to file
+
+**-attribute**
+> Remove attribute from file
+
+**=attribute**
+> Set only the specified attributes
+
+**-R**
+> Change attributes recursively
+
+**i**
+> Immutable - cannot be modified, deleted, or renamed
+
+**a**
+> Append-only - can only be appended to
+
+**s**
+> Secure deletion - blocks overwritten with zeros
+
+**S**
+> Synchronous updates
+
+**A**
+> No atime updates
+
+**c**
+> Compressed
+
+**e**
+> Extent format (default on ext4)
+
+**F**
+> Case-fold directory (case-insensitive)
+
+# CAVEATS
+
+Requires appropriate capabilities or root privileges. Immutable files cannot be changed even by root until the attribute is removed. Not all filesystems support all attributes.
+
+# HISTORY
+
+**chattr** is part of **e2fsprogs**, providing extended attribute management for ext2/ext3/ext4 and other Linux filesystems.
+
+# INSTALL
+
+```apt: sudo apt install e2fsprogs```
+
+```dnf: sudo dnf install e2fsprogs```
+
+```pacman: sudo pacman -S e2fsprogs```
+
+```apk: sudo apk add e2fsprogs-extra```
+
+```zypper: sudo zypper install e2fsprogs```
+
+```brew: brew install e2fsprogs```
+
+```nix: nix profile install nixpkgs#e2fsprogs```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[lsattr](/man/lsattr)(1), [chmod](/man/chmod)(1)
+
+# RESOURCES
+
+```[Source code](https://github.com/tytso/e2fsprogs)```
+
+```[Documentation](https://man7.org/linux/man-pages/man1/chattr.1.html)```
+
+<!-- verified: 2026-06-22 -->

@@ -1,0 +1,79 @@
+# TAGLINE
+
+return failure exit status
+
+# TLDR
+
+**Return failure status**
+
+```false```
+
+**Use in conditional**
+
+```if false; then echo "never"; fi```
+
+**Chain with or**
+
+```false || echo "false returned failure"```
+
+**Infinite loop idiom** (until never succeeds)
+
+```until false; do :; done```
+
+# SYNOPSIS
+
+**false**
+
+# PARAMETERS
+
+**--help**
+> Display help information.
+
+**--version**
+> Display version information.
+
+# DESCRIPTION
+
+**false** does nothing and returns a failure exit status (1). It's the counterpart to true and is used in shell scripts for flow control, testing, and as a placeholder.
+
+The command takes no operands and always exits with status 1, indicating failure. This makes it useful in conditional statements, loops that should never execute, and testing error handling.
+
+false is a POSIX-standard command and shell builtin, providing a guaranteed failure exit status.
+
+# CAVEATS
+
+As a builtin, behavior may vary slightly between shells. Exit status is always 1 (or non-zero). Does absolutely nothing else.
+
+# HISTORY
+
+false has been part of Unix since **Version 7** (1979). It's one of the simplest Unix commands, existing solely to return a failure status. It's specified by POSIX and implemented as both a standalone utility and shell builtin.
+
+# INSTALL
+
+```apt: sudo apt install coreutils```
+
+```dnf: sudo dnf install coreutils```
+
+```pacman: sudo pacman -S coreutils```
+
+```apk: sudo apk add coreutils```
+
+```zypper: sudo zypper install coreutils```
+
+```brew: brew install coreutils```
+
+```nix: nix profile install nixpkgs#coreutils```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[true](/man/true)(1), [test](/man/test)(1), [bash](/man/bash)(1)
+
+# RESOURCES
+
+```[Source code](https://git.savannah.gnu.org/cgit/coreutils.git)```
+
+```[Homepage](https://www.gnu.org/software/coreutils/)```
+
+<!-- verified: 2026-07-15 -->

@@ -1,0 +1,161 @@
+# TAGLINE
+
+ASCII cow speech bubble generator
+
+# TLDR
+
+**Say** message
+
+```cowsay ["Hello World"]```
+
+**Think** message
+
+```cowthink ["Hmm..."]```
+
+**Different** cow
+
+```cowsay -f [dragon] ["Message"]```
+
+**List** available cows
+
+```cowsay -l```
+
+**Dead** cow
+
+```cowsay -d ["Message"]```
+
+# SYNOPSIS
+
+**cowsay** [_options_] [_message_]
+
+# DESCRIPTION
+
+**cowsay** generates ASCII art of a cow saying a message. It's a whimsical program that displays text in a speech bubble with various animal ASCII art, commonly used for fun messages, fortune quotes, or MOTD displays.
+
+The program supports multiple "cow files" representing different animals and characters, each with their own ASCII art. Messages can be displayed as speech (cowsay) or thoughts (cowthink), and the cow's appearance can be modified with different eye and tongue states.
+
+cowsay has become an iconic part of Unix culture, often paired with fortune for random quotes or lolcat for colorful output. While purely for entertainment, it's widely used in login messages, shell prompts, and documentation to add personality to command-line interfaces.
+
+# PARAMETERS
+
+**-f** _cowfile_
+> Use the specified cow file.
+
+**-l**
+> List available cow files on the current COWPATH.
+
+**-e** _eyes_
+> Set eye appearance (first two characters; default **oo**).
+
+**-T** _tongue_
+> Set tongue appearance (two characters; default blank).
+
+**-W** _width_
+> Word-wrap column (default 40).
+
+**-n**
+> Disable word wrapping; preserve the input as-is.
+
+**-b**
+> Borg mode (eyes **==**).
+
+**-d**
+> Dead cow mode (eyes **XX**, tongue **U**).
+
+**-g**
+> Greedy mode (eyes **$$**).
+
+**-p**
+> Paranoid mode (eyes **@@**).
+
+**-s**
+> Stoned mode (eyes **\*\***, tongue **U**).
+
+**-t**
+> Tired mode (eyes **--**).
+
+**-w**
+> Wired mode (eyes **OO**).
+
+**-y**
+> Youthful mode (eyes **..**).
+
+Note: **-e** and **-T** are ignored if any mode flag is also given.
+
+# AVAILABLE COWS
+
+List all: `cowsay -l`
+
+Common ones:
+- **default** - Classic cow
+- **dragon** - Dragon
+- **tux** - Tux the penguin
+- **elephant** - Elephant
+- **moose** - Moose
+- **stegosaurus** - Dinosaur
+- **vader** - Darth Vader
+
+# WORKFLOW
+
+```bash
+# Basic message
+cowsay "Hello World"
+
+# Thinking cow
+cowthink "What to do..."
+
+# Different animal
+cowsay -f dragon "Roar!"
+
+# Custom eyes and tongue
+cowsay -e ^^ -T "U " "Happy cow"
+
+# Dead cow
+cowsay -d "I'm not feeling well"
+
+# Pipe input
+fortune | cowsay
+
+# With lolcat
+cowsay "Rainbow!" | lolcat
+```
+
+# RELATED COMMANDS
+
+**cowthink**
+> Thinking cow (thought bubble instead of speech)
+
+**fortune | cowsay**
+> Random quote from cow
+
+# CUSTOMIZATION
+
+Custom cow files in: `/usr/share/cowsay/cows/`
+
+Create your own ASCII art cow!
+
+# CAVEATS
+
+Pure entertainment value. Large messages may format oddly. Custom cow files need correct format. Some find it unprofessional in serious contexts. Original Perl version, various ports exist.
+
+# HISTORY
+
+**cowsay** was written by Tony Monroe in **1999**, becoming a beloved Unix novelty program and inspiring numerous derivatives.
+
+# INSTALL
+
+```dnf: sudo dnf install cowsay```
+
+```pacman: sudo pacman -S cowsay```
+
+```zypper: sudo zypper install cowsay```
+
+```brew: brew install cowsay```
+
+```nix: nix profile install nixpkgs#cowsay```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[fortune](/man/fortune)(6), [figlet](/man/figlet)(6), [lolcat](/man/lolcat)(1)

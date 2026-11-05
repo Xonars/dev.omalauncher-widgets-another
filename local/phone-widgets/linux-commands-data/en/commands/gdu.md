@@ -1,0 +1,133 @@
+# TAGLINE
+
+Fast disk usage analyzer with interactive TUI
+
+# TLDR
+
+**Analyze disk usage** interactively (current directory)
+
+```gdu```
+
+**Analyze a specific directory**
+
+```gdu [/path/to/directory]```
+
+**Analyze without interactive mode** (print results)
+
+```gdu -n [/path/to/directory]```
+
+**Show apparent size** instead of disk usage
+
+```gdu -a [/path/to/directory]```
+
+**Analyze ignoring specific directories**
+
+```gdu -i "[.git,node_modules]" [/path]```
+
+**Export results to JSON**
+
+```gdu -o json [/path] > [output.json]```
+
+**Analyze specific filesystem only** (don't cross mount points)
+
+```gdu -x [/]```
+
+**Show version information**
+
+```gdu -v```
+
+# SYNOPSIS
+
+**gdu** [_options_] [_directory_]
+
+# PARAMETERS
+
+**-n**, **--non-interactive**
+> Run in non-interactive mode (just print results).
+
+**-a**, **--apparent-size**
+> Show apparent file size instead of disk usage.
+
+**-x**, **--no-cross**
+> Don't cross filesystem boundaries.
+
+**-i**, **--ignore-dirs** _paths_
+> Comma-separated paths to ignore.
+
+**-I**, **--ignore-dirs-pattern** _regex_
+> Ignore paths matching the given regular expression.
+
+**-m**, **--max-cores** _n_
+> Set the maximum number of CPU cores to use.
+
+**-o**, **--output-file** _file_
+> Export results to a file (use with format flag).
+
+**-f**, **--input-file** _file_
+> Read from exported JSON file instead of scanning.
+
+**-c**, **--no-color**
+> Disable color output.
+
+**-d**, **--show-disks**
+> Show all mounted disks.
+
+**-p**, **--no-progress**
+> Don't show progress during scan.
+
+**-s**, **--summarize**
+> Show only a total for each argument.
+
+**-L**, **--follow-symlinks**
+> Follow file symbolic links.
+
+**--top** _n_
+> Show only the top N largest files.
+
+**--si**
+> Use SI units (powers of 1000) instead of binary.
+
+**-v**, **--version**
+> Show version information.
+
+# DESCRIPTION
+
+**gdu** (go disk usage) is a fast disk usage analyzer with an interactive ncurses interface. Written in Go, it significantly outperforms traditional tools like **du** and **ncdu** when analyzing large directory structures.
+
+The interactive interface shows directories sorted by size, with usage bars and file counts. Navigation uses arrow keys or vim-style hjkl. Press **d** to delete selected items, **Enter** to navigate into directories, **?** for help.
+
+Color coding indicates directory types: blue for directories, red for large files, special colors for symlinks, sockets, etc. The progress indicator shows scanning status and estimated completion.
+
+Non-interactive mode (-n) outputs results suitable for scripting. JSON export enables integration with other tools or storing analysis results for later comparison. The tool can also read back exported JSON files for viewing without rescanning.
+
+Performance comes from parallel scanning and efficient memory usage. It's particularly effective on SSDs and NVMe drives where I/O isn't the bottleneck.
+
+# CAVEATS
+
+Interactive deletion is permanent (no trash). Some terminals may not render the UI correctly. Permission denied errors for inaccessible directories are shown but don't stop scanning. Memory usage scales with number of files/directories.
+
+# HISTORY
+
+**gdu** was created by Daniel Milde around **2020** as a faster alternative to ncdu. Written in Go for performance and easy cross-platform compilation, it quickly gained popularity among system administrators. The tool is available in package managers for most Linux distributions and Homebrew for macOS.
+
+# INSTALL
+
+```apt: sudo apt install gdu```
+
+```dnf: sudo dnf install gdu```
+
+```pacman: sudo pacman -S gdu```
+
+```apk: sudo apk add gdu```
+
+```zypper: sudo zypper install gdu```
+
+```brew: brew install gdu```
+
+```nix: nix profile install nixpkgs#gdu```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[du](/man/du)(1), [ncdu](/man/ncdu)(1), [dust](/man/dust)(1), [df](/man/df)(1), [duf](/man/duf)(1)

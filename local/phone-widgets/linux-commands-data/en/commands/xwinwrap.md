@@ -1,0 +1,74 @@
+# TAGLINE
+
+Run a program as desktop background on X11
+
+# TLDR
+
+Run **video** as background
+
+```xwinwrap -b -nf -ov -- mpv --wid WID --loop --no-audio --no-resume-playback --panscan=1.0 [path/to/video.mp4]```
+
+Run video **fullscreen**
+
+```xwinwrap -b -nf -fs -ov -- mpv --wid WID --loop --no-audio --no-resume-playback --panscan=1.0 [path/to/video.mp4]```
+
+Run with **opacity**
+
+```xwinwrap -b -nf -ov -o 0.8 -- mpv --wid WID --loop --no-audio --no-resume-playback --panscan=1.0 [path/to/video.mp4]```
+
+Run on **specific** monitor
+
+```xwinwrap -g 1600x900+1920+0 -b -nf -ov -- mpv --wid WID --loop --no-audio --no-resume-playback --panscan=1.0 [path/to/video.mkv]```
+
+# SYNOPSIS
+
+**xwinwrap** [_OPTIONS_] -- _COMMAND_
+
+# PARAMETERS
+
+**-b**
+> Below other windows
+
+**-nf**
+> No focus
+
+**-fs**
+> Fullscreen
+
+**-ov**
+> Set override redirect
+
+**-o** _OPACITY_
+> Set opacity (0.0 to 1.0)
+
+**-g** _GEOMETRY_
+> Window geometry (WxH+X+Y)
+
+**WID**
+> Window ID placeholder replaced with actual window ID when passed to child process
+
+**-s**
+> Sticky window (appears on all desktops/workspaces)
+
+**-st**
+> Skip taskbar
+
+# DESCRIPTION
+
+**xwinwrap** runs a program as a desktop background window. It creates a window behind all others and passes its window ID to the child program, enabling video wallpapers and animated backgrounds.
+
+Commonly used with mpv to play videos as desktop backgrounds.
+
+# CAVEATS
+
+X11 only. May not work with all window managers or compositors. Child process must support window ID parameter.
+
+# INSTALL
+
+```nix: nix profile install nixpkgs#xwinwrap```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[mpv](/man/mpv)(1), [feh](/man/feh)(1), [xdotool](/man/xdotool)(1), [xsetroot](/man/xsetroot)(1)

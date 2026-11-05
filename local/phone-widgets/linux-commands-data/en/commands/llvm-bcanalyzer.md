@@ -1,0 +1,59 @@
+# TAGLINE
+
+analyzes LLVM bitcode files
+
+# TLDR
+
+**Analyze bitcode file**
+
+```llvm-bcanalyzer [file.bc]```
+
+**Show detailed dump**
+
+```llvm-bcanalyzer --dump [file.bc]```
+
+**Show only statistics**
+
+```llvm-bcanalyzer --dump-blockinfo [file.bc]```
+
+# SYNOPSIS
+
+**llvm-bcanalyzer** [_options_] _file_
+
+# PARAMETERS
+
+**--dump**
+> Dump low-level bitcode contents.
+
+**--dump-blockinfo**
+> Show block info statistics.
+
+**--show-binary-blobs**
+> Show binary blob data.
+
+# DESCRIPTION
+
+**llvm-bcanalyzer** analyzes LLVM bitcode files. Shows statistics about bitcode structure, including block types, record counts, and bit distribution. Useful for debugging bitcode generation and understanding LLVM IR serialization.
+
+# INSTALL
+
+```apt: sudo apt install llvm```
+
+```dnf: sudo dnf install llvm```
+
+```pacman: sudo pacman -S llvm```
+
+```apk: sudo apk add llvm```
+
+```zypper: sudo zypper install llvm```
+
+```brew: brew install llvm```
+
+```nix: nix profile install nixpkgs#llvm```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[llvm-dis](/man/llvm-dis)(1), [llvm-as](/man/llvm-as)(1)
+

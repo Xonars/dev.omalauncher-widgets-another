@@ -1,0 +1,32 @@
+# TAGLINE
+
+Convert scamper warts files to JSON format
+
+# TLDR
+
+**Convert warts to JSON format**
+
+```sc_warts2json [input.warts] > [output.json]```
+
+# SYNOPSIS
+
+**sc_warts2json** [_options_] _file_
+
+# DESCRIPTION
+
+**sc_warts2json** converts scamper warts binary format to JSON for programmatic analysis. Part of scamper toolkit.
+
+# INSTALL
+
+```apt: sudo apt install scamper```
+
+```zypper: sudo zypper install scamper```
+
+```brew: brew install scamper```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[sc_warts2csv](/man/sc_warts2csv)(1), [scamper](/man/scamper)(1)
+

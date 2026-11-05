@@ -1,0 +1,47 @@
+# TAGLINE
+
+Completely remove a submodule from repository
+
+# TLDR
+
+**Delete a submodule**
+
+```git delete-submodule [path/to/submodule]```
+
+# SYNOPSIS
+
+**git** **delete-submodule** _path_
+
+# DESCRIPTION
+
+**git delete-submodule** completely removes a submodule from a repository, automating the multi-step process that Git requires for proper submodule deletion. Part of git-extras, it handles all necessary cleanup operations in a single command.
+
+Removing a submodule manually involves deinitializing it, editing .gitmodules, removing entries from .git/config, deleting .git/modules/[name], and removing the working directory. Missing any step leaves residual configuration causing future issues. This command ensures complete removal by orchestrating all required operations.
+
+# INSTALL
+
+```apt: sudo apt install git```
+
+```dnf: sudo dnf install git```
+
+```pacman: sudo pacman -S git```
+
+```apk: sudo apk add git```
+
+```zypper: sudo zypper install git```
+
+```brew: brew install git```
+
+```nix: nix profile install nixpkgs#git```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[git-submodule](/man/git-submodule)(1), [git-extras](/man/git-extras)(1)
+
+# RESOURCES
+
+```[Source code](https://github.com/tj/git-extras)```
+
+<!-- verified: 2026-07-17 -->

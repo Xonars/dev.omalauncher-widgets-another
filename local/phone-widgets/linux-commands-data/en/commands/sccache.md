@@ -1,0 +1,143 @@
+# TAGLINE
+
+Shared compilation cache for C/C++ and Rust
+
+# TLDR
+
+**Start server**
+
+```sccache --start-server```
+
+**Show statistics**
+
+```sccache --show-stats```
+
+**Stop server**
+
+```sccache --stop-server```
+
+**Zero statistics**
+
+```sccache --zero-stats```
+
+**Use with cargo**
+
+```RUSTC_WRAPPER=sccache cargo build```
+
+**Use with cmake**
+
+```cmake -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache [..]```
+
+**Show advanced statistics** including cache location
+
+```sccache --show-adv-stats```
+
+**Show statistics in JSON** format
+
+```sccache --show-stats --stats-format json```
+
+# SYNOPSIS
+
+**sccache** [_--start-server_] [_--stop-server_] [_--show-stats_] [_options_]
+
+# PARAMETERS
+
+**--start-server**
+> Start the server daemon.
+
+**--stop-server**
+> Stop the server.
+
+**--show-stats**
+> Show cache statistics.
+
+**--zero-stats**
+> Reset statistics.
+
+**--show-adv-stats**
+> Show advanced statistics.
+
+**--dist-auth** _TOKEN_
+> Authenticate to dist server.
+
+**--dist-status**
+> Show distributed status.
+
+**--stats-format** _FMT_
+> Set output format for statistics (text or json).
+
+# CONFIGURATION
+
+**SCCACHE_DIR**
+> Local cache directory path (default: ~/.cache/sccache on Linux, ~/Library/Caches/sccache on macOS).
+
+**SCCACHE_CACHE_SIZE**
+> Maximum local cache size (e.g., "10G").
+
+**SCCACHE_REDIS**
+> Redis server URL for shared caching across machines.
+
+**SCCACHE_BUCKET**
+> S3 bucket name for AWS-based shared caching.
+
+**SCCACHE_GCS_BUCKET**
+> Google Cloud Storage bucket for GCS-based shared caching.
+
+**SCCACHE_MEMCACHED**
+> Memcached server URL for shared caching (e.g., "tcp://hostname:port").
+
+**SCCACHE_ERROR_LOG**
+> Path to redirect server error log output.
+
+**SCCACHE_LOG**
+> Logging level for the server (e.g., "debug", "trace").
+
+**SCCACHE_RECACHE**
+> When set, overwrite existing cache entries.
+
+**RUSTC_WRAPPER**
+> Set to "sccache" to enable caching for Rust builds via cargo.
+
+# DESCRIPTION
+
+**sccache** is a compiler cache supporting C, C++, Rust, and other languages. It caches compilation results to speed up rebuilds.
+
+The server runs as a daemon, caching compilation outputs. Subsequent compilations with the same inputs return cached results instantly.
+
+Local caching stores results on disk. Cloud backends (S3, GCS, Redis, Azure) enable shared caching across machines and CI.
+
+Rust integration through RUSTC_WRAPPER caches rustc invocations. The cargo build system automatically uses the wrapper.
+
+C/C++ integration uses compiler launchers or wrapper scripts. CMake's launcher variables provide clean integration.
+
+Distributed compilation schedules work across multiple machines. This scales builds beyond single-machine parallelism.
+
+# CAVEATS
+
+Non-deterministic builds reduce hit rates. Some compiler options prevent caching. Cloud storage has latency. Server must be running.
+
+# HISTORY
+
+**sccache** was developed by **Mozilla** starting around **2016** for Firefox builds. It provides an alternative to ccache with cloud storage and Rust support.
+
+# INSTALL
+
+```apt: sudo apt install sccache```
+
+```dnf: sudo dnf install sccache```
+
+```pacman: sudo pacman -S sccache```
+
+```apk: sudo apk add sccache```
+
+```zypper: sudo zypper install sccache```
+
+```brew: brew install sccache```
+
+```nix: nix profile install nixpkgs#sccache```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[ccache](/man/ccache)(1), [cargo](/man/cargo)(1), [rustc](/man/rustc)(1), [cmake](/man/cmake)(1), [make](/man/make)(1)

@@ -1,0 +1,31 @@
+# TAGLINE
+
+Create a new Hakyll static site project with a basic structure
+
+# TLDR
+
+**Create a new Hakyll site**
+
+```hakyll-init [my-site]```
+
+**Create in current directory**
+
+```hakyll-init .```
+
+# SYNOPSIS
+
+**hakyll-init** _directory_
+
+# DESCRIPTION
+
+**hakyll-init** creates a new Hakyll static site project with a basic structure. Hakyll is a Haskell-based static site generator with Pandoc integration. The generated project includes site.hs (main configuration), templates, CSS, sample posts, and images. After initialization, compile site.hs with GHC and use the resulting binary to build and serve the site.
+
+# INSTALL
+
+```apt: sudo apt install libghc-hakyll-dev```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[hugo](/man/hugo)(1), [jekyll](/man/jekyll)(1), [ghc](/man/ghc)(1), [cabal](/man/cabal)(1), [stack](/man/stack)(1)

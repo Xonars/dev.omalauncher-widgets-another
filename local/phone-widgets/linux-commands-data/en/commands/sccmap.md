@@ -1,0 +1,82 @@
+# TAGLINE
+
+Find strongly connected components in Graphviz graphs
+
+# TLDR
+
+**Find strongly connected components**
+
+```sccmap [graph.dot]```
+
+**Output to file**
+
+```sccmap -o [output.dot] [graph.dot]```
+
+**Show statistics**
+
+```sccmap -v [graph.dot]```
+
+**Print number of nodes** in each SCC
+
+```sccmap -S [graph.dot]```
+
+**Silent mode**
+
+```sccmap -s [graph.dot]```
+
+# SYNOPSIS
+
+**sccmap** [_-dsSv_] [_-o file_] [_options_] _files_
+
+# PARAMETERS
+
+**-o** _FILE_
+> Output file.
+
+**-v**
+> Verbose statistics.
+
+**-s**
+> Silent mode.
+
+**-S**
+> Print the number of nodes in each strongly connected component.
+
+**-d**
+> Decompose the graph and number each node with its SCC index.
+
+# DESCRIPTION
+
+**sccmap** decomposes directed graphs into their strongly connected components (SCCs), where each SCC is a maximal set of nodes in which every node is reachable from every other node. It reads DOT format graphs and outputs each component as a separate subgraph.
+
+With the **-v** flag, it reports statistics including the number and sizes of components, which is useful for understanding the structure of large directed graphs. Part of the Graphviz graph visualization package.
+
+# CAVEATS
+
+Directed graphs only. DOT format input. Part of Graphviz package.
+
+# HISTORY
+
+**sccmap** is part of **Graphviz**, the graph visualization software developed at AT&T Labs Research.
+
+# INSTALL
+
+```apt: sudo apt install graphviz```
+
+```dnf: sudo dnf install graphviz```
+
+```pacman: sudo pacman -S graphviz```
+
+```apk: sudo apk add graphviz```
+
+```zypper: sudo zypper install graphviz```
+
+```brew: brew install graphviz```
+
+```nix: nix profile install nixpkgs#graphviz```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[dot](/man/dot)(1), [neato](/man/neato)(1), [tred](/man/tred)(1), [ccomps](/man/ccomps)(1), [acyclic](/man/acyclic)(1)

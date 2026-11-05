@@ -1,0 +1,103 @@
+# TAGLINE
+
+lightweight minimalist web browser
+
+# TLDR
+
+**Launch Dillo** browser
+
+```dillo```
+
+**Open a URL**
+
+```dillo [https://example.com]```
+
+**Open local HTML** file
+
+```dillo [file.html]```
+
+**Open in fullwindow mode** (hide address bar, menu, and buttons)
+
+```dillo -f [url]```
+
+**Open with specific window geometry**
+
+```dillo -g [800x600] [url]```
+
+**Open in local mode** (don't load remote images or follow redirections)
+
+```dillo -l [path/to/file.html]```
+
+# SYNOPSIS
+
+**dillo** [_options_] [_URL_|_file_]
+
+# PARAMETERS
+
+_URL_
+> Web address to open.
+
+_FILE_
+> Local HTML file to open.
+
+**-f**, **--fullwindow**
+> Start in fullwindow mode, hiding the address bar, navigation buttons, menu, and status bar.
+
+**-g** _WxH[+X+Y]_
+> Window geometry (width x height and optional position).
+
+**-l**, **--local**
+> Don't load remote images or stylesheets, or follow redirections.
+
+**-v**, **--version**
+> Display version information.
+
+**-h**, **--help**
+> Display help information.
+
+# CONFIGURATION
+
+**~/.dillo/dillorc**
+> Main configuration file for browser preferences, fonts, and behavior.
+
+**~/.dillo/keysrc**
+> Keyboard shortcut mappings.
+
+**~/.dillo/domainrc**
+> Domain-specific rules and settings.
+
+# DESCRIPTION
+
+**Dillo** is a fast, small, and resource-efficient web browser written in C using the FLTK toolkit. It prioritizes speed and privacy over feature completeness, making it suitable for older hardware or minimalist setups.
+
+The browser supports HTML 4.01 and CSS 2.1 with limitations, focusing on core browsing functionality. It doesn't include JavaScript support, which improves performance and reduces security surface but limits compatibility with modern websites.
+
+Dillo features tabbed browsing, bookmarks, and form handling. Its minimal resource usage makes it valuable for embedded systems, older computers, or users who prefer lightweight applications.
+
+# CAVEATS
+
+No JavaScript support limits modern website compatibility. CSS support is incomplete. No plugin system. HTTPS support may require additional libraries. Limited media playback capabilities.
+
+# HISTORY
+
+Dillo was started by **Jorge Arellano Cid** in **1999**. Development focused on creating a minimalist browser that could run on low-resource systems. After periods of dormancy, the project continues with community maintenance.
+
+# INSTALL
+
+```apt: sudo apt install dillo```
+
+```dnf: sudo dnf install dillo```
+
+```pacman: sudo pacman -S dillo```
+
+```apk: sudo apk add dillo```
+
+```brew: brew install dillo```
+
+```nix: nix profile install nixpkgs#dillo```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[firefox](/man/firefox)(1), [links](/man/links)(1), [lynx](/man/lynx)(1), [surf](/man/surf)(1)

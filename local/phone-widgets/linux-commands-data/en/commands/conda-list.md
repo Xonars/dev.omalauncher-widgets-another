@@ -1,0 +1,77 @@
+# TAGLINE
+
+installed packages viewer
+
+# TLDR
+
+**List packages** in current environment
+
+```conda list```
+
+**List packages** in specific environment
+
+```conda list -n [env_name]```
+
+**List packages matching pattern**
+
+```conda list [pattern]```
+
+**Show as revisions**
+
+```conda list --revisions```
+
+**Export to file**
+
+```conda list --export > [packages.txt]```
+
+# SYNOPSIS
+
+**conda** **list** [_options_] [_regex_]
+
+# PARAMETERS
+
+**-n**, **--name** _name_
+> List packages in named environment.
+
+**--export**
+> Output in format for conda create --file.
+
+**--revisions**
+> List revision history.
+
+**--json**
+> Output in JSON format.
+
+# CONFIGURATION
+
+**~/.condarc**
+> User-level conda configuration for channels, package settings, and solver options.
+
+**/opt/conda/.condarc**
+> System-wide conda configuration.
+
+# DESCRIPTION
+
+**conda list** displays packages installed in a conda environment. By default shows packages in the current active environment.
+
+Use regex patterns to filter the list.
+
+# INSTALL
+
+```dnf: sudo dnf install conda```
+
+```nix: nix profile install nixpkgs#conda```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[conda](/man/conda)(1), [conda-search](/man/conda-search)(1), [conda-info](/man/conda-info)(1)
+
+# RESOURCES
+
+```[Source code](https://github.com/conda/conda)```
+
+```[Documentation](https://docs.conda.io/projects/conda/en/stable/commands/list.html)```
+
+<!-- verified: 2026-06-22 -->

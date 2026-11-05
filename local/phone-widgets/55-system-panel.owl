@@ -1,0 +1,124 @@
+widget "Системная панель" {
+  meta { owl: 15; description: "Интерактивная панель CPU, памяти и батареи"; version: "1.1" }
+  size: 4x3
+  minSize: 1x1
+  page: 1
+  padding: 10
+  requires { pacman: ["bash", "gawk", "coreutils"] }
+
+  source cpuSample = cmd("""
+    { awk '/^cpu / {print; exit}' /proc/stat; sleep 0.4; awk '/^cpu / {print; exit}' /proc/stat; } |
+    awk 'NR==1 {for(i=2;i<=9;i++) total+=$i; idle=$5+$6; next}
+         NR==2 {for(i=2;i<=9;i++) nextTotal+=$i; delta=nextTotal-total;
+                if(delta>0) printf "%.1f", 100*(1-($5+$6-idle)/delta)}'
+  """) every 3s
+  source sys = android.system every 3s
+  source bat = android.battery
+  source power = android.power every 3s
+  source device = android.device
+  state selected = "cpu"
+  let compact = (tileWidth ?? 300) < 260 || (tileHeight ?? 240) < 210
+  let dial = compact ? 42 : 60
+  let cpu = clamp(num(cpuSample), 0, 100)
+  let ram = sys.memory.total > 0 ? sys.memory.used / sys.memory.total * 100 : null
+  let cpuHistory = history(cpu, 40)
+  let ramHistory = history(ram, 40)
+  let batteryHistory = history(bat.level, 40)
+  let tone = selected == "cpu" ? blue : selected == "ram" ? magenta : green
+  let chart = selected == "cpu" ? cpuHistory : selected == "ram" ? ramHistory : batteryHistory
+  let metricName = selected == "cpu" ? "CPU" : selected == "ram" ? "RAM" : "Заряд"
+
+  component Gauge(label, amount, tint, active) {
+    Column {
+      gap: 4
+      align: center
+      padding: [2, 6]
+      radius: 12
+      background: alpha(tint, active ? 0.14 : 0.04)
+      border: 1
+      borderColor: alpha(tint, active ? 0.55 : 0.14)
+      Text { text: label; fontSize: 10; letterSpacing: 0.5; color: tint; align: center; bold: true }
+      Box {
+        size: dial
+        align: center
+        Ring {
+          size: dial; thickness: compact ? 3 : 5; value: amount; max: 100
+          start: 135; sweep: 270
+          color: tint; track: alpha(tint, 0.13)
+          animate value: spring()
+        }
+        Text { text: "${round(amount)}%"; fontSize: compact ? 12 : 17; bold: true; align: center }
+      }
+    }
+  }
+
+  Column {
+    fill: true
+    gap: 8
+    Row {
+      align: center
+      Text { text: "${bat.temp}° ${bat.charging ? 'ϟ' : ''}"; color: foreground; fontSize: 10; weight: 1 }
+      Box {
+        width: 28; height: 22; radius: 6; background: alpha(accent, 0.13)
+        onTap: screen()
+        Text { text: "↗"; fontSize: 14; align: center; color: foreground }
+      }
+    }
+    Row {
+      gap: compact ? 4 : 8
+      Box { weight: 1; onTap: selected = "cpu"; Gauge { label: "CPU"; amount: cpu; tint: cpu > 85 ? red : blue; active: selected == "cpu"; fill: width } }
+      Box { weight: 1; onTap: selected = "ram"; Gauge { label: "RAM"; amount: ram; tint: ram > 90 ? red : magenta; active: selected == "ram"; fill: width } }
+      Box { weight: 1; onTap: selected = "battery"; Gauge { label: "BAT"; amount: bat.level; tint: bat.level < 20 ? red : green; active: selected == "battery"; fill: width } }
+    }
+    if !compact {
+      Column {
+        height: 64; fill: width; gap: 4; padding: 8; radius: 10
+        background: alpha(tone, 0.06)
+        Text { text: metricName; fontSize: 10; color: tone }
+        if len(chart) > 1 {
+          Sparkline { values: chart; min: 0; max: 100; color: tone; thickness: 2; area: true; fill: width; weight: 1 }
+        } else {
+          Spacer { weight: 1 }
+        }
+      }
+    }
+  }
+
+  screen {
+    title: "Системная панель"
+    Column {
+      scroll: true; gap: 18; padding: 18
+      Text { text: "Ваше устройство"; fontSize: 28; bold: true }
+      Text { text: "${device.maker} ${device.model} · Android ${device.android}"; color: foreground; fontSize: 12 }
+      Column {
+        gap: 10; padding: 16; radius: 12; background: alpha(blue, 0.08)
+        Text { text: "ПРОЦЕССОР"; color: blue; letterSpacing: 2; fontSize: 12 }
+        Text { text: "${round(cpu)}%"; fontSize: 42; bold: true }
+        Progress { value: cpu; color: blue; height: 6; animate value: spring() }
+        Text { text: sys.cpu.soc ?? device.soc ?? "Процессор"; fontSize: 13 }
+        Text { text: "${sys.cpu.cores} ядер · до ${sys.cpu.maxMhz} МГц"; color: foreground; fontSize: 12 }
+        Sparkline { values: cpuHistory; min: 0; max: 100; color: blue; area: true; height: 64; fill: width }
+      }
+      Column {
+        gap: 10; padding: 16; radius: 12; background: alpha(magenta, 0.08)
+        Text { text: "ОПЕРАТИВНАЯ ПАМЯТЬ"; color: magenta; letterSpacing: 2; fontSize: 12 }
+        Text { text: "${round(ram)}%"; fontSize: 36; bold: true }
+        Progress { value: ram; color: magenta; height: 6 }
+        Text { text: "Занято ${fmtBytes(sys.memory.used)} / ${fmtBytes(sys.memory.total)}"; fontSize: 13 }
+        Text { text: "Доступно ${fmtBytes(sys.memory.available)}"; color: foreground; fontSize: 12 }
+      }
+      Column {
+        gap: 10; padding: 16; radius: 12; background: alpha(green, 0.08)
+        Text { text: "БАТАРЕЯ"; color: green; letterSpacing: 2; fontSize: 12 }
+        Text { text: "${bat.level}% · ${bat.charging ? 'заряжается' : 'разряжается'}"; fontSize: 26; bold: true }
+        Progress { value: bat.level; color: bat.level < 20 ? red : green; height: 6 }
+        Text { text: "${bat.temp} °C · ${bat.voltage} В"; fontSize: 13 }
+        if power.watts != null { Text { text: "Мощность: ${fixed(abs(power.watts), 1)} Вт"; color: foreground; fontSize: 12 } }
+        if power.chargeTime > 0 && bat.charging { Text { text: "До полного заряда: ${fmtDuration(power.chargeTime)}"; color: foreground; fontSize: 12 } }
+        Button { text: "Настройки батареи ↗"; onTap: settings("battery") }
+      }
+      Text { text: "Без перезагрузки: ${fmtDuration(sys.uptime)}"; color: foreground; fontSize: 12 }
+      Button { text: "Обновить показатели"; onTap: refresh() }
+    }
+  }
+}

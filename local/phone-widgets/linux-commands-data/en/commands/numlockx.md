@@ -1,0 +1,69 @@
+# TAGLINE
+
+Control the state of NumLock
+
+# TLDR
+
+Report whether Num Lock is **on or off**
+
+```numlockx status```
+
+Turn Num Lock **on**
+
+```numlockx on```
+
+Turn Num Lock **off**
+
+```numlockx off```
+
+**Flip** the current Num Lock state
+
+```numlockx toggle```
+
+# SYNOPSIS
+
+**numlockx** [_on_|_off_|_toggle_|_status_]
+
+# PARAMETERS
+
+**on**
+> Turn Num Lock on
+
+**off**
+> Turn Num Lock off
+
+**toggle**
+> Toggle current Num Lock state
+
+**status**
+> Display current Num Lock state
+
+# DESCRIPTION
+
+**numlockx** is a program to control the NumLock key inside X11 session scripts. It's commonly used in login scripts or desktop startup files to ensure Num Lock is in the desired state when a session begins.
+
+The command directly manipulates the keyboard LED and state through X11, making it useful for systems where the BIOS Num Lock setting doesn't persist or for users who prefer a specific Num Lock state at login.
+
+Without arguments, numlockx turns Num Lock on (equivalent to **numlockx on**).
+
+# CAVEATS
+
+Only works in X11 sessions; does not work in Wayland or virtual consoles. The state may be reset by some desktop environments during login. For console Num Lock control, use **setleds** instead.
+
+# INSTALL
+
+```apt: sudo apt install numlockx```
+
+```dnf: sudo dnf install numlockx```
+
+```pacman: sudo pacman -S numlockx```
+
+```zypper: sudo zypper install numlockx```
+
+```nix: nix profile install nixpkgs#numlockx```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[setleds](/man/setleds)(1), [xset](/man/xset)(1), [xmodmap](/man/xmodmap)(1)

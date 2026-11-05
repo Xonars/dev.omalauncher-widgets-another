@@ -1,0 +1,84 @@
+# TAGLINE
+
+Decompress XZ compressed files
+
+# TLDR
+
+**Decompress file**
+
+```unxz [file.xz]```
+
+**Keep original**
+
+```unxz -k [file.xz]```
+
+**To stdout**
+
+```unxz -c [file.xz]```
+
+**Force overwrite**
+
+```unxz -f [file.xz]```
+
+**Decompress multiple**
+
+```unxz [file1.xz] [file2.xz]```
+
+# SYNOPSIS
+
+**unxz** [_-k_] [_-c_] [_-f_] [_options_] _files_
+
+# PARAMETERS
+
+**-k**
+> Keep original.
+
+**-c**
+> Write to stdout.
+
+**-f**
+> Force overwrite.
+
+**-v**
+> Verbose mode.
+
+**-q**
+> Quiet mode.
+
+# DESCRIPTION
+
+**unxz** decompresses files that were compressed with the XZ format, which uses the LZMA2 algorithm for high compression ratios. It is functionally equivalent to running **xz --decompress** and is provided as a convenience command within the xz-utils package.
+
+By default, unxz replaces the compressed .xz file with the decompressed output, removing the original. The **-k** flag preserves the original compressed file, and **-c** writes decompressed data to standard output for piping to other commands.
+
+XZ is widely used in the Linux ecosystem for distributing source code tarballs, kernel sources, and package archives due to its excellent compression ratio. While decompression is fast, XZ compression is slower and more memory-intensive than alternatives like gzip or zstd.
+
+# CAVEATS
+
+Slow for very large files. Part of xz-utils. Single-threaded by default.
+
+# HISTORY
+
+**unxz** is part of **XZ Utils**, created by **Lasse Collin** and first released in **2009** as the successor to LZMA Utils. The XZ format has become the standard compression for Linux kernel sources and many source tarballs.
+
+# INSTALL
+
+```apt: sudo apt install xz-utils```
+
+```dnf: sudo dnf install xz```
+
+```pacman: sudo pacman -S xz```
+
+```apk: sudo apk add xz```
+
+```zypper: sudo zypper install xz```
+
+```brew: brew install xz```
+
+```nix: nix profile install nixpkgs#xz```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[xz](/man/xz)(1), [gzip](/man/gzip)(1), [bzip2](/man/bzip2)(1)

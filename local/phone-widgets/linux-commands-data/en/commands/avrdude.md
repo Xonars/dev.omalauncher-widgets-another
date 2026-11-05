@@ -1,0 +1,133 @@
+# TAGLINE
+
+Program AVR microcontroller flash and fuses
+
+# TLDR
+
+**Upload** firmware to Arduino
+
+```avrdude -p [atmega328p] -c [arduino] -P [/dev/ttyUSB0] -U flash:w:[firmware.hex]```
+
+**Read** flash memory
+
+```avrdude -p [atmega328p] -c [usbasp] -U flash:r:[backup.hex]:i```
+
+Set **fuse bits**
+
+```avrdude -p [atmega328p] -c [usbasp] -U lfuse:w:[0xE2]:m```
+
+**Verify** without writing
+
+```avrdude -p [atmega328p] -c [arduino] -P [/dev/ttyUSB0] -U flash:v:[firmware.hex]```
+
+# SYNOPSIS
+
+**avrdude** -p _partno_ -c _programmer_ [_options_]
+
+# DESCRIPTION
+
+**avrdude** (AVR Downloader Uploader) is a utility for programming Atmel AVR microcontrollers. It supports numerous programmers and can read/write flash, EEPROM, fuse bits, and lock bits.
+
+The tool is essential for Arduino development and embedded systems work with AVR chips.
+
+# PARAMETERS
+
+**-p** _partno_
+> Specify AVR device (e.g., atmega328p, attiny85)
+
+**-c** _programmer_
+> Programmer type (arduino, usbasp, avrisp2)
+
+**-P** _port_
+> Communication port (/dev/ttyUSB0, COM3)
+
+**-U** _memtype:op:file:format_
+> Memory operation (flash:w:file.hex:i)
+
+**-b** _baudrate_
+> Override RS-232 baud rate for serial connections
+
+**-B** _bitclock_
+> JTAG/ISP bit clock period (microseconds or frequency)
+
+**-e**
+> Perform a chip erase, resetting flash and EEPROM to 0xFF
+
+**-D**
+> Disable the automatic chip erase before flash write
+
+**-V**
+> Skip automatic verification after writing memory
+
+**-v**
+> Verbose output (repeat for more detail)
+
+**-n**
+> Dry run, do not actually write to the device
+
+**-F**
+> Force operation, override signature and init checks
+
+**-t**
+> Enter interactive terminal mode for manual memory operations
+
+# MEMORY OPERATIONS
+
+**flash**
+> Program memory
+
+**eeprom**
+> Data memory
+
+**lfuse**, **hfuse**, **efuse**
+> Configuration fuses
+
+**lock**
+> Lock bits
+
+Operations: **r** (read), **w** (write), **v** (verify)
+
+# CONFIGURATION
+
+**/etc/avrdude.conf**
+> System-wide configuration defining programmer types, part definitions, and default settings.
+
+**~/.avrduderc**
+> Per-user configuration overrides. Can add custom programmer definitions or modify part settings.
+
+# CAVEATS
+
+Incorrect fuse settings can brick the device. Requires proper permissions for serial ports. Wrong programmer selection causes failures. Always backup fuses before modification. USB connection issues common on some platforms.
+
+# HISTORY
+
+**avrdude** was created by Brian Dean in **2003** as an open-source alternative to Atmel's proprietary programming tools. It has become the standard tool for AVR programming.
+
+# INSTALL
+
+```apt: sudo apt install avrdude```
+
+```dnf: sudo dnf install avrdude```
+
+```pacman: sudo pacman -S avrdude```
+
+```apk: sudo apk add avrdude```
+
+```zypper: sudo zypper install avrdude```
+
+```brew: brew install avrdude```
+
+```nix: nix profile install nixpkgs#avrdude```
+
+<!-- packages: 2026-07-22 -->
+# SEE ALSO
+
+[arduino-cli](/man/arduino-cli)(1), [avr-gcc](/man/avr-gcc)(1), [platformio](/man/platformio)(1), [minicom](/man/minicom)(1)
+
+# RESOURCES
+
+```[Source code](https://github.com/avrdudes/avrdude)```
+
+```[Documentation](https://avrdudes.github.io/avrdude/)```
+
+<!-- verified: 2026-06-17 -->

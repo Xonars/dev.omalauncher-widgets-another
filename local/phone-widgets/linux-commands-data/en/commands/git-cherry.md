@@ -1,0 +1,89 @@
+# TAGLINE
+
+Find commits not merged upstream
+
+# TLDR
+
+**Show unpicked commits**
+
+```git cherry [upstream] [branch]```
+
+**Show with commit messages**
+
+```git cherry -v [upstream]```
+
+**Compare branches**
+
+```git cherry [main] [feature]```
+
+# SYNOPSIS
+
+**git cherry** [_options_] [_upstream_] [_head_]
+
+# PARAMETERS
+
+_UPSTREAM_
+> Branch to compare against.
+
+_HEAD_
+> Branch to check (default: current).
+
+_LIMIT_
+> Only report commits reachable from LIMIT, further limiting output.
+
+**-v**
+> Show commit subjects.
+
+**--abbrev** _N_
+> Abbreviate commit hashes.
+
+**--help**
+> Display help information.
+
+# DESCRIPTION
+
+**git cherry** finds commits not yet applied to upstream. It compares commits between branches, identifying which commits from your branch are missing from upstream based on patch content, not commit hashes.
+
+Output uses **+** for commits not in upstream and **-** for equivalent commits already present. This helps identify what still needs to be merged or cherry-picked.
+
+This command is particularly useful for reviewing branch status before merging, ensuring that all intended changes have been integrated and identifying any commits that may have been lost during rebasing.
+
+# CAVEATS
+
+Compares patch content, not commit IDs. Rebased commits show as missing. Works best for linear histories.
+
+# HISTORY
+
+git cherry is a core **Git** command for comparing branches by patch equivalence, named after the cherry-pick operation it helps plan.
+
+# INSTALL
+
+```apt: sudo apt install git```
+
+```dnf: sudo dnf install git```
+
+```pacman: sudo pacman -S git```
+
+```apk: sudo apk add git```
+
+```zypper: sudo zypper install git```
+
+```brew: brew install git```
+
+```nix: nix profile install nixpkgs#git```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[git-cherry-pick](/man/git-cherry-pick)(1), [git-log](/man/git-log)(1), [git-rebase](/man/git-rebase)(1)
+
+# RESOURCES
+
+```[Source code](https://github.com/git/git)```
+
+```[Homepage](https://git-scm.com/)```
+
+```[Documentation](https://git-scm.com/docs/git-cherry)```
+
+<!-- verified: 2026-07-17 -->

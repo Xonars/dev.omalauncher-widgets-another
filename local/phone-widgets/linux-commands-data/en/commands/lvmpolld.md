@@ -1,0 +1,89 @@
+# TAGLINE
+
+LVM poll daemon that supervises long-running LVM operations
+
+# TLDR
+
+Run in the **foreground** rather than daemonizing
+
+```lvmpolld --foreground```
+
+Add **debug logging** while troubleshooting
+
+```lvmpolld --foreground --log debug```
+
+**Exit after a period with no work** to do
+
+```lvmpolld --timeout [300]```
+
+Listen on a **non-default socket**
+
+```lvmpolld --socket [/tmp/lvmpolld.socket]```
+
+Write the **PID file** somewhere else
+
+```lvmpolld --pidfile [/tmp/lvmpolld.pid]```
+
+Use a **specific lvm binary** for the polling work
+
+```lvmpolld --binary [/usr/sbin/lvm]```
+
+Print what the running daemon is **currently tracking**
+
+```lvmpolld --dump```
+
+# SYNOPSIS
+
+**lvmpolld** [_options_]
+
+# PARAMETERS
+
+**-f**, **--foreground**
+> Run in the foreground instead of daemonizing
+
+**-l**, **--log** _level_
+> Set log level (debug, info, warn, error)
+
+**-t**, **--timeout** _seconds_
+> Set idle shutdown timeout; daemon exits after being idle this long
+
+**-s**, **--socket** _path_
+> Use a custom Unix socket path for communication
+
+**-p**, **--pidfile** _path_
+> Use a custom PID file location
+
+**--dump**
+> Dump the current state of the daemon and exit
+
+# DESCRIPTION
+
+**lvmpolld** is the LVM poll daemon that supervises long-running LVM operations such as pvmove, lvconvert mirroring, and thin pool extension. It monitors these operations and updates their progress, allowing the initiating command to return while work continues in the background.
+
+When an LVM command starts a polled operation, lvmpolld tracks its completion status. The daemon starts automatically when needed and shuts down after a configurable idle period.
+
+The daemon communicates via a Unix socket, typically at /run/lvm/lvmpolld.socket, and maintains state about active operations.
+
+# CAVEATS
+
+Usually started automatically by LVM commands; manual invocation is rarely needed. If the daemon dies during an active operation, restarting the original command will resume polling. The **--dump** option is useful for debugging active operations.
+
+# INSTALL
+
+```apt: sudo apt install lvm2```
+
+```dnf: sudo dnf install lvm2```
+
+```pacman: sudo pacman -S lvm2```
+
+```apk: sudo apk add lvm2-lockd```
+
+```zypper: sudo zypper install lvm2```
+
+```nix: nix profile install nixpkgs#lvm2```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[lvm](/man/lvm)(1), [pvmove](/man/pvmove)(1), [lvconvert](/man/lvconvert)(1), [lvmconfig](/man/lvmconfig)(1)

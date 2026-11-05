@@ -1,0 +1,121 @@
+# TAGLINE
+
+Compute and apply rsync-style file deltas
+
+# TLDR
+
+**Create signature file**
+
+```rdiff signature [original] [signature.sig]```
+
+**Create delta from signature**
+
+```rdiff delta [signature.sig] [new_file] [delta.delta]```
+
+**Apply delta to recreate**
+
+```rdiff patch [original] [delta.delta] [output]```
+
+# SYNOPSIS
+
+**rdiff** _command_ [_options_] _files_
+
+# COMMANDS
+
+**signature** _basis_ [_sig_]
+> Create signature of basis file.
+
+**delta** _sig_ _new_ [_delta_]
+> Create delta from signature and new file.
+
+**patch** _basis_ _delta_ [_output_]
+> Apply delta to basis file.
+
+# PARAMETERS
+
+**-b** _blocksize_
+> Block size (bytes) for the signature. Smaller = more accurate delta but larger signature.
+
+**-s**, **--statistics**
+> Print signature / delta timing and size statistics.
+
+**-S** _sum_
+> Length (bytes) of the strong checksum in the signature (default 8).
+
+**-H** _hash_
+> Hash algorithm: `md4` (legacy) or `blake2` (default for librsync ≥ 2).
+
+**-R**, **--rollsum**, **-I**, **--rabinkarp**
+> Select the rolling checksum variant (rabinkarp is the default).
+
+**-f**, **--force**
+> Overwrite the output file if it already exists.
+
+**-z**, **--compress** _FORMAT_
+> Compress deltas with `gzip` or `bzip2` when writing.
+
+**-v**, **--verbose**
+> Increase verbosity. Repeat for more detail.
+
+**-V**, **--version**
+> Print librsync version and exit.
+
+# DESCRIPTION
+
+**rdiff** computes and applies binary deltas using the rsync algorithm. It enables efficient file synchronization by transferring only the differences between files.
+
+# EXAMPLES
+
+```bash
+# Create signature
+rdiff signature original.tar sig.sig
+
+# Create delta (only differences)
+rdiff delta sig.sig modified.tar changes.delta
+
+# Apply delta to recreate file
+rdiff patch original.tar changes.delta reconstructed.tar
+
+# With statistics
+rdiff -s signature largefile sig
+```
+
+# WORKFLOW
+
+```
+1. Create signature of original (small)
+2. Send signature to remote
+3. Remote creates delta against new file
+4. Send delta back (efficient)
+5. Apply delta to reconstruct
+```
+
+# CAVEATS
+
+Part of librsync. Basis file needed for patch. Signature must match original file version.
+
+# HISTORY
+
+rdiff uses the **rsync** algorithm by **Andrew Tridgell**, implemented in **librsync** by **Martin Pool**.
+
+# INSTALL
+
+```apt: sudo apt install rdiff```
+
+```dnf: sudo dnf install librsync```
+
+```pacman: sudo pacman -S librsync```
+
+```apk: sudo apk add librsync```
+
+```zypper: sudo zypper install rdiff```
+
+```brew: brew install librsync```
+
+```nix: nix profile install nixpkgs#librsync```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[rsync](/man/rsync)(1), [diff](/man/diff)(1), [patch](/man/patch)(1), [xdelta](/man/xdelta)(1)

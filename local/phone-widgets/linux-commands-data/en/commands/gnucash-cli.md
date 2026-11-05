@@ -1,0 +1,102 @@
+# TAGLINE
+
+command-line interface for GnuCash reports and quotes
+
+# TLDR
+
+**Update quotes for all securities**
+
+```gnucash-cli --quotes get [file.gnucash]```
+
+**Show Finance::Quote version and sources**
+
+```gnucash-cli --quotes info```
+
+**Dump quotes for specific securities**
+
+```gnucash-cli --quotes dump [namespace] [symbol1] [symbol2]```
+
+**List available reports**
+
+```gnucash-cli --report list```
+
+**Run a report**
+
+```gnucash-cli --report run --name "[Balance Sheet]" [file.gnucash]```
+
+**Export report to file**
+
+```gnucash-cli --report run --name "[report]" --output-file [output.html] [file.gnucash]```
+
+# SYNOPSIS
+
+**gnucash-cli** [_options_] [_datafile_]
+
+# PARAMETERS
+
+**-h**, **--help**
+> Show help message.
+
+**-v**, **--version**
+> Show GnuCash version.
+
+**-Q**, **--quotes** _command_
+> Quotes mode: info, get, dump.
+
+**--namespace** _regexp_
+> Regular expression for commodity namespace (for quotes dump).
+
+**-R**, **--report** _command_
+> Report mode: run, show, list.
+
+**--name** _name_
+> Report name for run command.
+
+**--output-file** _file_
+> Output file for report.
+
+**--export-type** _type_
+> Export format type.
+
+**--debug**
+> Enable debugging mode.
+
+**--extra**
+> Enable developer/debugging features.
+
+**--log** _arg_
+> Log level overrides (can be specified multiple times).
+
+**--logto** _file_
+> File to log into (use "stderr" or "stdout" for those streams).
+
+**-V**, **--verbose**
+> Show extended Finance::Quote parameters (with quotes dump).
+
+# DESCRIPTION
+
+**gnucash-cli** is the command-line interface for GnuCash, a personal and small business financial accounting application. It operates in two modes: quotes mode for fetching and updating security prices, and report mode for generating financial reports. This allows automation of price updates and report generation without opening the GUI.
+
+# CAVEATS
+
+Quotes functionality requires Finance::Quote to be properly configured. Database URIs are supported for MySQL and PostgreSQL backends.
+
+# INSTALL
+
+```apt: sudo apt install gnucash```
+
+```dnf: sudo dnf install gnucash```
+
+```pacman: sudo pacman -S gnucash```
+
+```apk: sudo apk add gnucash```
+
+```zypper: sudo zypper install gnucash```
+
+```nix: nix profile install nixpkgs#gnucash```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[gnucash](/man/gnucash)(1), [ledger](/man/ledger)(1)

@@ -1,0 +1,57 @@
+app "Справочник разработчика" {
+  meta { owl: 11; version: "1.0"; description: "Офлайн база знаний: сборка Oma Launcher, SDK и собственная подпись"; category: "dev" }
+  icon: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M24 11C18 6 10 6 4 8v31c7-2 14-1 20 4 6-5 13-6 20-4V8c-6-2-14-2-20 3v32"/><path d="m13 18-4 5 4 5m22-10 4 5-4 5"/></svg>'
+  state selected = ""
+  state query = ""
+  state saved = [] persist
+  state favorites = false
+  state copied = ""
+  let articles = ARTICLES_DATA
+  let article = articles.find(a => a.id == selected)
+  let hits = articles.filter(a => (!favorites || contains(saved, a.id)) && contains(lower(a.title + " " + a.desc + " " + join(a.blocks.map(b => b.text + " " + b.code), " ")), lower(trim(query))))
+  let position = indexOf(articles.map(a => a.id), selected)
+  title: selected == "" ? "Справочник разработчика" : article.title
+  back: selected != ""
+  onBack: { selected = ""; copied = "" }
+  Column { fill: true
+    if selected == "" {
+      Column { padding: 12; gap: 10
+        Text { maxLines: 2000; text: "СВОЯ БАЗА ЗНАНИЙ"; style: label; color: accent }
+        Text { maxLines: 2000; text: "Oma Launcher · от исходников до APK"; style: title }
+        Text { maxLines: 2000; text: "Офлайн · 14 статей · редакция 26.10.2026\nЧитайте по порядку. Команды копируются и запускаются вами в терминале."; style: small; color: muted }
+        Input { text: query; placeholder: "Поиск: SDK, подпись, ошибка…"; onChange: query = value }
+        Button { text: favorites ? "★ Избранное · показать все" : "☆ Только избранное"; onTap: favorites = !favorites }
+      }
+      Column { weight: 1; scroll: true; lazy: true; padding: 12; gap: 10
+        if len(hits) == 0 { Text { maxLines: 2000; text: "Статей не найдено"; color: muted } }
+        for a in hits key a.id {
+          Column { fill: width; gap: 5; padding: 12; radius: 8; background: alpha(accent, 0.07)
+            onTap: { selected = a.id; copied = "" }
+            Text { maxLines: 2000; text: a.title + (contains(saved, a.id) ? " ★" : ""); bold: true }
+            Text { maxLines: 2000; text: a.desc; style: small; color: muted }
+          }
+        }
+      }
+    } else {
+      Column { fill: true; scroll: true; padding: 12; gap: 14
+        Text { maxLines: 2000; text: "OMA LAUNCHER · ${position + 1} / ${len(articles)}"; style: label; color: accent }
+        Text { maxLines: 2000; text: article.title; style: title }
+        Text { maxLines: 2000; text: article.desc; color: muted }
+        Button { text: contains(saved, selected) ? "★ Убрать из избранного" : "☆ В избранное"; onTap: { if contains(saved, selected) { saved = saved.filter(x => x != selected) } else { saved = saved + [selected] } } }
+        for b, i in article.blocks {
+          Text { maxLines: 2000; text: b.text; fill: width }
+          if b.code != "" {
+            Text { maxLines: 2000; text: b.code; font: mono; fontSize: 12; fill: width; padding: 10; radius: 8; background: alpha(accent, 0.07); onTap: { copy(b.code); copied = str(i) } }
+            Button { text: copied == str(i) ? "Скопировано ✓" : "Копировать команды"; onTap: { copy(b.code); copied = str(i) } }
+          }
+        }
+        Row { wrap: true; gap: 8
+          if position > 0 { Button { text: "← Назад"; onTap: { selected = articles[position - 1].id; copied = "" } } }
+          Button { text: "Оглавление"; onTap: selected = "" }
+          if position < len(articles) - 1 { Button { text: "Далее →"; onTap: { selected = articles[position + 1].id; copied = "" } } }
+        }
+        Spacer { height: 16 }
+      }
+    }
+  }
+}

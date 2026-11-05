@@ -1,0 +1,54 @@
+# TAGLINE
+
+configure database cluster maintenance schedules
+
+# TLDR
+
+**Get maintenance window**
+
+```doctl databases maintenance-window get [cluster_id]```
+
+**Update maintenance window**
+
+```doctl databases maintenance-window update [cluster_id] --day [monday] --hour [02:00]```
+
+# SYNOPSIS
+
+**doctl** **databases** **maintenance-window** _command_ [_options_]
+
+# SUBCOMMANDS
+
+**get**
+> Get maintenance window.
+
+**update**
+> Update maintenance window.
+
+# PARAMETERS
+
+**--day** _string_
+> Day of week (monday through sunday).
+
+**--hour** _string_
+> Hour in UTC (00:00 through 23:00).
+
+# DESCRIPTION
+
+**doctl databases maintenance-window** manages the maintenance window for DigitalOcean managed database clusters. Maintenance includes updates and patches applied during this window.
+
+DigitalOcean performs automated maintenance on managed databases including security patches, version updates, and system optimizations. The maintenance window defines when these operations can occur, allowing you to schedule them during low-traffic periods to minimize impact on your applications.
+
+You can configure both the day of the week and the hour (in UTC) when maintenance should begin. Planning the window around your application's usage patterns helps ensure maintenance doesn't affect peak traffic times.
+
+# SEE ALSO
+
+[doctl-databases](/man/doctl-databases)(1)
+
+# RESOURCES
+
+```[Source code](https://github.com/digitalocean/doctl)```
+
+```[Documentation](https://docs.digitalocean.com/reference/doctl/reference/databases/)```
+
+<!-- verified: 2026-07-11 -->
+

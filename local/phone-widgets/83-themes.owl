@@ -1,0 +1,118 @@
+widget "Темы и обои" {
+  meta { owl: 17; description: "Темы, палитры и каталог обоев" }
+  requires { pacman: ["python", "bash"] }
+  size: 6x2
+  minSize: 1x1
+  source data = cmd("python3 ~/.config/omalauncher/widgets/theme-catalog/catalog.py") every 10s json
+  state tab = "themes"
+  state query = ""
+  state allWalls = false
+  state message = ""
+  let themes = data.themes ?? []
+  let current = data.theme
+  let active = find(themes, t => t.name == current)
+  let names = themes.map(t => t.name)
+  let total = max(1, len(names))
+  let index = max(0, indexOf(names, current))
+  let previous = names[(index + total - 1) % total]
+  let next = names[(index + 1) % total]
+  let shownThemes = themes.filter(t => contains(lower(t.name), lower(query)))
+  let walls = flatten((allWalls ? themes : themes.filter(t => t.name == current)).map(t => t.walls))
+  let shownWalls = walls.filter(w => contains(lower(w.name + " " + w.theme), lower(query)))
+  onTap: { refresh(); screen() }
+
+  Row {
+    fill: true
+    align: center
+    gap: 8
+    Text {
+      text: "‹"; fontSize: 36; padding: [10, 8]
+      onTap: { if len(names) > 0 { haptic(); message = run("python3 ~/.config/omalauncher/widgets/theme-catalog/catalog.py set ${sh(previous)}") } }
+    }
+    Column {
+      weight: 1; gap: 10
+      Text { text: current ?? "…"; fontSize: (tileWidth ?? 360) < 240 ? 18 : 24; maxLines: 1; align: center }
+      Row {
+        gap: 3
+        for c in active.swatch ?? [background, foreground, accent, red, green, yellow, blue, magenta] {
+          Box { height: 10; weight: 1; background: c; radius: 2 * corners }
+        }
+      }
+    }
+    Text {
+      text: "›"; fontSize: 36; padding: [10, 8]
+      onTap: { if len(names) > 0 { haptic(); message = run("python3 ~/.config/omalauncher/widgets/theme-catalog/catalog.py set ${sh(next)}") } }
+    }
+  }
+
+  component ThemeCard(t) {
+    let selected = current == t.name
+    Column {
+      padding: 8; gap: 8; radius: 10 * corners
+      background: alpha(surface, 0.65)
+      border: selected ? 2 : 1; borderColor: selected ? accent : border
+      onTap: { haptic(); message = run("python3 ~/.config/omalauncher/widgets/theme-catalog/catalog.py set ${sh(t.name)}") }
+      if t.preview != null {
+        Image { src: t.preview; height: 94; fill: width; fit: cover; clip: true; radius: 5 * corners; label: t.name }
+      } else {
+        Box { height: 94; fill: width; background: t.swatch[0] ?? background; align: center
+          Text { text: "Aa"; fontSize: 32; align: center; color: t.swatch[1] ?? foreground }
+        }
+      }
+      Text { text: selected ? "✓ ${t.name}" : t.name; style: small; bold: selected; maxLines: 1 }
+      Row { gap: 2; for c in t.swatch { Box { height: 8; weight: 1; background: c } } }
+    }
+  }
+
+  screen {
+    title: "Темы и обои"
+    Column {
+      fill: true; gap: 10; padding: 12
+      Row {
+        gap: 8
+        for item in [{id: "themes", name: "Темы"}, {id: "walls", name: "Обои"}] {
+          Text {
+            text: item.name; weight: 1; align: center; padding: [12, 10]
+            background: tab == item.id ? alpha(accent, 0.2) : surface
+            border: 1; borderColor: tab == item.id ? accent : border; radius: 8 * corners
+            onTap: { tab = item.id; query = "" }
+          }
+        }
+      }
+      Input { text: query; placeholder: tab == "themes" ? "Найти тему…" : "Найти обои…"; onChange: query = value }
+      if message != "" { Text { text: message; style: small; color: red } }
+      if tab == "themes" {
+        Text { text: "${len(shownThemes)} тем · ${current ?? "…"}"; style: small; color: muted; maxLines: 1 }
+        Grid {
+          columns: (screenWidth ?? 360) > 600 ? 3 : 2
+          lazy: true; weight: 1; gap: 10; onPull: refresh()
+          for t in shownThemes key t.name { ThemeCard { t: t } }
+        }
+        if len(shownThemes) == 0 { Text { text: "Темы не найдены"; color: muted } }
+      } else {
+        Row {
+          align: center
+          Text { text: allWalls ? "Все темы · ${len(shownWalls)}" : "${current ?? "…"} · ${len(shownWalls)}"; weight: 1; style: small; maxLines: 1 }
+          Button { text: allWalls ? "Текущая тема" : "Все темы"; onTap: allWalls = !allWalls }
+        }
+        Grid {
+          columns: (screenWidth ?? 360) > 600 ? 3 : 2
+          lazy: true; weight: 1; gap: 10; onPull: refresh()
+          for w in shownWalls key w.path {
+            let selected = current == w.theme && data.background == w.name
+            Column {
+              padding: 6; gap: 6; radius: 10 * corners
+              background: alpha(surface, 0.65)
+              border: selected ? 2 : 1; borderColor: selected ? accent : border
+              onTap: { haptic(); message = run("python3 ~/.config/omalauncher/widgets/theme-catalog/catalog.py set ${sh(w.theme)} ${sh(w.name)}") }
+              Image { src: w.path; height: 154; fill: width; fit: cover; clip: true; radius: 6 * corners; label: w.name }
+              Text { text: selected ? "✓ ${w.name}" : w.name; style: small; maxLines: 1 }
+              if allWalls { Text { text: w.theme; fontSize: 10; color: muted; maxLines: 1 } }
+            }
+          }
+        }
+        if len(shownWalls) == 0 { Text { text: "Обои не найдены"; color: muted } }
+      }
+    }
+  }
+}

@@ -1,0 +1,4 @@
+owl-matrix-transparent|Matrix rain with default background,
+    bce@,
+    setab=\E[%?%p1%{0}%=%t49%e%p1%{8}%<%t4%p1%d%e%p1%{16}%<%t10%p1%{8}%-%d%e48;5;%p1%d%;m,
+    use=tmux-256color,

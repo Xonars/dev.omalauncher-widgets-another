@@ -1,0 +1,46 @@
+# TAGLINE
+
+Delete Proxmox VM snapshots
+
+# TLDR
+
+**Delete** a snapshot
+
+```qm delsnapshot 100 snapshot_name```
+
+**Force** delete from configuration (even if disk removal fails)
+
+```qm delsnapshot 100 snapshot_name --force 1```
+
+# SYNOPSIS
+
+**qm delsnapshot** _vmid_ _snapname_ [_options_]
+
+# PARAMETERS
+
+**--force** _boolean_
+> Force removal from config file, even if removing disk snapshots fails
+
+# DESCRIPTION
+
+**qm delsnapshot** deletes virtual machine snapshots in Proxmox VE. Snapshots capture the VM state at a point in time and can be removed when no longer needed to reclaim storage space.
+
+The force option allows removing snapshot references from configuration even if the underlying disk snapshot cannot be deleted.
+
+# CAVEATS
+
+Deleting snapshots is irreversible. Ensure the snapshot is no longer needed before deletion. Force deletion may leave orphaned disk data.
+
+# HISTORY
+
+Part of **Proxmox VE** QEMU/KVM management tools for virtual machine administration.
+
+# INSTALL
+
+```dnf: sudo dnf install qm```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[qm](/man/qm)(1), [qm-snapshot](/man/qm-snapshot)(1), [qm-listsnapshot](/man/qm-listsnapshot)(1), [qm-rollback](/man/qm-rollback)(1)

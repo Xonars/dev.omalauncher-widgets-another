@@ -1,0 +1,85 @@
+# TAGLINE
+
+Groff DVI output driver
+
+# TLDR
+
+**Convert groff to DVI**
+
+```groff -Tdvi [file.roff] > output.dvi```
+
+**Direct grodvi usage**
+
+```grodvi [file] > output.dvi```
+
+**Specify font path**
+
+```grodvi -F [fontdir] [file]```
+
+# SYNOPSIS
+
+**grodvi** [_options_] [_file_]
+
+# PARAMETERS
+
+_FILE_
+> Groff intermediate output file.
+
+**-d**
+> Enable debug mode.
+
+**-F** _DIR_
+> Font directory.
+
+**-l**
+> Landscape mode.
+
+**-p** _SIZE_
+> Paper size.
+
+**--help**
+> Display help information.
+
+# DESCRIPTION
+
+**grodvi** is a groff output driver that produces DVI (DeVice Independent) format, compatible with TeX ecosystem tools like dvips and xdvi.
+
+The driver converts groff intermediate output to DVI format, allowing integration with TeX-based workflows and standard groff font features.
+
+# CAVEATS
+
+Part of groff package. DVI format has limitations compared to PDF. Requires TeX fonts for best results.
+
+# HISTORY
+
+grodvi was developed as part of **GNU groff** to provide DVI output capability, bridging groff and TeX ecosystems.
+
+# INSTALL
+
+```apt: sudo apt install groff```
+
+```dnf: sudo dnf install groff```
+
+```pacman: sudo pacman -S groff```
+
+```apk: sudo apk add groff```
+
+```zypper: sudo zypper install groff```
+
+```brew: brew install groff```
+
+```nix: nix profile install nixpkgs#groff```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[groff](/man/groff)(1), [grops](/man/grops)(1), [dvips](/man/dvips)(1)
+
+# RESOURCES
+
+```[Source code](https://git.savannah.gnu.org/cgit/groff.git)```
+
+```[Homepage](https://www.gnu.org/software/groff/)```
+
+<!-- verified: 2026-07-17 -->

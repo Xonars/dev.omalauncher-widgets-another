@@ -1,0 +1,71 @@
+# TAGLINE
+
+Dmenu-based device mount/unmount interface
+
+# TLDR
+
+**Launch** mount/unmount menu
+
+```udiskie-dmenu```
+
+Use **rofi** instead of dmenu
+
+```udiskie-dmenu --rofi```
+
+**Mount** devices only
+
+```udiskie-dmenu mount```
+
+**Unmount** devices only
+
+```udiskie-dmenu unmount```
+
+Display **help**
+
+```udiskie-dmenu --help```
+
+# SYNOPSIS
+
+**udiskie-dmenu** [_OPTIONS_]
+
+# PARAMETERS
+
+**mount**
+> Show only mountable devices.
+
+**unmount**
+> Show only unmountable (mounted) devices.
+
+**--rofi**
+> Use rofi instead of dmenu.
+
+**--help**
+> Display help information.
+
+# DESCRIPTION
+
+**udiskie-dmenu** provides a dmenu or rofi-based frontend for udiskie to mount and unmount devices interactively. It presents a menu of available devices for quick selection.
+
+This tool integrates with tiling window managers that use dmenu or rofi as their primary launcher interface.
+
+# CAVEATS
+
+Requires udiskie and either dmenu or rofi installed. Available devices depend on connected hardware and udiskie configuration.
+
+# INSTALL
+
+```dnf: sudo dnf install udiskie```
+
+```pacman: sudo pacman -S udiskie```
+
+```apk: sudo apk add udiskie```
+
+```zypper: sudo zypper install udiskie```
+
+```nix: nix profile install nixpkgs#udiskie```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[udiskie](/man/udiskie)(1), [udisksctl](/man/udisksctl)(1), [dmenu](/man/dmenu)(1), [rofi](/man/rofi)(1)

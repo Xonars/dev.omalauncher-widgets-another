@@ -1,0 +1,142 @@
+# TAGLINE
+
+fast OCI container runtime
+
+# TLDR
+
+**Run a container** from OCI bundle
+
+```crun run [container_id]```
+
+**Create a container** without starting it
+
+```crun create [container_id]```
+
+**Start a created container**
+
+```crun start [container_id]```
+
+**List running containers**
+
+```crun list```
+
+**Execute a command** in a running container
+
+```crun exec [container_id] [command]```
+
+**Delete a container**
+
+```crun delete [container_id]```
+
+**Get container state**
+
+```crun state [container_id]```
+
+**Pause all processes** in a container
+
+```crun pause [container_id]```
+
+**Show processes** running in a container
+
+```crun ps [container_id]```
+
+# SYNOPSIS
+
+**crun** [_global-options_] _command_ [_command-options_] [_arguments_]
+
+# PARAMETERS
+
+**run** _ID_
+> Create and start a container from an OCI bundle.
+
+**create** _ID_
+> Create a container but don't start it.
+
+**start** _ID_
+> Start a previously created container.
+
+**exec** _ID_ _CMD_
+> Execute a command in a running container.
+
+**delete** _ID_
+> Delete a container.
+
+**kill** _ID_ [_SIGNAL_]
+> Send a signal to the container's init process.
+
+**list**
+> List containers.
+
+**state** _ID_
+> Output the state of a container.
+
+**pause** _ID_
+> Pause all processes in the container.
+
+**resume** _ID_
+> Resume the processes in the container.
+
+**ps** _ID_
+> Show the processes running in a container.
+
+**update** _ID_
+> Update container resource constraints.
+
+**spec**
+> Create a new OCI bundle specification.
+
+**checkpoint** _ID_
+> Checkpoint a running container using CRIU.
+
+**--root** _DIR_
+> Root directory for container state.
+
+**--debug**
+> Produce verbose output.
+
+**--log**=_DESTINATION_
+> Define destination for error and warning messages (file:PATH, journald:ID, or syslog:ID).
+
+**--systemd-cgroup**
+> Use systemd for configuring cgroups.
+
+**--cgroup-manager**=_MANAGER_
+> Specify cgroup manager (cgroupfs, systemd, or disabled).
+
+# DESCRIPTION
+
+**crun** is a fast and low-memory footprint OCI container runtime written in C. It is fully compatible with the OCI (Open Container Initiative) runtime specification and can be used as a drop-in replacement for runc.
+
+crun implements all required OCI runtime operations including container creation, execution, and lifecycle management. It supports Linux namespaces, cgroups v1 and v2, seccomp, and other container isolation features.
+
+The runtime is designed to be lightweight and efficient, with significantly faster startup times and lower memory usage compared to Go-based runtimes. It's used by container engines like Podman and Buildah.
+
+# CAVEATS
+
+Requires root privileges or appropriate user namespace configuration. OCI bundle must be properly configured with config.json and rootfs. crun operates on OCI bundles, not container images directly.
+
+# HISTORY
+
+crun was developed by Giuseppe Scrivano at Red Hat as a faster alternative to runc. First released around **2019**, it gained adoption due to its performance benefits. It became the default runtime for Podman and is supported by Kubernetes through CRI-O.
+
+# INSTALL
+
+```apt: sudo apt install crun```
+
+```dnf: sudo dnf install crun```
+
+```pacman: sudo pacman -S crun```
+
+```apk: sudo apk add crun```
+
+```zypper: sudo zypper install crun```
+
+```brew: brew install crun```
+
+```nix: nix profile install nixpkgs#crun```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[runc](/man/runc)(1), [podman](/man/podman)(1), [buildah](/man/buildah)(1), [containerd](/man/containerd)(1), [docker](/man/docker)(1)

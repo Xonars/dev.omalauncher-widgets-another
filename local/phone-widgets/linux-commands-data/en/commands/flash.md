@@ -1,0 +1,77 @@
+# TAGLINE
+
+terminal-based spaced repetition flashcards
+
+# TLDR
+
+Launch the **deck picker** UI
+
+```flash```
+
+Show flash **system information**
+
+```flash -i```
+
+Use a custom **preview** program instead of bat
+
+```flash -p [cat]```
+
+Print **version**
+
+```flash -v```
+
+Show **help**
+
+```flash -h```
+
+# SYNOPSIS
+
+**flash** [_-i_] [_-p previewer_] [_-h_] [_-v_]
+
+# PARAMETERS
+
+**-i**
+> Display information about the flashcard system and deck location
+
+**-p** _previewer_
+> Change the card previewer (default: bat, fallback: cat)
+
+**-h**
+> Display help message
+
+**-v**
+> Display version information
+
+# DESCRIPTION
+
+**Flash** (fla.sh) is a terminal-based flashcard application implementing spaced repetition and active recall learning principles. It uses plain text CSV files as flashcard decks and presents cards in randomized study sessions.
+
+Cards are stored in colon-separated CSV format: **category:question:answer:score**. The score field manages card difficulty—lower scores cause cards to appear more frequently, while cards rated "Easy" receive higher scores and appear less often.
+
+The tool uses **fzf** for fuzzy selection of decks and optionally **bat** for syntax-highlighted card display. Decks are stored in **~/.local/share/flash/** and support nested directory organization.
+
+# CAVEATS
+
+Requires **fzf** as a mandatory dependency for deck selection. On macOS, GNU coreutils must be installed via Homebrew for the **shuf** command used in randomization. The tool creates its data directory on first run if it does not exist.
+
+# HISTORY
+
+Flash was created by **Bryan Jenks** (tallguyjenks) as a lightweight terminal alternative to graphical flashcard applications. Written entirely in **Bash**, it draws inspiration from spaced repetition systems like Anki while maintaining Unix philosophy simplicity.
+
+# INSTALL
+
+```apt: sudo apt install flash```
+
+```brew: brew install flash```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[fzf](/man/fzf)(1), [bat](/man/bat)(1), [cat](/man/cat)(1)
+
+# RESOURCES
+
+```[Source code](https://github.com/tallguyjenks/fla.sh)```
+
+<!-- verified: 2026-07-15 -->

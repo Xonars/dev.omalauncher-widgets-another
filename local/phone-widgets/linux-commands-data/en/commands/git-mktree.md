@@ -1,0 +1,81 @@
+# TAGLINE
+
+Create tree object from ls-tree format
+
+# TLDR
+
+**Create tree from ls-tree output**
+
+```git ls-tree HEAD | git mktree```
+
+**Create tree from file**
+
+```git mktree < [tree-listing.txt]```
+
+**Allow missing objects**
+
+```git mktree --missing```
+
+# SYNOPSIS
+
+**git mktree** [_options_]
+
+# PARAMETERS
+
+**--missing**
+> Allow missing objects.
+
+**-z**
+> NUL-terminated input.
+
+**--batch**
+> Process multiple trees.
+
+**--help**
+> Display help information.
+
+# DESCRIPTION
+
+**git mktree** creates a tree object from ls-tree formatted input. It reads file modes, object types, hashes, and names from stdin, creating a new tree object containing those entries. The command is the inverse of `git ls-tree`.
+
+This plumbing tool enables programmatic tree creation and manipulation in scripts. Input must be properly formatted with each line specifying mode, type, hash, and filename. With `--batch`, it accepts multiple tree descriptions separated by blank lines and writes one tree object per batch, printing each resulting hash.
+
+# CAVEATS
+
+Plumbing command. Input must be properly formatted. Objects must exist unless --missing.
+
+# HISTORY
+
+git mktree is a core **Git** plumbing command for tree object creation, enabling programmatic manipulation of git's tree structure.
+
+# INSTALL
+
+```apt: sudo apt install git```
+
+```dnf: sudo dnf install git```
+
+```pacman: sudo pacman -S git```
+
+```apk: sudo apk add git```
+
+```zypper: sudo zypper install git```
+
+```brew: brew install git```
+
+```nix: nix profile install nixpkgs#git```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[git-ls-tree](/man/git-ls-tree)(1), [git-write-tree](/man/git-write-tree)(1)
+
+# RESOURCES
+
+```[Source code](https://github.com/git/git)```
+
+```[Homepage](https://git-scm.com/)```
+
+```[Documentation](https://git-scm.com/docs/git-mktree)```
+
+<!-- verified: 2026-07-17 -->

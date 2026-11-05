@@ -1,0 +1,108 @@
+# TAGLINE
+
+Manage multiple Ruby versions per project
+
+# TLDR
+
+**List installed versions**
+
+```rbenv versions```
+
+**List available versions**
+
+```rbenv install -l```
+
+**Install Ruby version**
+
+```rbenv install [3.2.0]```
+
+**Set global version**
+
+```rbenv global [3.2.0]```
+
+**Set local version**
+
+```rbenv local [3.2.0]```
+
+**Show current version**
+
+```rbenv version```
+
+**Set shell-specific version**
+
+```rbenv shell [3.2.0]```
+
+**Rehash shims**
+
+```rbenv rehash```
+
+# SYNOPSIS
+
+**rbenv** _command_ [_args_...]
+
+# DESCRIPTION
+
+**rbenv** manages multiple Ruby installations. It allows switching between Ruby versions globally, per-project, or per-shell, without modifying system Ruby.
+
+The tool uses shims to intercept Ruby commands and route them to the appropriate version based on context.
+
+# PARAMETERS
+
+**versions**
+> List installed versions.
+
+**version**
+> Show current version.
+
+**install** _version_
+> Install Ruby version.
+
+**uninstall** _version_
+> Remove Ruby version.
+
+**global** _version_
+> Set global default.
+
+**local** _version_
+> Set directory version.
+
+**shell** _version_
+> Set shell version.
+
+**rehash**
+> Rebuild shims.
+
+**which** _name_
+> Show executable path.
+
+**init**
+> Set up rbenv shims in the current shell.
+
+**exec** _command_
+> Run an executable with the selected Ruby version.
+
+# CAVEATS
+
+Requires ruby-build plugin for install. Shims need rehashing after gem installs. Per-project version via .ruby-version file.
+
+# HISTORY
+
+**rbenv** was created by **Sam Stephenson** in **2011** as a simpler alternative to RVM. It focuses on doing one thing well - version switching - without modifying shells or managing gemsets.
+
+# INSTALL
+
+```dnf: sudo dnf install rbenv```
+
+```pacman: sudo pacman -S rbenv```
+
+```zypper: sudo zypper install rbenv```
+
+```brew: brew install rbenv```
+
+```nix: nix profile install nixpkgs#rbenv```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[ruby](/man/ruby)(1), [gem](/man/gem)(1), [bundle](/man/bundle)(1), [rvm](/man/rvm)(1), [asdf](/man/asdf)(1)

@@ -1,0 +1,74 @@
+# TAGLINE
+
+Create a commit object from a tree
+
+# TLDR
+
+**Create commit from tree**
+
+```echo "[message]" | git commit-tree [tree_hash]```
+
+**Create with parent**
+
+```echo "[message]" | git commit-tree [tree] -p [parent]```
+
+**Create with message file**
+
+```git commit-tree [tree] -F [message.txt]```
+
+**Create merge commit**
+
+```git commit-tree [tree] -p [parent1] -p [parent2] -m "[message]"```
+
+# SYNOPSIS
+
+**git** **commit-tree** _tree_ [_options_]
+
+# PARAMETERS
+
+**-p** _parent_
+> Parent commit.
+
+**-m** _message_
+> A paragraph in the commit log message. Can be given more than once; each becomes its own paragraph.
+
+**-F** _file_
+> Read the commit log message from the given file. Use - to read from stdin. Can be given more than once.
+
+**-S**[_keyid_]
+> GPG sign commit. The keyid is optional and defaults to the committer identity; if specified, it must be attached to the option without a space.
+
+**--no-gpg-sign**
+> Countermand a previous --gpg-sign option.
+
+# DESCRIPTION
+
+**git commit-tree** is a low-level plumbing command that creates a new commit object directly from a tree object hash. Unlike git commit (a porcelain command), this bypasses the index and working directory, operating directly on Git's internal object database.
+
+This command is used internally by git commit but is also available for advanced scenarios like repository surgery, history reconstruction, or programmatic commit creation. It requires providing a tree hash (typically created by git write-tree or extracted from existing commits) and accepts optional parent commit hashes to establish lineage.
+
+Multiple -p options create merge commits with multiple parents. The commit message can be provided inline with -m, read from a file with -F, or piped to stdin. Author and committer information come from git config unless overridden with environment variables (GIT_AUTHOR_NAME, GIT_COMMITTER_DATE, etc.).
+
+This command outputs the SHA-1 hash of the newly created commit object. To make the commit visible, you typically need to update a branch reference using git update-ref or git reset. Most users never need this command directly, but it's essential for understanding Git's internal architecture and for advanced repository manipulation.
+
+# INSTALL
+
+```apt: sudo apt install git```
+
+```dnf: sudo dnf install git```
+
+```pacman: sudo pacman -S git```
+
+```apk: sudo apk add git```
+
+```zypper: sudo zypper install git```
+
+```brew: brew install git```
+
+```nix: nix profile install nixpkgs#git```
+
+<!-- packages: 2026-07-22 -->
+
+# SEE ALSO
+
+[git-commit](/man/git-commit)(1), [git-write-tree](/man/git-write-tree)(1), [git-update-ref](/man/git-update-ref)(1)

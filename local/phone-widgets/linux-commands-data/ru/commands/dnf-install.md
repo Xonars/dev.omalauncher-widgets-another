@@ -1,0 +1,40 @@
+# TAGLINE
+Устанавливать пакеты в дистрибутивах на базе Red Hat. Больше информации: <https://dnf.readthedocs.io/en/latest/command_ref.html#install-examples>.
+# TLDR
+
+
+- Установить пакеты по имени:
+
+```
+sudo dnf {{[in|install]}} {{пакет1 пакет2 ...}}
+```
+
+- Установить пакет из локального файла:
+
+```
+sudo dnf {{[in|install]}} {{путь/к/файлу}}
+```
+
+- Установить пакет из интернета:
+
+```
+sudo dnf {{[in|install]}} {{https://example.com/package.rpm}}
+```
+
+- Добавить репозиторий несвободных пакетов Fedora:
+
+```
+sudo dnf {{[in|install]}} https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm
+```
+
+- Добавить репозитории Extra Packages for Enterprise Linux (EPEL):
+
+```
+sudo dnf {{[in|install]}} epel-release
+```
+
+- Добавить RPM-репозиторий Remi:
+
+```
+sudo dnf {{[in|install]}} https://rpms.remirepo.net/enterprise/remi-release-{{8}}.rpm
+```

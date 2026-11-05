@@ -1,0 +1,846 @@
+app "Cassette" {
+  meta { owl: 19; description: "Yandex Music client with search, library, downloads and Android media controls. English and Russian UI."; version: "1.11"; license: "MIT"; category: "media" }
+  let backend = """
+#!/usr/bin/env python3
+'''Token-free mpv IPC bridge for Cassette OWL.'''
+import hashlib
+import fcntl
+import json
+import os
+from pathlib import Path
+import socket
+import subprocess
+import sys
+import time
+import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
+
+CACHE = Path.home() / '.cache/cassette-owl'
+CACHE.mkdir(mode=0o700, parents=True, exist_ok=True)
+SOCKET = str(CACHE / 'mpv.sock')
+ERROR = CACHE / 'error.json'
+NOW_PLAYING = CACHE / 'now-playing.json'
+LOCK = CACHE / 'player.lock'
+MUSIC = (Path.home() / 'Music/Cassette').resolve()
+EMPTY_STATE = {'connected': False, 'idle': True, 'paused': False,
+               'position': 0, 'duration': 0, 'volume': 100}
+
+def write_json(path, value):
+    '''Atomically replace a small state file so readers never see half JSON.'''
+    temp = path.with_suffix(path.suffix + '.tmp')
+    temp.write_text(json.dumps(value, ensure_ascii=False), encoding='utf-8')
+    os.chmod(temp, 0o600)
+    temp.replace(path)
+
+def read_json(path, fallback):
+    try:
+        return json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return fallback
+
+def metadata(args, start=2, local=False):
+    values = list(args[start:start + 4]) + ['', '', '', '']
+    return {'id': values[0], 'title': values[1], 'artist': values[2],
+            'cover': values[3], 'local': local, 'source': args[1]}
+
+def local_path(value):
+    '''Return a media path only when it is a direct child of our download folder.'''
+    path = Path(value).expanduser().resolve()
+    if path.parent != MUSIC or path.suffix.lower() not in ('.mp3', '.m4a', '.ogg', '.opus', '.flac', '.wav'):
+        raise ValueError('Недопустимый локальный файл')
+    return path
+
+
+def download_name(value):
+    return ''.join(c for c in value if c.isalnum() or c in ' ._-')[:150].strip('.') or 'track'
+
+def save_track_art(path, track):
+    lock_path = CACHE / ('art-' + hashlib.sha256(str(path).encode()).hexdigest() + '.lock')
+    with lock_path.open('w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _save_track_art(path, track)
+
+def _save_track_art(path, track):
+    # Public metadata only. Account credentials remain in Android's secret state.
+    write_json(path.with_suffix('.json'), track)
+    cover_uri = track.get('coverUri', '')
+    if not cover_uri:
+        return False
+    cover = path.with_suffix('.cover.jpg')
+    if not cover.is_file():
+        address = 'https://' + cover_uri.replace('%%', '600x600')
+        opener = urllib.request.build_opener(YandexRedirect())
+        with opener.open(trusted_url(address), timeout=20) as response:
+            data = response.read(4 * 1024 * 1024 + 1)
+        if len(data) > 4 * 1024 * 1024:
+            raise ValueError('Слишком большая обложка')
+        raw = cover.with_name(f'.{cover.name}.{os.getpid()}.raw')
+        image = cover.with_name(f'.{cover.name}.{os.getpid()}.jpg')
+        try:
+            raw.write_bytes(data)
+            subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', str(raw),
+                            '-vf', 'scale=600:600:force_original_aspect_ratio=decrease',
+                            '-frames:v', '1', str(image)],
+                           check=True, capture_output=True, timeout=30)
+            image.replace(cover)
+        finally:
+            raw.unlink(missing_ok=True)
+            image.unlink(missing_ok=True)
+    tagged = path.with_name(f'.{path.stem}.{os.getpid()}.tags.mp3')
+    original = path.stat()
+    try:
+        artists = ', '.join(a.get('name', '') for a in track.get('artists', []))
+        albums = track.get('albums') or [{}]
+        subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', str(path), '-i', str(cover),
+                        '-map', '0:a:0', '-map', '1:v:0', '-c', 'copy',
+                        '-id3v2_version', '3', '-disposition:v:0', 'attached_pic',
+                        '-metadata', 'title=' + track.get('title', path.stem),
+                        '-metadata', 'artist=' + artists,
+                        '-metadata', 'album=' + albums[0].get('title', ''),
+                        '-metadata:s:v', 'title=Album cover',
+                        '-metadata:s:v', 'comment=Cover (front)', str(tagged)],
+                       check=True, capture_output=True, timeout=45)
+        tagged.replace(path)
+        os.utime(path, ns=(original.st_atime_ns, original.st_mtime_ns))
+    finally:
+        tagged.unlink(missing_ok=True)
+    write_json(path.with_suffix('.json'), {**track, '_artEmbedded': True})
+    return True
+
+def repair_downloads(tracks):
+    if not isinstance(tracks, list):
+        tracks = [tracks]
+    repaired = 0
+    for track in tracks:
+        if not isinstance(track, dict) or not track.get('coverUri') or not isinstance(track.get('title'), str):
+            continue
+        artists = ', '.join(a.get('name', '') for a in track.get('artists', []))
+        path = MUSIC / (download_name(artists + ' - ' + track.get('title', '')) + '.mp3')
+        if path.is_file() and (not path.with_suffix('.cover.jpg').is_file() or not read_json(path.with_suffix('.json'), {}).get('_artEmbedded')):
+            try:
+                repaired += int(save_track_art(path, track))
+            except Exception:
+                # Keep the downloaded audio playable even when artwork is offline.
+                pass
+    return repaired
+
+def local_tracks():
+    MUSIC.mkdir(mode=0o700, parents=True, exist_ok=True)
+    tracks = []
+    for path in sorted(MUSIC.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+        if not path.is_file() or path.suffix.lower() not in ('.mp3', '.m4a', '.ogg', '.opus', '.flac', '.wav'):
+            continue
+        stem = path.stem
+        artist, title = (stem.split(' - ', 1) + [''])[:2] if ' - ' in stem else ('', stem)
+        try:
+            probe = subprocess.run(
+                ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+                 '-of', 'default=noprint_wrappers=1:nokey=1', str(path)],
+                capture_output=True, text=True, timeout=5, check=False)
+            duration_ms = round(float(probe.stdout.strip() or 0) * 1000)
+        except (ValueError, subprocess.SubprocessError):
+            duration_ms = 0
+        saved = read_json(path.with_suffix('.json'), {})
+        cover = path.with_suffix('.cover.jpg')
+        tracks.append({
+            **saved,
+            'sourceId': saved.get('sourceId') or saved.get('id'),
+            'coverPath': str(cover) if cover.is_file() else None,
+            'id': 'local:' + path.name,
+            'local': True,
+            'path': str(path),
+            'title': saved.get('title') or title or stem,
+            'artists': saved.get('artists') or [{'name': artist or 'Локальный файл'}],
+            'durationMs': duration_ms,
+        })
+    return tracks
+
+def ipc(command):
+    with socket.socket(socket.AF_UNIX) as sock:
+        sock.settimeout(2)
+        sock.connect(SOCKET)
+        sock.sendall((json.dumps({'command': command}) + '\n').encode())
+        data = b''
+        while b'\n' not in data:
+            part = sock.recv(65536)
+            if not part:
+                raise RuntimeError('Плеер отключился')
+            data += part
+        for line in data.splitlines():
+            reply = json.loads(line)
+            if 'error' in reply:
+                if reply['error'] != 'success':
+                    return None
+                return reply.get('data')
+
+def ensure_player():
+    try:
+        ipc(['get_property', 'idle-active'])
+        return
+    except (OSError, RuntimeError):
+        pass
+    # Several OWL actions can arrive together. Only one may start the daemon.
+    with LOCK.open('w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            ipc(['get_property', 'idle-active'])
+            return
+        except (OSError, RuntimeError):
+            pass
+        Path(SOCKET).unlink(missing_ok=True)
+        subprocess.Popen(['mpv', '--idle=yes', '--no-video', '--no-terminal',
+            '--audio-display=no', '--ao=pulse', '--audio-device=pulse/android',
+            '--audio-samplerate=48000', '--audio-buffer=1', '--pulse-buffer=500',
+            '--demuxer-readahead-secs=15', '--cache-pause-wait=3',
+            '--input-ipc-server=' + SOCKET],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True)
+        for _ in range(50):
+            time.sleep(.1)
+            try:
+                ipc(['get_property', 'idle-active'])
+                return
+            except (OSError, RuntimeError):
+                pass
+    raise RuntimeError('Не удалось запустить mpv')
+
+def trusted_url(url):
+    p = urllib.parse.urlsplit(url)
+    if p.scheme != 'https' or p.username or p.password or p.port not in (None, 443):
+        raise ValueError('Недопустимый адрес аудио')
+    host = (p.hostname or '').lower()
+    if not any(host == d or host.endswith('.' + d) for d in ('yandex.net', 'yandex.ru', 'yandex.com')):
+        raise ValueError('Адрес аудио не принадлежит Яндексу')
+    return url
+
+class YandexRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return super().redirect_request(req, fp, code, msg, headers, trusted_url(newurl))
+
+def resolve(url):
+    opener = urllib.request.build_opener(YandexRedirect())
+    with opener.open(trusted_url(url), timeout=20) as response:
+        xml = response.read(65537)
+    if len(xml) > 65536:
+        raise ValueError('Слишком большой ответ download-info')
+    root = ET.fromstring(xml)
+    host, path, ts, salt = [root.findtext(k) for k in ('host', 'path', 'ts', 's')]
+    if not all((host, path, ts, salt)):
+        raise ValueError('Не удалось получить ссылку на аудио')
+    digest = hashlib.md5(('XGRlBW9FXlekgbPrRHuSiA' + path.lstrip('/') + salt).encode()).hexdigest()
+    return trusted_url(f'https://{host}/get-mp3/{digest}/{ts}/{path.lstrip("/")}')
+
+def main(args):
+    if not args:
+        raise ValueError('Не указана команда')
+    action = args[0]
+    if action == 'cache-metadata':
+        print(repair_downloads(json.loads(args[1])))
+        return
+    if action == 'library':
+        print(json.dumps(local_tracks(), ensure_ascii=False))
+        return
+    if action == 'status':
+        try:
+            state = {k: ipc(['get_property', prop]) for k, prop in
+                [('idle', 'idle-active'), ('paused', 'pause'), ('position', 'time-pos'),
+                 ('duration', 'duration'), ('volume', 'volume'), ('path', 'path')]}
+            state.pop('path', None)
+            state['connected'] = True
+        except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
+            state = dict(EMPTY_STATE)
+        state.update(read_json(NOW_PLAYING, {}))
+        state['error'] = read_json(ERROR, {}).get('error', '')
+        print(json.dumps(state, ensure_ascii=False))
+        return
+    if action == 'resolve':
+        if len(args) < 2:
+            raise ValueError('Не указан адрес аудио')
+        print(resolve(args[1]))
+        return
+    if action in ('next', 'previous', 'stop-control'):
+        # The Android owner keeps OWL's queue live; no token ever leaves Android.
+        subprocess.run(['owl-send', 'cassette.owl', 'set', 'mediaControl',
+                        json.dumps({'action': action, 'nonce': time.time_ns()})],
+                       check=True, timeout=8, capture_output=True)
+        return
+    ensure_player()
+    if action == 'replay':
+        track = read_json(NOW_PLAYING, {})
+        source = track.get('source')
+        if not source:
+            raise ValueError('Нет трека для повторного воспроизведения')
+        target = str(local_path(source)) if track.get('local') else resolve(source)
+        ipc(['loadfile', target, 'replace'])
+        ipc(['set_property', 'pause', False])
+    elif action == 'play':
+        if len(args) < 2:
+            raise ValueError('Не указан адрес аудио')
+        url = resolve(args[1])
+        ipc(['loadfile', url, 'replace'])
+        ipc(['set_property', 'pause', False])
+        write_json(NOW_PLAYING, metadata(args))
+    elif action == 'play-local':
+        if len(args) < 2:
+            raise ValueError('Не указан локальный файл')
+        ipc(['loadfile', str(local_path(args[1])), 'replace'])
+        ipc(['set_property', 'pause', False])
+        write_json(NOW_PLAYING, metadata(args, local=True))
+    elif action == 'toggle':
+        ipc(['cycle', 'pause'])
+    elif action == 'play-control':
+        ipc(['set_property', 'pause', False])
+    elif action == 'pause-control':
+        ipc(['set_property', 'pause', True])
+    elif action == 'seek':
+        if len(args) < 2:
+            raise ValueError('Не указана позиция')
+        ipc(['seek', float(args[1]), 'absolute'])
+    elif action == 'volume':
+        if len(args) < 2:
+            raise ValueError('Не указана громкость')
+        ipc(['set_property', 'volume', max(0, min(100, float(args[1])))])
+    elif action == 'stop':
+        ipc(['stop'])
+        NOW_PLAYING.unlink(missing_ok=True)
+    elif action == 'download':
+        url = resolve(args[1])
+        target = MUSIC
+        target.mkdir(parents=True, exist_ok=True)
+        name = download_name(args[2])
+        dest = target / (name + '.mp3')
+        temp = dest.with_name(f'.{dest.name}.{os.getpid()}.part')
+        opener = urllib.request.build_opener(YandexRedirect())
+        try:
+            with opener.open(url, timeout=30) as response, temp.open('wb') as out:
+                while chunk := response.read(131072):
+                    out.write(chunk)
+            temp.replace(dest)
+        finally:
+            temp.unlink(missing_ok=True)
+        artwork_ok = False
+        if len(args) > 3:
+            try:
+                artwork_ok = save_track_art(dest, json.loads(args[3]))
+            except Exception:
+                pass
+        print('Сохранено: ' + str(dest) + (' · с обложкой' if artwork_ok else ' · без обложки'))
+    else:
+        raise ValueError('Неизвестная команда')
+    ERROR.unlink(missing_ok=True)
+
+if __name__ == '__main__':
+    try:
+        main(sys.argv[1:])
+    except Exception as exc:
+        # Never expose signed media URLs in UI or logs.
+        message = 'Ошибка аудио: ' + (str(exc) if isinstance(exc, ValueError) else type(exc).__name__)
+        write_json(ERROR, {'error': message})
+        print(message, file=sys.stderr)
+        raise SystemExit(1)
+"""
+  requires { pacman: ["python", "mpv", "ffmpeg"] }
+  title: ""
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="9" width="42" height="30" rx="4"/><circle cx="15" cy="22" r="5"/><circle cx="33" cy="22" r="5"/><path d="M20 22h8M11 39l4-9h18l4 9"/></svg>"""
+  state token = null secret
+  state language = "ru" persist
+  let english = language == "en"
+  let labels = {"Главная": "Home", "Поиск": "Search", "Любимое": "Liked", "Плейлисты": "Playlists", "Волна": "My Wave", "Очередь": "Queue", "Скачанное": "Downloads", "Настройки": "Settings", "Треки": "Tracks", "Альбомы": "Albums", "Артисты": "Artists"}
+  state tab = "Главная"
+  state query = ""
+  state kind = "track"
+  state collection = ""
+  state owner = ""
+  state heading = ""
+  state artistId = ""
+  state artistName = ""
+  state waveRequest = 0
+  state queue = []
+  state index = -1
+  state repeatMode = false persist
+  state mixed = false
+  state message = ""
+  state mutation = null
+  state likePendingId = ""
+  state likePendingAdd = false
+  state likedPage = 0
+  state loadedId = ""
+  state ready = false
+  state wasPlaying = false
+  state playerView = false
+  state trackMenu = false
+  state artworkAttempted = []
+  state sessionRunning = false
+  state mediaControl = null
+  source account = http(token == null ? null : "https://api.music.yandex.net/account/status", {Authorization: "OAuth ${token}"}) json status
+  let uid = account.out.result.account.uid
+  source search = http(token == null || query == "" ? null : "https://api.music.yandex.net/search?text=${enc(query)}&type=${enc(kind)}&page=0", {Authorization: "OAuth ${token}"}) json status
+  source likes = http(uid == null ? null : "https://api.music.yandex.net/users/${enc(uid)}/likes/tracks", {Authorization: "OAuth ${token}"}) json status
+  let allLikedIds = (likes.out.result.library.tracks ?? []).map(t => str(t.id))
+  let likedIds = allLikedIds.drop(likedPage * 150).take(150)
+  source likedTracks = http(uid == null || len(likedIds) == 0 ? null : "https://api.music.yandex.net/tracks?track-ids=${enc(join(likedIds, ","))}", {Authorization: "OAuth ${token}"}) json status
+  source playlists = http(uid == null ? null : "https://api.music.yandex.net/users/${enc(uid)}/playlists/list", {Authorization: "OAuth ${token}"}) json status
+  source playlist = http(collection == "" || owner == "" ? null : "https://api.music.yandex.net/users/${enc(owner)}/playlists/${enc(collection)}", {Authorization: "OAuth ${token}"}) json status
+  source album = http(collection == "" || owner != "" ? null : "https://api.music.yandex.net/albums/${enc(collection)}/with-tracks", {Authorization: "OAuth ${token}"}) json status
+  source artistInfo = http(artistId == "" ? null : "https://api.music.yandex.net/artists/${enc(artistId)}/brief-info", {Authorization: "OAuth ${token}"}) json status
+  source artistTracks = http(artistId == "" ? null : "https://api.music.yandex.net/artists/${enc(artistId)}/tracks?page=0&page-size=100", {Authorization: "OAuth ${token}"}) json status
+  source wave = http(token == null || tab != "Волна" || waveRequest == 0 ? null : "https://api.music.yandex.net/rotor/station/user:onyourwave/tracks?settings2=true&reload=${int(waveRequest)}", {Authorization: "OAuth ${token}"}) json status
+  source player = cmd("python -c ${sh(backend)} status") every 1s json
+  source localTracks = cmd("python -c ${sh(backend)} library") every 30s json
+  let artworkCandidates = (localTracks ?? []).filter(t => t.coverPath == null && !contains(artworkAttempted, t.id))
+  let artworkCandidate = artworkCandidates[0]
+  source artworkLookup = http(token == null || artworkCandidate == null ? null : "https://api.music.yandex.net/search?text=${enc(join((artworkCandidate.artists ?? []).map(a => a.name), ", ") + " " + artworkCandidate.title)}&type=track&page=0", {Authorization: "OAuth ${token}"}) json status
+  let current = queue[index]
+  let currentDetails = current.local ? ((localTracks ?? []).filter(t => t.id == current.id)[0] ?? current) : current
+  let currentSongId = current.local ? currentDetails.sourceId : current.id
+  let currentSongLink = currentSongId == null ? "" : currentDetails.albums[0].id != null ? "https://music.yandex.ru/album/${enc(currentDetails.albums[0].id)}/track/${enc(split(str(currentSongId), ":")[0])}" : "https://music.yandex.ru/track/${enc(split(str(currentSongId), ":")[0])}"
+  let currentArt = currentDetails.coverPath
+  let currentArtist = join((current.artists ?? []).map(a => a.name), ", ")
+  let currentCover = currentDetails.coverUri == null ? "" : "https://${replace(currentDetails.coverUri, "%%", "600x600")}"
+  let currentLiked = current.id != null && (likePendingId == str(current.id) ? likePendingAdd : contains(allLikedIds, str(current.id)))
+  source download = http(current.id == null || str(current.id) == "" || current.local ? null : "https://api.music.yandex.net/tracks/${enc(current.id)}/download-info", {Authorization: "OAuth ${token}"}) json status
+  let audio = (download.out.result ?? []).filter(d => d.codec == "mp3").sortBy(d => -d.bitrateInKbps)[0]
+  let rows = artistId != "" ? (artistTracks.out.result.tracks ?? []) : collection != "" ? (owner != "" ? (playlist.out.result.tracks ?? []).map(t => t.track) : flatten(album.out.result.volumes ?? [])) : tab == "Любимое" ? (likedTracks.out.result ?? []) : tab == "Очередь" ? queue : tab == "Скачанное" ? (localTracks ?? []) : tab == "Волна" ? (wave.out.result.sequence ?? []).map(t => t.track) : (search.out.result.tracks.results ?? [])
+  let rowsLoading = artistId != "" ? artistInfo == null || artistTracks == null : collection != "" ? (owner != "" ? playlist == null : album == null) : tab == "Любимое" ? likes == null || len(likedIds) > 0 && likedTracks == null : tab == "Скачанное" ? localTracks == null : tab == "Волна" ? waveRequest != 0 && wave == null : tab == "Поиск" && query != "" ? search == null : false
+  let emptyHint = artistId != "" ? (english ? "No tracks available for this artist" : "У исполнителя нет доступных треков") : tab == "Очередь" ? (english ? "The queue is empty — add tracks with +" : "Очередь пуста — добавьте треки через +") : tab == "Скачанное" ? (english ? "Downloaded tracks will appear here" : "Здесь появятся сохранённые треки") : tab == "Любимое" ? (english ? "No liked tracks yet" : "В избранном пока нет треков") : tab == "Волна" ? (english ? "No recommendations available" : "Не удалось подобрать музыку") : (english ? "Enter a search to find music" : "Введите запрос, чтобы найти музыку")
+  let apiError = account != null && !account.ok ? (english ? "Sign-in failed: HTTP ${account.code}. Check your token and connection." : "Вход не выполнен: HTTP ${account.code}. Проверьте токен и доступность сервиса.") : account.out.error != null ? "${account.out.error.message}" : ""
+  let contentError = artistId != "" && artistInfo != null && !artistInfo.ok ? (english ? "Could not load artist · HTTP ${artistInfo.code}" : "Не удалось загрузить исполнителя · HTTP ${artistInfo.code}") : artistId != "" && artistTracks != null && !artistTracks.ok ? (english ? "Could not load artist tracks · HTTP ${artistTracks.code}" : "Не удалось загрузить треки исполнителя · HTTP ${artistTracks.code}") : collection != "" && owner != "" && playlist != null && !playlist.ok ? (english ? "Could not load playlist · HTTP ${playlist.code}" : "Не удалось загрузить плейлист · HTTP ${playlist.code}") : collection != "" && owner == "" && album != null && !album.ok ? (english ? "Could not load album · HTTP ${album.code}" : "Не удалось загрузить альбом · HTTP ${album.code}") : tab == "Волна" && wave != null && !wave.ok ? (english ? "My Wave is unavailable · HTTP ${wave.code}" : "Моя волна сейчас недоступна · HTTP ${wave.code}") : tab == "Любимое" && likes != null && !likes.ok ? (english ? "Could not read likes · HTTP ${likes.code}" : "Не удалось прочитать любимое · HTTP ${likes.code}") : tab == "Любимое" && likedTracks != null && !likedTracks.ok ? (english ? "Could not load liked tracks · HTTP ${likedTracks.code}" : "Не удалось загрузить любимое · HTTP ${likedTracks.code}") : tab == "Плейлисты" && playlists != null && !playlists.ok ? (english ? "Could not load playlists · HTTP ${playlists.code}" : "Не удалось загрузить плейлисты · HTTP ${playlists.code}") : tab == "Поиск" && search != null && !search.ok ? (english ? "Search unavailable · HTTP ${search.code}" : "Поиск недоступен · HTTP ${search.code}") : ""
+  back: trackMenu || playerView || artistId != "" || collection != "" || tab != "Главная"
+  onBack: { if trackMenu { trackMenu = false } else if playerView { playerView = false } else if artistId != "" { artistId = ""; artistName = "" } else { collection = ""; tab = "Главная" } }
+  on current {
+    trackMenu = false
+    if value != null && !value.local { run("python -c ${sh(backend)} cache-metadata ${sh(toJson([value]))}") }
+    ready = false
+    wasPlaying = false
+    sessionRunning = value.id != null
+    if sessionRunning {
+      mediaSession({
+        background: true,
+        art: currentCover,
+        title: current.title ?? "",
+        artist: currentArtist,
+        album: currentDetails.albums[0].title ?? "",
+        duration: current.durationMs / 1000 ?? 0,
+        position: 0,
+        playing: false,
+        commands: {
+          play: "python -c ${sh(backend)} play-control",
+          pause: "python -c ${sh(backend)} pause-control",
+          stop: "python -c ${sh(backend)} stop-control",
+          previous: "python -c ${sh(backend)} previous",
+          next: "python -c ${sh(backend)} next",
+          seek: "python -c ${sh(backend)} seek",
+        },
+      })
+    }
+    if value.local {
+      loadedId = str(value.id)
+      run("python -c ${sh(backend)} play-local ${sh(value.path)} ${sh(value.id)} ${sh(value.title)} ${sh(join((value.artists ?? []).map(a => a.name), ", "))} ${sh("")}")
+      ready = true
+    }
+  }
+  on download first {
+    if sessionRunning && value.ok && audio.downloadInfoUrl != null && loadedId != str(current.id) {
+      loadedId = str(current.id)
+      run("python -c ${sh(backend)} play ${sh(audio.downloadInfoUrl)} ${sh(current.id)} ${sh(current.title)} ${sh(currentArtist)} ${sh(currentCover)}")
+      ready = true
+    }
+  }
+  on sessionRunning {
+    if value && current != null {
+      mediaSession({
+        background: true,
+        art: currentCover,
+        title: current.title ?? "",
+        artist: currentArtist,
+        album: currentDetails.albums[0].title ?? "",
+        duration: current.durationMs / 1000 ?? 0,
+        position: 0,
+        playing: false,
+        commands: {
+          play: "python -c ${sh(backend)} play-control",
+          pause: "python -c ${sh(backend)} pause-control",
+          stop: "python -c ${sh(backend)} stop-control",
+          previous: "python -c ${sh(backend)} previous",
+          next: "python -c ${sh(backend)} next",
+          seek: "python -c ${sh(backend)} seek",
+        },
+      })
+    } else { mediaSession(null) }
+  }
+  on mediaControl {
+    if value.action == "stop-control" {
+      sessionRunning = false
+      ready = false
+      wasPlaying = false
+      run("python -c ${sh(backend)} stop")
+      mediaSession(null)
+    } else if value.action == "next" {
+      if index + 1 < len(queue) { index = index + 1 }
+      else if repeatMode && len(queue) > 1 { index = 0 }
+      else if repeatMode && current != null {
+        run("python -c ${sh(backend)} replay")
+        sessionRunning = true
+        ready = true
+        wasPlaying = false
+      }
+    } else if value.action == "previous" {
+      if index > 0 { index = index - 1 }
+      else if current != null {
+        if player.idle { run("python -c ${sh(backend)} replay"); sessionRunning = true; ready = true }
+        else { run("python -c ${sh(backend)} seek 0") }
+      }
+    }
+  }
+  on player first {
+    // Never mistake the previous track (still resolving/loading) for the new one.
+    if ready && value.connected && !value.idle && str(value.id) == str(current.id) { wasPlaying = true }
+    if sessionRunning && ready && wasPlaying && value.idle && value.error == "" {
+      wasPlaying = false
+      ready = false
+      if index + 1 < len(queue) { index = index + 1 }
+      else if repeatMode && len(queue) > 1 { index = 0 }
+      else if repeatMode && current != null {
+        run("python -c ${sh(backend)} replay")
+        ready = true
+      } else { sessionRunning = false }
+    }
+    if sessionRunning && value.idle && value.error != "" { sessionRunning = false }
+    if !sessionRunning {
+      mediaSession(null)
+    } else {
+      // Keep ownership through EOF -> link resolution -> mpv load. Releasing at
+      // EOF would suspend the very HTTP source that must start the next track.
+      mediaSession({
+        background: true,
+        art: currentCover,
+        title: current.title ?? "",
+        artist: currentArtist,
+        album: currentDetails.albums[0].title ?? "",
+        duration: str(value.id) == str(current.id) ? (value.duration ?? current.durationMs / 1000) : current.durationMs / 1000,
+        position: str(value.id) == str(current.id) ? (value.position ?? 0) : 0,
+        playing: value.connected && !value.idle && !value.paused && str(value.id) == str(current.id),
+        commands: {
+          play: "python -c ${sh(backend)} play-control",
+          pause: "python -c ${sh(backend)} pause-control",
+          stop: "python -c ${sh(backend)} stop-control",
+          previous: "python -c ${sh(backend)} previous",
+          next: "python -c ${sh(backend)} next",
+          seek: "python -c ${sh(backend)} seek",
+        },
+      })
+    }
+  }
+  on artworkLookup first {
+    if value.ok && artworkCandidate != null {
+      run("python -c ${sh(backend)} cache-metadata ${sh(toJson((value.out.result.tracks.results ?? []).map(t => {id: t.id, title: t.title, coverUri: t.coverUri, artists: (t.artists ?? []).map(a => {id: a.id, name: a.name}), albums: (t.albums ?? []).map(a => {id: a.id, title: a.title})})))}")
+      artworkAttempted = flatten([artworkAttempted, [artworkCandidate.id]])
+    }
+  }
+  on likedTracks first {
+    if value.ok { run("python -c ${sh(backend)} cache-metadata ${sh(toJson((value.out.result ?? []).map(t => {id: t.id, title: t.title, coverUri: t.coverUri, artists: (t.artists ?? []).map(a => {id: a.id, name: a.name}), albums: (t.albums ?? []).map(a => {id: a.id, title: a.title})})))}") }
+  }
+  on search first {
+    if value.ok { run("python -c ${sh(backend)} cache-metadata ${sh(toJson((value.out.result.tracks.results ?? []).map(t => {id: t.id, title: t.title, coverUri: t.coverUri, artists: (t.artists ?? []).map(a => {id: a.id, name: a.name}), albums: (t.albums ?? []).map(a => {id: a.id, title: a.title})})))}") }
+  }
+  on mutation {
+    message = value.ok && value.out.error == null ? (likePendingAdd ? (english ? "Added to liked tracks" : "Добавлено в любимое") : (english ? "Removed from liked tracks" : "Удалено из любимого")) : (english ? "Error: ${value.out.error.message ?? value.err ?? value.code}" : "Ошибка: ${value.out.error.message ?? value.err ?? value.code}")
+    likePendingId = ""
+    refresh()
+  }
+  on wave first { waveRequest = 0 }
+  component FavoriteButton(big = false) {
+    Box {
+      visible: !current.local && current.id != null
+      size: big ? 52 : 44
+      radius: big ? 26 : 22
+      background: currentLiked ? alpha(accent, 0.16) : alpha(foreground, 0.06)
+      align: center
+      onTap: {
+        if likePendingId == "" {
+          let likedBefore = currentLiked
+          haptic()
+          likePendingId = str(current.id)
+          likePendingAdd = !likedBefore
+          if likedBefore { mutation = post("https://api.music.yandex.net/users/${enc(uid)}/likes/tracks/remove", "track-ids=${enc(current.id)}", {Authorization: "OAuth ${token}", "Content-Type": "application/x-www-form-urlencoded"}) }
+          else { mutation = post("https://api.music.yandex.net/users/${enc(uid)}/likes/tracks/add-multiple", "track-ids=${enc(current.id)}", {Authorization: "OAuth ${token}", "Content-Type": "application/x-www-form-urlencoded"}) }
+        }
+      }
+      Text { text: likePendingId == str(current.id) ? "…" : currentLiked ? "♥" : "♡"; color: accent; fontSize: big ? 28 : 25; align: center }
+    }
+  }
+  component Track(t, items) {
+    Row {
+      gap: 10; padding: [4, 10]; fill: width
+      onTap: { queue = items; index = indexOf(items.map(x => str(x.id)), str(t.id)); message = "" }
+      let coverPath = t.coverPath ?? (localTracks ?? []).filter(l => l.id == t.id)[0].coverPath
+      Box {
+        width: 48; height: 48; background: alpha(accent, 0.12); radius: 9; clip: true; align: center
+        if coverPath != null || t.coverUri != null { Image { src: coverPath ?? "https://${replace(t.coverUri, "%%", "100x100")}"; fill: true; fit: cover; label: (english ? "Cover for ${t.title}" : "Обложка ${t.title}") } }
+        else { Text { text: t.local ? "↓" : "♪"; align: center; color: accent; fontSize: 20 } }
+      }
+      Column { weight: 1; gap: 3
+        Text { text: t.title ?? (english ? "Unavailable track" : "Недоступный трек"); maxLines: 1; bold: current.id == t.id; color: current.id == t.id ? accent : foreground }
+        Text { text: join((t.artists ?? []).map(a => a.name), ", "); style: small; color: muted; maxLines: 1 }
+      }
+      Text { text: fmtTime((t.durationMs ?? 0) / 1000, "m:ss", "UTC"); style: small; color: muted }
+      Box { size: 40; radius: 20; background: alpha(accent, 0.1); align: center; onTap: {
+        haptic()
+        if contains(queue.map(x => str(x.id)), str(t.id)) { message = (english ? "Track is already queued" : "Трек уже в очереди") }
+        else { queue = flatten([queue, [t]]); message = (english ? "Added to queue" : "Добавлено в очередь") }
+      }
+        Text { text: contains(queue.map(x => str(x.id)), str(t.id)) ? "✓" : "+"; fontSize: 22; color: accent; align: center }
+      }
+    }
+  }
+  component Transport(big = false) {
+    Column {
+      gap: big ? 14 : 8
+      Slider { value: player.position ?? 0; max: max(1, player.duration ?? current.durationMs / 1000); onChange: run("python -c ${sh(backend)} seek ${sh(value)}") }
+      Row {
+        Text { text: fmtTime(player.position ?? 0, "m:ss", "UTC"); color: muted; style: small }
+        Spacer { weight: 1 }
+        Text { text: fmtTime(player.duration ?? current.durationMs / 1000, "m:ss", "UTC"); color: muted; style: small }
+      }
+      Row { fill: width; justify: center; align: center; gap: big ? 8 : 6
+        Box { size: big ? 52 : 46; radius: 26; background: repeatMode ? alpha(accent, 0.2) : alpha(foreground, 0.06); align: center; onTap: { haptic(); repeatMode = !repeatMode }
+          Text { text: "↻"; fontSize: big ? 27 : 23; color: repeatMode ? accent : muted; align: center }
+        }
+        Box { size: big ? 56 : 48; radius: 28; background: alpha(foreground, 0.08); align: center; onTap: { haptic(); run("python -c ${sh(backend)} previous") }
+          Text { text: "⏮"; fontSize: big ? 29 : 25; align: center }
+        }
+        Box { size: big ? 68 : 56; radius: 34; background: accent; align: center; onTap: {
+          haptic()
+          sessionRunning = current != null
+          if player.idle && current.local { run("python -c ${sh(backend)} play-local ${sh(current.path)} ${sh(current.id)} ${sh(current.title)} ${sh(currentArtist)} ${sh(currentCover)}"); ready = true }
+          else if player.idle && audio.downloadInfoUrl != null { run("python -c ${sh(backend)} play ${sh(audio.downloadInfoUrl)} ${sh(current.id)} ${sh(current.title)} ${sh(currentArtist)} ${sh(currentCover)}"); ready = true }
+          else { run("python -c ${sh(backend)} toggle") }
+        } Text { text: player.paused || player.idle ? "▶" : "Ⅱ"; fontSize: big ? 30 : 25; color: background; align: center } }
+        Box { size: big ? 56 : 48; radius: 28; background: alpha(foreground, 0.08); align: center; onTap: { haptic(); run("python -c ${sh(backend)} next") }
+          Text { text: "⏭"; fontSize: big ? 29 : 25; align: center }
+        }
+        Box { size: big ? 52 : 46; radius: 26; background: current.local ? alpha(green, 0.16) : alpha(foreground, 0.06); align: center; onTap: { haptic(); if !current.local && audio.downloadInfoUrl != null { message = run("python -c ${sh(backend)} download ${sh(audio.downloadInfoUrl)} ${sh(join((current.artists ?? []).map(a => a.name), ", ") + " - " + current.title)} ${sh(toJson(current))}") } }
+          Text { text: current.local ? "✓" : "↓"; fontSize: big ? 26 : 23; color: current.local ? green : foreground; align: center }
+        }
+      }
+    }
+  }
+  Column {
+    padding: [16, 8]; gap: 12
+    if playerView && current != null {
+      Column {
+        weight: 1; gap: 20; padding: [8, 12]
+        Row {
+          Text { text: "‹"; fontSize: 34; padding: 8; onTap: playerView = false }
+          Text { text: (english ? "Now playing" : "Сейчас играет"); style: title; weight: 1; align: center }
+          FavoriteButton { big: true }
+          Box {
+            size: 48; radius: 24; background: surface; align: center
+            onTap: { haptic(); trackMenu = !trackMenu }
+            Text { text: "⋮"; fontSize: 30; align: center }
+            Popup {
+              visible: trackMenu
+              onDismiss: trackMenu = false
+              Column { width: 270; gap: 4; padding: 6
+                if currentSongLink != "" {
+                  Text { text: english ? "Share" : "Поделиться"; padding: [12, 14]; onTap: {
+                    copy(currentSongLink); trackMenu = false; haptic()
+                  } }
+                }
+                if currentDetails.albums[0].id != null {
+                  Text { text: english ? "Open album" : "Открыть страницу альбома"; padding: [12, 14]; onTap: {
+                    trackMenu = false; collection = str(currentDetails.albums[0].id); owner = ""; heading = currentDetails.albums[0].title ?? current.title; artistId = ""; artistName = ""; playerView = false
+                  } }
+                }
+                if currentDetails.artists[0].id != null {
+                  Text { text: english ? "Open artist" : "Открыть исполнителя"; padding: [12, 14]; onTap: {
+                    trackMenu = false; artistId = str(currentDetails.artists[0].id); artistName = currentDetails.artists[0].name; collection = ""; playerView = false
+                  } }
+                }
+                if currentDetails.albums[0].id == null && currentDetails.artists[0].id == null {
+                  Text { text: english ? "No album or artist details" : "Нет данных об альбоме и исполнителе"; color: muted; padding: 12; maxLines: 2 }
+                }
+              }
+            }
+          }
+        }
+        Box {
+          weight: 1; fill: width; align: center; background: linear(0, 0, 1, 1, [alpha(accent, 0.24), surface]); radius: 22; clip: true
+          if currentArt != null || currentCover != "" { Image { src: currentArt ?? currentCover; fill: true; fit: cover; label: (english ? "Cover for ${current.title}" : "Обложка ${current.title}") } }
+          else { Text { text: "♪"; fontSize: 120; color: alpha(accent, 0.75); align: center } }
+        }
+        Column { gap: 5
+          Text { text: current.title; fontSize: 28; bold: true; align: center; maxLines: 2 }
+          Text { text: join((current.artists ?? []).map(a => a.name), ", "); fontSize: 18; color: accent; align: center; maxLines: 2 }
+          if current.local { Text { text: (english ? "Downloaded to this device" : "Скачано на устройство"); style: small; color: green; align: center } }
+        }
+        Transport { big: true }
+        if player.error != null && player.error != "" { Text { text: player.error; color: red; style: small; align: center } }
+      }
+    } else {
+    Row {
+      align: center
+      Column { weight: 1; gap: 0
+        Text { text: (english ? "CASSETTE" : "КАССЕТА"); fontSize: 28; bold: true; letterSpacing: 2 }
+        Row { gap: 6; align: center
+          Text { text: uid == null ? (english ? "Yandex Music · OWL" : "Яндекс Музыка · OWL") : account.out.result.account.displayName; style: small; color: muted }
+          if uid != null { Text { text: "●"; fontSize: 8; color: account.ok ? green : red } }
+        }
+      }
+      Box { size: 46; radius: 14; background: surface; align: center; onTap: { haptic(); tab = "Настройки"; collection = "" }
+        Text { text: "⚙"; fontSize: 23; align: center }
+      }
+    }
+    if token == null || tab == "Настройки" { Row { gap: 8
+      Text { text: "Language / Язык"; style: small; color: muted }
+      Button { text: "English"; color: english ? accent : muted; onTap: { language = "en"; message = "" } }
+      Button { text: "Русский"; color: english ? muted : accent; onTap: { language = "ru"; message = "" } }
+    } }
+    if token == null {
+      Column { weight: 1; scroll: true; gap: 18; padding: [4, 24]
+        Text { text: (english ? "Your music.\nYour Cassette." : "Ваша музыка.\nВ вашей Кассете."); fontSize: 30; bold: true }
+        Text { text: (english ? "Sign in with a Yandex Music OAuth token. The launcher stores it as an encrypted secret." : "Войдите с OAuth-токеном Яндекс Музыки. Он хранится зашифрованным средствами лаунчера."); color: muted }
+        Button { text: (english ? "Open Yandex sign-in" : "Открыть вход Яндекса"); onTap: url("https://oauth.yandex.ru/authorize?response_type=token&client_id=23cabbbdc6cd418abb4b39c32c41195d") }
+        Text { text: (english ? "After signing in, copy access_token from the address bar (before &), or paste the full URL." : "После входа скопируйте значение access_token из адресной строки (до &). Можно вставить и весь адрес."); style: small; color: muted }
+        Input { placeholder: (english ? "OAuth token or sign-in redirect URL" : "OAuth-токен или адрес после входа"); password: true; onSubmit: token = contains(value, "access_token=") ? split(split(value, "access_token=")[1], "&")[0] : trim(value) }
+        Text { text: (english ? "Search · likes · playlists · albums\nMy Wave · queue · downloads" : "Поиск · любимое · плейлисты · альбомы\nМоя волна · очередь · скачивание"); color: accent }
+      }
+    } else {
+      Flow { gap: 6
+        for name in ["Главная", "Поиск", "Любимое", "Плейлисты", "Волна", "Очередь", "Скачанное"] {
+          Text { text: english ? get(labels, name, name) : name; padding: [10, 8]; radius: 8; background: tab == name && artistId == "" ? alpha(accent, 0.2) : surface; color: tab == name && artistId == "" ? accent : muted; onTap: { tab = name; collection = ""; artistId = ""; artistName = ""; if name == "Волна" { waveRequest = waveRequest + 1 } } }
+        }
+      }
+      if apiError != "" { Text { text: apiError; color: red } }
+      if message != "" { Text { text: message; style: small; color: accent; maxLines: 2; onTap: message = "" } }
+      if tab == "Настройки" {
+        Column { weight: 1; scroll: true; gap: 16
+          Text { text: english ? get(labels, "Настройки") : "Настройки"; style: title }
+          Text { text: (english ? "Quality: best available MP3.\nDownloads: ~/Music/Cassette\nMP3, M4A, OGG, OPUS, FLAC and WAV supported.\nAudio keeps playing after you close this screen." : "Качество: лучший доступный MP3.\nЗагрузки: ~/Music/Cassette\nПоддерживаются MP3, M4A, OGG, OPUS, FLAC и WAV.\nЗвук продолжает играть после закрытия окна."); color: muted }
+          Button { text: (english ? "Downloaded tracks (${len(localTracks ?? [])})" : "Скачанные треки (${len(localTracks ?? [])})"); onTap: { tab = "Скачанное"; collection = "" } }
+          Button { text: (english ? "Stop playback" : "Остановить музыку"); onTap: { sessionRunning = false; mediaSession(null); ready = false; wasPlaying = false; run("python -c ${sh(backend)} stop") } }
+          Button { text: (english ? "Sign out" : "Выйти из аккаунта"); onTap: { sessionRunning = false; mediaSession(null); run("python -c ${sh(backend)} stop"); token = null; queue = []; index = -1; loadedId = ""; tab = "Главная"; collection = ""; query = ""; ready = false; wasPlaying = false } }
+          Text { text: (english ? "Inspired by Rirusha/Cassette. This is an independent OWL app. Playback depends on your subscription and Yandex API availability." : "Создано по функциональности Rirusha/Cassette. Это отдельное OWL-приложение. Воспроизведение зависит от подписки и доступности API Яндекса."); style: small; color: muted }
+          Button { text: (english ? "Original project" : "Исходный проект"); onTap: url("https://github.com/Rirusha/Cassette") }
+        }
+      } else {
+        if tab == "Главная" || tab == "Поиск" {
+          Input { text: query; placeholder: (english ? "Tracks, artists, albums…" : "Треки, исполнители, альбомы…"); onSubmit: { query = trim(value); tab = "Поиск"; collection = ""; artistId = ""; artistName = "" } }
+          if tab == "Поиск" {
+            Flow { gap: 8
+              for choice in [{id: "track", label: "Треки"}, {id: "album", label: "Альбомы"}, {id: "artist", label: "Артисты"}, {id: "playlist", label: "Плейлисты"}] {
+                Text { text: english ? get(labels, choice.label, choice.label) : choice.label; padding: [6, 8]; color: kind == choice.id ? accent : muted; onTap: kind = choice.id }
+              }
+            }
+          }
+        }
+        if collection != "" { Text { text: "‹ ${heading}"; style: title; onTap: collection = "" } }
+        if artistId != "" { Text { text: (english ? "‹ Artist" : "‹ Исполнитель"); color: accent; onTap: { artistId = ""; artistName = "" } } }
+        Column {
+          weight: 1; lazy: true; gap: 2
+          if artistId != "" {
+            Column { gap: 12; padding: [4, 14]; align: center
+              Box { size: 112; radius: 56; clip: true; align: center; background: linear(0, 0, 1, 1, [alpha(accent, 0.35), surface])
+                if artistInfo.out.result.artist.cover.uri != null { Image { src: "https://${replace(artistInfo.out.result.artist.cover.uri, "%%", "300x300")}"; fill: true; fit: cover; label: (english ? "Photo of ${artistName}" : "Фото ${artistName}") } }
+                else { Text { text: "♫"; fontSize: 48; color: accent; align: center } }
+              }
+              Text { text: artistInfo.out.result.artist.name ?? artistName; fontSize: 26; bold: true; align: center; maxLines: 2 }
+              Text { text: rowsLoading ? (english ? "Loading artist…" : "Загружаем карточку…") : (english ? "Popular tracks" : "Популярные треки"); style: small; color: muted; align: center }
+            }
+          }
+          if tab == "Главная" && collection == "" && artistId == "" {
+            Column { gap: 16; padding: [0, 12]
+              Text { text: (english ? "Listen now" : "Слушать сейчас"); style: title }
+              Column { padding: 22; radius: 16; background: linear(0, 0, 1, 1, [alpha(accent, 0.35), surface]); gap: 10; onTap: { tab = "Волна"; waveRequest = waveRequest + 1 }
+                Text { text: (english ? "≈  My Wave" : "≈  Моя волна"); fontSize: 26; bold: true }
+                Text { text: (english ? "Music picked for you" : "Музыка, которая подходит вам"); color: muted }
+              }
+              Row { gap: 12
+                Column { weight: 1; padding: 18; background: surface; radius: 12; onTap: tab = "Любимое"
+                  Text { text: "♥"; fontSize: 28; color: accent }
+                  Text { text: (english ? "Liked tracks" : "Мне нравится"); bold: true }
+                  Text { text: (english ? "${len(likes.out.result.library.tracks ?? [])} tracks" : "${len(likes.out.result.library.tracks ?? [])} треков"); style: small; color: muted }
+                }
+                Column { weight: 1; padding: 18; background: surface; radius: 12; onTap: tab = "Плейлисты"
+                  Text { text: "≡"; fontSize: 28; color: accent }
+                  Text { text: english ? get(labels, "Плейлисты") : "Плейлисты"; bold: true }
+                  Text { text: (english ? "Your collection" : "Ваша коллекция"); style: small; color: muted }
+                }
+              }
+            }
+          } else if tab == "Плейлисты" && collection == "" && artistId == "" {
+            if playlists == null { Text { text: (english ? "Loading playlists…" : "Загружаем плейлисты…"); color: muted; padding: [8, 16] } }
+            for p in playlists.out.result ?? [] {
+              Row { padding: [4, 16]; onTap: { collection = str(p.kind); owner = str(p.owner.uid); heading = p.title }
+                Text { text: "≡"; color: accent; fontSize: 26 }
+                Column { weight: 1
+                  Text { text: p.title; bold: true }
+                  Text { text: (english ? "${p.trackCount} tracks" : "${p.trackCount} треков"); color: muted; style: small }
+                }
+                Text { text: "›" }
+              }
+            }
+          } else if tab == "Поиск" && kind != "track" && collection == "" && artistId == "" {
+            for a in kind == "album" ? (search.out.result.albums.results ?? []) : kind == "artist" ? (search.out.result.artists.results ?? []) : (search.out.result.playlists.results ?? []) {
+              Row { padding: [4, 14]; onTap: {
+                if kind == "album" { collection = str(a.id); owner = ""; heading = a.title }
+                else if kind == "playlist" { collection = str(a.kind); owner = str(a.owner.uid); heading = a.title }
+                else { artistId = str(a.id); artistName = a.name; collection = "" }
+              }
+                Text { text: kind == "artist" ? "♫" : "▣"; color: accent; fontSize: 26 }
+                Text { text: a.title ?? a.name; weight: 1; maxLines: 2 }
+                Text { text: "›"; color: muted }
+              }
+            }
+          } else {
+            if len(rows) > 0 {
+              Row { padding: [0, 6]
+                Button { text: (english ? "▶ Play" : "▶ Слушать"); onTap: { queue = rows; index = 0 } }
+                Button { text: (english ? "⤨ Shuffle" : "⤨ Перемешать"); onTap: { queue = shuffle(rows); index = 0; mixed = true } }
+              }
+              for t in rows { Track { t: t; items: rows } }
+              if tab == "Любимое" {
+                Row {
+                  if likedPage > 0 { Button { text: (english ? "← Previous" : "← Раньше"); onTap: likedPage = likedPage - 1 } }
+                  Text { text: "${likedPage * 150 + 1}–${min((likedPage + 1) * 150, len(likes.out.result.library.tracks ?? []))}"; style: small; color: muted }
+                  if (likedPage + 1) * 150 < len(likes.out.result.library.tracks ?? []) { Button { text: (english ? "Next →" : "Дальше →"); onTap: likedPage = likedPage + 1 } }
+                }
+              }
+              if tab == "Волна" { Button { text: waveRequest != 0 ? (english ? "Refreshing…" : "Обновляем…") : (english ? "Refresh My Wave" : "Обновить волну"); onTap: { if waveRequest == 0 { waveRequest = 1 } } } }
+            } else {
+              Column { align: center; gap: 10; padding: [24, 28]
+                Text { text: rowsLoading ? "…" : "♫"; fontSize: 34; color: rowsLoading ? muted : accent; align: center }
+                Text { text: rowsLoading ? (english ? "Loading music…" : "Загружаем музыку…") : contentError != "" ? (english ? "Could not load data" : "Не удалось получить данные") : emptyHint; color: muted; align: center; maxLines: 2 }
+                if !rowsLoading && contentError == "" { Button { text: (english ? "Refresh" : "Обновить"); onTap: refresh() } }
+              }
+            }
+          }
+          if contentError != "" {
+            Column { align: center; gap: 8; padding: [12, 16]
+              Text { text: contentError; color: red; align: center; maxLines: 3 }
+              Button { text: (english ? "Retry" : "Повторить"); onTap: refresh() }
+            }
+          }
+        }
+      }
+      if current != null {
+        Column { padding: 12; gap: 8; background: surface; radius: 14
+          Row { onTap: playerView = true
+            Column { weight: 1; gap: 2
+              Text { text: current.title; bold: true; maxLines: 1 }
+              Text { text: join((current.artists ?? []).map(a => a.name), ", "); style: small; color: accent; maxLines: 1 }
+            }
+            FavoriteButton { }
+            Text { text: "⌃"; color: muted; fontSize: 22; padding: 6 }
+          }
+          Transport { }
+          if player.error != null && player.error != "" { Text { text: player.error; color: red; style: small } }
+          if download != null && !download.ok { Text { text: (english ? "Audio unavailable: HTTP ${download.code}" : "Аудио недоступно: HTTP ${download.code}"); color: red; style: small } }
+          if download.ok && audio == null { Text { text: (english ? "No audio available. Check your subscription." : "Нет доступного аудио. Проверьте подписку."); color: red; style: small } }
+        }
+      }
+    }
+    }
+  }
+}
