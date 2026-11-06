@@ -1,0 +1,230 @@
+[
+  {
+    "source": "55-system-panel.owl",
+    "path": "widgets/xonars/system-panel/widget.owl",
+    "author": "xonars",
+    "resources": null
+  },
+  {
+    "source": "65-cava-terminal.owl",
+    "path": "widgets/xonars/cava-terminal/widget.owl",
+    "author": "xonars",
+    "resources": "resources/ff2d1d990a9d4f59c1ca6a403a0297405a21ffcfbfbd53a2a6e5910c52e8b58f.zip"
+  },
+  {
+    "source": "70-apk-share.owl",
+    "path": "apps/xonars/apk-share/app.owl",
+    "author": "xonars",
+    "resources": "resources/132485d88422723fbd32dad1bfda5dbcef37462240a714f22e86e4ef18010809.zip"
+  },
+  {
+    "source": "76-oma-update-app.owl",
+    "path": "apps/xonars/oma-update/app.owl",
+    "author": "xonars",
+    "resources": "resources/ccc5216fd545900edc372a2383395937b90d931d486176bfeebc3b9738a1a10f.zip"
+  },
+  {
+    "source": "81-developer-guide.owl",
+    "path": "apps/xonars/developer-guide/app.owl",
+    "author": "xonars",
+    "resources": null
+  },
+  {
+    "source": "82-key-bindings.owl",
+    "path": "apps/xonars/key-bindings/app.owl",
+    "author": "xonars",
+    "resources": "resources/9ae5ebe65a9746a09da61f24c37b61c6af20d87da5f14da78f1409874fcf1868.zip"
+  },
+  {
+    "source": "83-themes.owl",
+    "path": "widgets/xonars/themes/widget.owl",
+    "author": "xonars",
+    "resources": "resources/9cd6336320c9b6de04f5f1fd429280436a86fe9c7196c79017eda13554047e31.zip"
+  },
+  {
+    "source": "apk-maker-app.owl",
+    "path": "apps/xonars/apk-maker-app/app.owl",
+    "author": "xonars",
+    "resources": null
+  },
+  {
+    "source": "cassette.owl",
+    "path": "apps/xonars/cassette/app.owl",
+    "author": "xonars",
+    "resources": null
+  },
+  {
+    "source": "chess-app.owl",
+    "path": "apps/xonars/chess-app/app.owl",
+    "author": "xonars",
+    "resources": null
+  },
+  {
+    "source": "market-app-perminder-klair-solitaire.owl",
+    "path": "apps/perminder-klair/solitaire/app.owl",
+    "author": "perminder-klair",
+    "resources": null
+  },
+  {
+    "source": "market-app-placq-reader.owl",
+    "path": "apps/placq/reader/app.owl",
+    "author": "placq",
+    "resources": null
+  },
+  {
+    "source": "market-app-placq-send-files.owl",
+    "path": "apps/placq/send-files/app.owl",
+    "author": "placq",
+    "resources": null
+  },
+  {
+    "source": "market-app-shafiqimtiaz-omagit.owl",
+    "path": "apps/shafiqimtiaz/omagit/app.owl",
+    "author": "shafiqimtiaz",
+    "resources": null
+  },
+  {
+    "source": "market-app-simonschubert-bastion.owl",
+    "path": "apps/simonschubert/bastion/app.owl",
+    "author": "simonschubert",
+    "resources": null
+  },
+  {
+    "source": "market-app-simonschubert-checkmate.owl",
+    "path": "apps/simonschubert/checkmate/app.owl",
+    "author": "simonschubert",
+    "resources": null
+  },
+  {
+    "source": "market-app-simonschubert-linux-commands.owl",
+    "path": "apps/simonschubert/linux-commands/app.owl",
+    "author": "simonschubert",
+    "resources": "resources/8e39633a9969f2150d7f7a4cea5ea680c79700c6791eaac7099847a71245bda2.zip"
+  },
+  {
+    "source": "market-app-simonschubert-notes.owl",
+    "path": "apps/simonschubert/notes/app.owl",
+    "author": "simonschubert",
+    "resources": null
+  },
+  {
+    "source": "market-app-simonschubert-power-atlas.owl",
+    "path": "apps/simonschubert/power-atlas/app.owl",
+    "author": "simonschubert",
+    "resources": null
+  },
+  {
+    "source": "market-app-vanyapoker-corsair.owl",
+    "path": "apps/vanyapoker/corsair/app.owl",
+    "author": "vanyapoker",
+    "resources": null
+  },
+  {
+    "source": "market-app-xonars-owl-guide.owl",
+    "path": "apps/xonars/owl-guide/app.owl",
+    "author": "xonars",
+    "resources": null
+  },
+  {
+    "source": "market-cbarland-codex-quota-compact.owl",
+    "path": "widgets/cbarland/codex-quota-compact/widget.owl",
+    "author": "cbarland",
+    "resources": null
+  },
+  {
+    "source": "market-justqrius-matrix-terminal.owl",
+    "path": "widgets/justqrius/matrix-terminal/widget.owl",
+    "author": "justqrius",
+    "resources": "resources/21e1b3d23ab09cd6fe022e18555a167a2283c71aaa6e56ae6ae00fbb3c8760c5.zip"
+  },
+  {
+    "source": "market-madmasx-lcd-clock.owl",
+    "path": "widgets/madmasx/lcd-clock/widget.owl",
+    "author": "madmasx",
+    "resources": null
+  },
+  {
+    "source": "market-mtolhuys-wallpapers.owl",
+    "path": "widgets/mtolhuys/wallpapers/widget.owl",
+    "author": "mtolhuys",
+    "resources": null
+  },
+  {
+    "source": "market-rcrohmana-breakout.owl",
+    "path": "apps/rcrohmana/breakout/app.owl",
+    "author": "rcrohmana",
+    "resources": null
+  },
+  {
+    "source": "market-reymarch995-codex-usage.owl",
+    "path": "widgets/reymarch995/codex-usage/widget.owl",
+    "author": "reymarch995",
+    "resources": null
+  },
+  {
+    "source": "market-reymarch995-now-playing.owl",
+    "path": "widgets/reymarch995/now-playing/widget.owl",
+    "author": "reymarch995",
+    "resources": null
+  },
+  {
+    "source": "market-rystedtcreative-astrometrics.owl",
+    "path": "widgets/rystedtcreative/astrometrics/widget.owl",
+    "author": "rystedtcreative",
+    "resources": null
+  },
+  {
+    "source": "market-simonschubert-fetch.owl",
+    "path": "widgets/simonschubert/fetch/widget.owl",
+    "author": "simonschubert",
+    "resources": null
+  },
+  {
+    "source": "market-simonschubert-koi-pond.owl",
+    "path": "widgets/simonschubert/koi-pond/widget.owl",
+    "author": "simonschubert",
+    "resources": null
+  },
+  {
+    "source": "market-simonschubert-now-playing.owl",
+    "path": "widgets/simonschubert/now-playing/widget.owl",
+    "author": "simonschubert",
+    "resources": null
+  },
+  {
+    "source": "market-simonschubert-today.owl",
+    "path": "widgets/simonschubert/today/widget.owl",
+    "author": "simonschubert",
+    "resources": null
+  },
+  {
+    "source": "market-ssalentin-claude-limits.owl",
+    "path": "widgets/ssalentin/claude-limits/widget.owl",
+    "author": "ssalentin",
+    "resources": null
+  },
+  {
+    "source": "market-w-m-hill-ssh-helper.owl",
+    "path": "widgets/w-m-hill/ssh-helper/widget.owl",
+    "author": "w-m-hill",
+    "resources": null
+  },
+  {
+    "source": "noboru.owl",
+    "path": "apps/xonars/noboru/app.owl",
+    "author": "xonars",
+    "resources": "resources/104a9bb18b1c79144c8628427db0014cbafe2ecfc7988ace473e7a0c5ac71127.zip"
+  },
+  {
+    "source": "pinterest-wallswap.owl",
+    "path": "apps/xonars/pinterest-wallswap/app.owl",
+    "author": "xonars",
+    "resources": "resources/525d41b2e71cf1fc6db543ccb6930778f7fc841eb2339a9300f3b70c628da7b5.zip"
+  },
+  {
+    "source": "quiet-reader.owl",
+    "path": "apps/xonars/quiet-reader/app.owl",
+    "author": "xonars",
+    "resources": "resources/b2d5ea1e009376ab93a974e3cf6553cce3a5b35e53a0054fc2b879287699310a.zip"
+  }
+]

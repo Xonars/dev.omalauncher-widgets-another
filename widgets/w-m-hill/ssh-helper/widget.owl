@@ -1,0 +1,378 @@
+widget "ssh helper" {
+  size: 3x2
+  minSize: 1x1
+  requires { pacman: ["openssh", "iproute2", "procps-ng", "gawk", "grep", "coreutils", "nano"] }
+  meta { description: "Switch sshd on and off; see the phone's IP, port, ssh command and sessions. The first start sets up sshd for you (keys folder, host keys, port 8022). Needs omalauncher's Nearby devices permission"; version: "1.0.1"; license: "MIT"; category: "system"; owl: 13 }
+
+  // Everything in one JSON line: user, port (from sshd_config), the listener's pid and how long it has run,
+  // the phone's IPv4 addresses (Wi-Fi and Ethernet first, then hotspot/USB, then mobile data), the
+  // connections, found by SSH_CONNECTION in the processes' environments since /proc/net isn't readable here,
+  // and the names of the keys that may log in.
+  source info = cmd("""
+    ips=$(ip -4 -o addr show scope global 2>/dev/null | awk '{split($4,a,"/"); r=($2 ~ /^(wlan|eth)/)?0:($2 ~ /^(ap|swlan|rndis|usb)/)?1:2; print r, $2, a[1]}' | sort -n | awk '{printf "%s{\"if\":\"%s\",\"ip\":\"%s\"}", (n++?",":""), $2, $3}')
+    port=$(cat /etc/ssh/sshd_config.d/*.conf /etc/ssh/sshd_config 2>/dev/null | awk 'tolower($1)=="port"{print $2; exit}')
+    pid=$(pgrep -x sshd | head -1)
+    up=$([ -n "$pid" ] && ps -o etimes= -p "$pid" | tr -d ' ')
+    conns=$(for e in /proc/[0-9]*/environ; do p=${e:6}; p=${p%%/*}; c=$(tr '\0' '\n' < "$e" 2>/dev/null | grep -m1 '^SSH_CONNECTION=') || continue; echo "$p ${c#SSH_CONNECTION=}"; done | sort -n | awk '!s[$2" "$3]++' | while read -r p cip cport sip sport; do t=$(ps -o etimes= -p "$p" 2>/dev/null | tr -d ' '); printf '{"ip":"%s","port":%s,"secs":%s},' "$cip" "$cport" "${t:-0}"; done)
+    keys=$(ssh-keygen -lf ~/.ssh/authorized_keys 2>/dev/null | awk '{c=""; for (i=3; i<NF; i++) c=c (c?" ":"") $i; gsub(/[^A-Za-z0-9@._ -]/,"",c); printf "%s\"%s\"", (n++?",":""), (c==""?"no comment":c)}')
+    printf '{"user":"%s","port":%s,"pid":%s,"up":%s,"ips":[%s],"conns":[%s],"keys":[%s]}\n' "$(id -un)" "${port:-22}" "${pid:-null}" "${up:-null}" "$ips" "${conns%,}" "$keys"
+  """) every 5s json
+  source log = file("~/.cache/ssh-helper/sshd.log")
+  source now = clock every 1s
+
+  // What the switch is doing until sshd's state catches up, and what starting it said when it failed.
+  state busy = ""
+  state busyUntil = 0
+  state result = null
+  // Each change starts (or restarts) sshd: one place runs the start, for the switch, restart and keepOn.
+  state starts = 0
+  // The switch's position, kept: without systemd sshd dies with the launcher, and comes back when this shows again.
+  state keepOn = false persist
+  // Whether a client from another device ever logged in; until then the tile explains Android's permission.
+  state seenRemote = false persist
+  state keyResult = null
+
+  let running = info.pid != null
+  let pending = busy != "" && now < busyUntil
+  let ips = info.ips ?? []
+  let ip = ips[0].ip
+  let onLan = ips[0].if != null && !startsWith(ips[0].if, "rmnet") && !startsWith(ips[0].if, "ccmni")
+  let user = info.user ?? "root"
+  let port = info.port ?? 22
+  let conns = info.conns ?? []
+  let nconn = len(conns)
+  let authKeys = info.keys ?? []
+  let sshCmd = ip == null ? "no network" : "ssh -p ${port} ${user}@${ip}"
+  let failed = result != null && result != "ok" && !running
+  let tint = pending ? yellow : running ? green : failed ? red : foreground
+  let word = pending ? busy : running ? "running" : failed ? "failed" : "stopped"
+  let logLines = lines(log ?? "").filter(l => trim(l) != "")
+  let permHint = "Android drops the phone's replies to other devices until omalauncher may reach them: Settings › Apps › omalauncher › Permissions › Nearby devices (or Local network) › Allow."
+
+  let w = tileWidth ?? 200
+  let h = tileHeight ?? 200
+  let narrow = w < 130
+  let short = h < 130
+
+  on running { busy = "" }
+  when conns.any(c => !startsWith(c.ip, "127.") && c.ip != "::1") { seenRemote = true }
+  // Bring sshd back after the launcher restarted, unless the last start failed.
+  when info != null && keepOn && !running && !pending && !failed { busy = "starting"; busyUntil = now + 10; starts = starts + 1 }
+
+  // First start on a fresh install: the ~/.ssh folder and file with the right modes, host keys, port 8022
+  // when no Port is set (Android won't let apps listen below 1024), and a profile hook that gives SSH logins the
+  // PATH and settings omalauncher's terminals get, snapshotted here from the launcher. Then (re)start sshd,
+  // keys only (Arch's defaults allow passwords, and the system has user alarm with the password alarm),
+  // logging to a file (there's no syslog) cut to its last 500 lines, and report its last line if it didn't stay up.
+  on starts {
+    result = run("""
+      mkdir -p ~/.cache/ssh-helper ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
+      ssh-keygen -A >/dev/null
+      grep -qsiE '^[[:space:]]*Port[[:space:]]' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf || printf '# Written by the ssh widget: Android lets apps listen on ports from 1024 only\nPort 8022\n' > /etc/ssh/sshd_config.d/10-ssh-widget.conf
+      [ -f /etc/profile.d/ssh-widget-env.sh ] || printf '# Written by the ssh widget: SSH logins get the environment omalauncher gives its terminals\n[ -n "$SSH_CONNECTION" ] && [ -r "$HOME/.cache/ssh-helper/env.sh" ] && . "$HOME/.cache/ssh-helper/env.sh"\n' > /etc/profile.d/ssh-widget-env.sh
+      export -p | grep -E '^declare -x (PATH|TZ|LANG|LC_[A-Z]+|TAR_OPTIONS|MISE_[A-Z_]+|[A-Z_]*AUTOUPDATE[A-Z_]*|XDG_RUNTIME_DIR)=' > ~/.cache/ssh-helper/env.sh
+      log=~/.cache/ssh-helper/sshd.log
+      [ -f "$log" ] && tail -n 500 "$log" > "$log.tmp" && mv "$log.tmp" "$log"
+      pkill -x sshd && sleep 0.5
+      /usr/bin/sshd -E "$log" -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no; sleep 0.7
+      pgrep -x sshd >/dev/null && echo ok || tail -n 1 "$log"
+    """)
+  }
+
+  onTap: screen()
+
+  component Dot(c, s = 8) {
+    Box { size: s; radius: s / 2; background: c }
+  }
+
+  // An on/off switch; the tap goes on a Box around it.
+  component Switch(on, wait, s = 1) {
+    Box {
+      width: 40 * s; height: 22 * s; radius: 11 * s * corners
+      background: wait ? alpha(yellow, 0.5) : on ? green : surface
+      border: 1; borderColor: on ? green : border
+      animate background: tween(200ms, "ease")
+      align: start
+      Box {
+        size: 16 * s; radius: 8 * s * corners; background: on ? background : foreground
+        offset: [on ? 20 * s : 3 * s, 0]
+        animate offset: spring()
+      }
+    }
+  }
+
+  // The switch with what it does. Off stops only the listener, so open sessions stay.
+  component Toggle(s = 1) {
+    Box {
+      onTap: {
+        busyUntil = now + 10
+        if running {
+          busy = "stopping"
+          keepOn = false
+          result = run("pkill -x sshd; echo ok")
+        } else {
+          busy = "starting"
+          keepOn = true
+          result = null
+          starts = starts + 1
+        }
+      }
+      Switch { on: running; wait: pending; s: s }
+    }
+  }
+
+  component Copyable(t, size = 12) {
+    Box {
+      fill: width; padding: [8, 6]; radius: 6 * corners; background: surface
+      onTap: { copy(t); haptic() }
+      Text { text: t; font: mono; fontSize: size; maxLines: 1 }
+    }
+  }
+
+  component Heading(t) {
+    Text { text: t; style: label; color: foreground }
+  }
+
+  component Warning(t, size = 12) {
+    Box {
+      fill: width; padding: [8, 6]; radius: 6 * corners; background: alpha(yellow, 0.15); border: 1; borderColor: alpha(yellow, 0.6)
+      Text { text: t; fontSize: size; color: yellow }
+    }
+  }
+
+  if narrow && short {
+    // 1x1: a dot for the server, the port, and how many are connected.
+    Column {
+      fill: true; align: center; justify: center; gap: 2
+      Row { gap: 4; align: center
+        Dot { c: tint; s: 9 }
+        Text { text: "ssh"; bold: true; fontSize: 14 }
+      }
+      Text { text: nconn > 0 ? "${nconn} in" : running ? ":${port}" : "off"; style: small; color: nconn > 0 ? accent : foreground; align: center }
+    }
+  } else if narrow {
+    // One column wide, taller: status, port, connections, and the switch.
+    Column {
+      fill: true; align: center; justify: spaceEvenly
+      Row { gap: 4; align: center
+        Dot { c: tint; s: 9 }
+        Text { text: "ssh"; bold: true }
+      }
+      Text { text: word; style: small; color: tint; align: center }
+      if h >= 200 {
+        Text { text: ip == null ? "no ip" : last(split(ip, ".")); font: mono; fontSize: 11; align: center; maxLines: 1 }
+      }
+      Text { text: ":${port}"; font: mono; fontSize: 11; color: foreground; align: center }
+      Text { text: "${nconn} conn"; style: small; color: nconn > 0 ? accent : foreground; align: center }
+      Toggle { s: 0.8 }
+    }
+  } else if short {
+    // One row tall: status, where to connect, and the switch.
+    Row {
+      fill: true; align: center; gap: 8
+      if w >= 200 { Dot { c: tint; s: 10 } }
+      Column { weight: 1; gap: 0
+        if w >= 300 {
+          Text { text: sshCmd; font: mono; fontSize: 12; maxLines: 1 }
+          Text { text: "${word} · ${nconn} connected"; style: small; color: nconn > 0 ? accent : foreground; maxLines: 1 }
+        } else {
+          Text { text: ip ?? "no network"; font: mono; fontSize: w < 200 ? 11 : 13; maxLines: 1 }
+          Text { text: ":${port} · ${nconn > 0 ? "${nconn} in" : w < 200 ? (pending ? "…" : running ? "on" : failed ? "failed" : "off") : word}"; style: small; color: nconn > 0 ? accent : tint; maxLines: 1 }
+        }
+      }
+      Toggle { s: w < 200 ? 0.8 : 1 }
+    }
+  } else {
+    Column {
+      fill: true; gap: 6
+      Row { align: center; gap: 6
+        Dot { c: tint }
+        Text { text: "sshd"; bold: true }
+        Text { text: w >= 200 ? word : ""; style: small; color: tint; weight: 1; maxLines: 1 }
+        Toggle { }
+      }
+      if h < 260 || w < 300 {
+        // Medium: the address and port big, the command when it fits, and the connections.
+        Column { weight: 1; gap: 2; justify: center
+          Text { text: ip ?? "no network"; font: mono; fontSize: w < 200 ? 13 : 20; bold: true; maxLines: 1 }
+          Text { text: "port ${port} · ${user}"; font: mono; fontSize: 11; color: foreground; maxLines: 1 }
+          if w >= 230 && ip != null {
+            Spacer { height: 2 }
+            Copyable { t: sshCmd; size: w < 270 ? 9 : w < 300 ? 10 : 11 }
+          }
+        }
+        Row { align: center; gap: 6
+          Dot { c: nconn > 0 ? accent : border; s: 6 }
+          Text { text: !running && nconn == 0 ? "server ${word}" : nconn == 0 ? "no one connected" : nconn == 1 ? "${conns[0].ip} connected" : "${nconn} connected"; style: small; color: nconn > 0 ? accent : foreground; weight: 1; maxLines: 1 }
+        }
+      } else {
+        // Large: every address, the commands, the sessions and the warnings.
+        if !seenRemote {
+          Warning { t: "First time? ${permHint}"; size: 11 }
+        }
+        Heading { t: "connect" }
+        Copyable { t: sshCmd; size: 13 }
+        if len(ips) > 1 {
+          for a in drop(ips, 1) {
+            Row { gap: 6
+              Text { text: a.if; font: mono; fontSize: 10; color: foreground; width: 52 }
+              Text { text: "${a.ip}:${port}"; font: mono; fontSize: 11; weight: 1; maxLines: 1 }
+            }
+          }
+        }
+        if h >= 340 && ip != null {
+          Copyable { t: "sftp -P ${port} ${user}@${ip}"; size: 11 }
+        }
+        if h >= 420 && ip != null {
+          Row { gap: 6
+            Box { weight: 1; Copyable { t: ip; size: 11 } }
+            Box { width: 60; Copyable { t: "${port}"; size: 11 } }
+            Box { width: 60; Copyable { t: user; size: 11 } }
+          }
+        }
+        if h >= 600 && ip != null {
+          Box {
+            fill: width; padding: 8; radius: 6 * corners; background: surface
+            onTap: { copy("Host phone\n  HostName ${ip}\n  Port ${port}\n  User ${user}\n"); haptic() }
+            Text { text: "Host phone\n  HostName ${ip}\n  Port ${port}\n  User ${user}"; font: mono; fontSize: 11 }
+          }
+        }
+        Text { text: "tap a line to copy · ${ips[0].if ?? "no interface"}"; style: small; color: foreground }
+        Spacer { height: 2 }
+        Heading { t: "sessions (${nconn})" }
+        Column { weight: 1; gap: 4; scroll: true
+          if nconn == 0 {
+            Text { text: running ? "waiting for a client on :${port}" : "server is off"; style: small; color: foreground }
+          }
+          for c in conns key "${c.ip}:${c.port}" {
+            Row { gap: 6; align: center
+              Dot { c: accent; s: 6 }
+              Text { text: c.ip; font: mono; fontSize: 12; weight: 1; maxLines: 1 }
+              Text { text: fmtDuration(c.secs); style: small; color: foreground }
+            }
+          }
+        }
+        if h >= 600 && len(logLines) > 0 {
+          Heading { t: "log" }
+          for l in take(reverse(logLines), 4) {
+            Text { text: l; font: mono; fontSize: 9; color: foreground; maxLines: 1 }
+          }
+        }
+        if info != null && len(authKeys) == 0 {
+          Text { text: "no keys yet: tap the tile to add your computer's public key"; style: small; color: yellow }
+        } else if failed {
+          Text { text: result; style: small; color: red; maxLines: 2 }
+        } else if running && info.up != null {
+          Text { text: "pid ${info.pid} · up ${fmtDuration(info.up)} · ${len(authKeys)} key${len(authKeys) == 1 ? "" : "s"}"; style: small; color: foreground }
+        }
+      }
+    }
+  }
+
+  screen {
+    title: "ssh"
+    Column {
+      scroll: true; gap: 10; padding: 16
+
+      Row { align: center; gap: 12
+        Dot { c: tint; s: 14 }
+        Column { weight: 1; gap: 0
+          Text { text: "sshd ${word}"; style: title; color: tint }
+          Text { text: running ? "pid ${info.pid} · up ${fmtDuration(info.up ?? 0)}" : "not listening"; style: small; color: foreground }
+        }
+        Toggle { s: 1.3 }
+      }
+      if failed {
+        Text { text: "couldn't start: ${result}"; color: red }
+      }
+      if !seenRemote {
+        Box {
+          fill: width; padding: 12; radius: 8 * corners; background: alpha(yellow, 0.12); border: 1; borderColor: alpha(yellow, 0.6)
+          Column { gap: 6
+            Text { text: "Before your first connection"; bold: true; color: yellow }
+            Text { text: "Android blocks omalauncher from answering devices on your network until you allow it. Without it, ssh from your computer connects and then times out during banner exchange."; style: small; color: yellow }
+            Text { text: "1. Android Settings › Apps › omalauncher › Permissions\n2. Nearby devices (called Local network on some phones) › Allow\n3. Android may restart the launcher; sshd comes back on its own when this widget shows again\n4. Add your computer's public key below, then connect"; style: small; color: foreground }
+            Text { text: "This note goes away after the first login from another device."; style: small; color: foreground }
+          }
+        }
+      }
+      if ip != null && !onLan {
+        Text { text: "The phone is only on mobile data (${ips[0].if}). Computers can't reach it there: join the same Wi-Fi, or turn on the hotspot and connect the computer to it."; style: small; color: yellow }
+      }
+
+      Heading { t: "connect from your computer" }
+      if len(ips) == 0 {
+        Text { text: "the phone has no network address right now"; color: foreground }
+      }
+      for a, i in ips key a.if {
+        Column { gap: 4
+          Text { text: "${a.if}${i == 0 ? " · use this one" : ""}"; style: small; color: i == 0 ? accent : foreground }
+          Copyable { t: "ssh -p ${port} ${user}@${a.ip}"; size: 14 }
+        }
+      }
+      if ip != null {
+        Text { text: "files"; style: small; color: foreground }
+        Copyable { t: "sftp -P ${port} ${user}@${ip}" }
+        Copyable { t: "scp -P ${port} FILE ${user}@${ip}:~/" }
+        Text { text: "host · port · user"; style: small; color: foreground }
+        Row { gap: 6
+          Box { weight: 1; Copyable { t: ip } }
+          Box { width: 70; Copyable { t: "${port}" } }
+          Box { width: 70; Copyable { t: user } }
+        }
+        Text { text: "~/.ssh/config on your computer (the address changes with the network; update HostName)"; style: small; color: foreground }
+        Box {
+          fill: width; padding: 10; radius: 6 * corners; background: surface
+          onTap: { copy("Host phone\n  HostName ${ip}\n  Port ${port}\n  User ${user}\n"); haptic() }
+          Text { text: "Host phone\n  HostName ${ip}\n  Port ${port}\n  User ${user}"; font: mono; fontSize: 12 }
+        }
+        Text { text: "tap any box to copy it"; style: small; color: foreground }
+      }
+
+      Heading { t: "keys that may log in (${len(authKeys)})" }
+      Text { text: "Password login is off, so add your computer's public key: run cat ~/.ssh/id_ed25519.pub there (ssh-keygen -t ed25519 makes one) and paste the line here."; style: small; color: foreground }
+      for k in authKeys {
+        Row { gap: 8; align: center
+          Dot { c: green; s: 6 }
+          Text { text: k; font: mono; fontSize: 12; weight: 1; maxLines: 1 }
+        }
+      }
+      Input {
+        placeholder: "ssh-ed25519 AAAA… you@computer"; clear: true
+        onSubmit: keyResult = run("k=${sh(trim(value))}; mkdir -p ~/.ssh && chmod 700 ~/.ssh; if printf '%s\\n' \"$k\" | ssh-keygen -lf - >/dev/null 2>&1; then if grep -qxF \"$k\" ~/.ssh/authorized_keys 2>/dev/null; then echo 'already there'; else printf '%s\\n' \"$k\" >> ~/.ssh/authorized_keys; chmod 600 ~/.ssh/authorized_keys; echo 'added'; fi; else echo \"that isn't a public key line\"; fi")
+      }
+      if keyResult != null {
+        Text { text: keyResult; style: small; color: keyResult == "added" || keyResult == "already there" ? green : red }
+      }
+
+      Heading { t: "sessions (${nconn})" }
+      if nconn == 0 {
+        Text { text: running ? "no one connected" : "the server is off"; color: foreground }
+      }
+      for c in conns key "${c.ip}:${c.port}" {
+        Row { gap: 8; align: center
+          Dot { c: accent; s: 8 }
+          Text { text: "${c.ip}:${c.port}"; font: mono; weight: 1; maxLines: 1 }
+          Text { text: fmtDuration(c.secs); color: foreground }
+        }
+      }
+      Flow { gap: 8
+        if running {
+          Button { text: "restart"; onTap: { busy = "starting"; busyUntil = now + 10; result = null; starts = starts + 1 } }
+        }
+        if nconn > 0 {
+          Button { text: "end all sessions"; color: red; onTap: run("pkill -f '^sshd-session'; pkill -f '^sshd: .*@'") }
+        }
+        Button { text: "edit keys"; onTap: terminal("mkdir -p ~/.ssh && chmod 700 ~/.ssh && nano ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys", "authorized_keys") }
+      }
+
+      Heading { t: "log" }
+      if len(logLines) == 0 {
+        Text { text: "nothing logged yet"; color: foreground }
+      }
+      for l in take(reverse(logLines), 8) {
+        Text { text: l; font: mono; fontSize: 10; color: foreground }
+      }
+    }
+  }
+}

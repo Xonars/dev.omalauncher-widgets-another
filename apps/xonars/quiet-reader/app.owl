@@ -1,10 +1,62 @@
 app "Тихая читалка" {
-  meta { owl: 13; description: "EPUB, MOBI и TXT: только книга, плавная прокрутка и три темы"; version: "1.3.1"; license: "MIT AND GPL-3.0-only"; category: "productivity" }
+  // Fixed SHA-256 resource package; installed only inside this entry's private directory.
+  let storeBootstrap = """
+# Template embedded in store OWL. Packages are fixed and SHA-256 verified.
+import fcntl
+import hashlib
+import io
+import os
+from pathlib import Path, PurePosixPath
+import tempfile
+import urllib.request
+import zipfile
+
+
+def install(url, digest, entry):
+    if not entry or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789-" for c in entry):
+        raise ValueError("Invalid store entry")
+    root = Path.home() / '.local/share/omalauncher-store' / entry
+    if any(p.is_symlink() for p in [root, *root.parents]):
+        raise ValueError('Symlink in resource destination')
+    root.mkdir(parents=True, exist_ok=True)
+    with (root / '.install.lock').open('w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        marker = root / '.installed'
+        if marker.exists() and marker.read_text() == digest:
+            return
+        with urllib.request.urlopen(url, timeout=60) as response:
+            payload = response.read(32 * 1024 * 1024 + 1)
+        if len(payload) > 32 * 1024 * 1024 or hashlib.sha256(payload).hexdigest() != digest:
+            raise ValueError('Store resource SHA-256 mismatch')
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            members = archive.infolist()
+            if sum(x.file_size for x in members) > 128 * 1024 * 1024:
+                raise ValueError('Store resource package too large')
+            for info in members:
+                path = PurePosixPath(info.filename)
+                if path.is_absolute() or '..' in path.parts or not path.parts or path.parts[0] not in ('widgets', 'support'):
+                    raise ValueError('Invalid store resource path')
+                target = root.joinpath(*path.parts)
+                # No symlinks in the destination chain or package extraction.
+                if any(p.is_symlink() for p in [target, *target.parents]):
+                    raise ValueError('Symlink in resource destination')
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as output:
+                    output.write(archive.read(info))
+                    temporary = Path(output.name)
+                os.replace(temporary, target)
+        marker.write_text(digest)
+
+install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b2d5ea1e009376ab93a974e3cf6553cce3a5b35e53a0054fc2b879287699310a.zip', 'b2d5ea1e009376ab93a974e3cf6553cce3a5b35e53a0054fc2b879287699310a', 'xonars-quiet-reader')
+"""
+  let storeInstall = "python -c ${sh(storeBootstrap)}"
+
+  meta { owl: 13; description: "EPUB, MOBI и TXT: только книга, плавная прокрутка и три темы · ресурсы при первом запуске"; version: "1.3.2"; license: "MIT AND GPL-3.0-only"; category: "productivity" }
   title: ""
   statusBar: false
   edge: true
   icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5h25a5 5 0 0 1 5 5v33H14a5 5 0 0 1-5-5V5zM9 34h30M17 13h14M17 21h10"/></svg>"""
-  requires { pacman: ["bash", "python", "python-beautifulsoup4", "python-pillow", "ttf-dejavu"] }
+  requires { pacman: ["python", "bash", "python", "python-beautifulsoup4", "python-pillow", "ttf-dejavu"] }
   state book = "" persist
   state theme = "paper" persist
   state menu = true
@@ -12,9 +64,9 @@ app "Тихая читалка" {
   let paper = theme == "night" ? #171b20 : theme == "sepia" ? #efe3cb : #f7f4ec
   let ink = theme == "night" ? #e0dfd8 : #282c30
   let soft = theme == "night" ? #9bbdb4 : #45675d
-  let script = "~/.config/omalauncher/widgets/quiet-reader/main.py"
-  source listing = cmd(menu ? "python ${script} list ${sh(folder)}" : "") json
-  source content = cmd(book == "" ? "" : "python ${script} read ${sh(book)}") every 24h json timeout 60s
+  let script = "~/.local/share/omalauncher-store/xonars-quiet-reader/widgets/quiet-reader/main.py"
+  source listing = cmd(menu ? "python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-quiet-reader/widgets/quiet-reader/main.py list ${sh(folder)}" : "") json
+  source content = cmd(book == "" ? "" : "python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-quiet-reader/widgets/quiet-reader/main.py read ${sh(book)}") every 24h json timeout 60s
   back: !menu && book != ""
   onBack: menu = true
   Box {

@@ -2,7 +2,7 @@ app "Шахматы" {
   // Adapted from widgets/vitalii-khomenko/chess, MIT, version 1.7.
   title: "Шахматы"
   icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M24 4v10m-5-5h10M18 18h12l3 9-4 9H19l-4-9 3-9ZM17 36h14l4 7H13l4-7Z"/></svg>"""
-  meta { description: "Full chess in a terminal tile: all rules, picture board, tap and keyboard play, six computer levels or two players, hints, undo, clock, pause and a saved game. Node.js only."; version: "1.7"; license: "MIT"; category: "games"; owl: 8 }
+  meta { description: "Full chess in a terminal tile: all rules, picture board, tap and keyboard play, six computer levels or two players, hints, undo, clock, pause and a saved game. Node.js only."; version: "1.7.1"; license: "MIT"; category: "games"; owl: 8 }
   requires { pacman: ["nodejs"] }
 
   // The game is one Node.js file that this command writes to ~/.cache/owl-chess/chess.js and starts.

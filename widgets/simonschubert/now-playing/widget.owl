@@ -1,0 +1,224 @@
+widget "now-playing" {
+  size: 6x2
+  minSize: 3x2
+  requires { pacman: [] }
+  meta { description: "What's playing on your phone, from any music or podcast app: album art, track, progress and play, pause and skip. Tap the tile to open the app"; version: "1.5.1"; license: "MIT"; category: "media"; owl: 16 }
+
+  // What it says, in the phone's language where it has a set. Tracks, artists and apps come as they are.
+  strings {
+    en {
+      title: "now playing"; nothing: "nothing playing"; start: "start music in any app"
+      allow: "Allow notification access so the launcher can see what's playing. Tap to open the setting."
+    }
+    id {
+      title: "sedang diputar"; nothing: "tidak ada yang diputar"; start: "putar musik di aplikasi apa saja"
+      allow: "Izinkan akses notifikasi agar launcher bisa melihat apa yang diputar. Ketuk untuk membuka setelan."
+    }
+    es {
+      title: "sonando ahora"; nothing: "no suena nada"; start: "pon música en cualquier app"
+      allow: "Permite el acceso a las notificaciones para que el launcher vea qué está sonando. Toca para abrir la configuración."
+    }
+    pt {
+      title: "tocando agora"; nothing: "nada tocando"; start: "toque música em qualquer app"
+      allow: "Permita o acesso às notificações para que o launcher veja o que está tocando. Toque para abrir as configurações."
+    }
+    de {
+      title: "läuft gerade"; nothing: "es läuft nichts"; start: "starte musik in einer app"
+      allow: "Erlaube den Zugriff auf Benachrichtigungen, damit der Launcher sieht, was gerade läuft. Tippe, um die Einstellung zu öffnen."
+    }
+    zh {
+      title: "正在播放"; nothing: "没有在播放"; start: "在任意应用里播放音乐"
+      allow: "允许访问通知，启动器才能看到正在播放什么。点按打开设置。"
+    }
+  }
+
+  // {available, playing, title, artist, album, app, package, position, duration, art}.
+  // Android only shares other apps' sessions with notification access; without it, available is false.
+  source m = android.media
+
+  let has = m != null && m.title != null
+  let allowed = m == null || m.available != false
+  let dur = num(m.duration, 0)
+  let pos = dur > 0 ? clamp(num(m.position, 0), 0, dur) : num(m.position, 0)
+  let narrow = cols != null && cols < 5
+  let art = clamp((tileHeight ?? 130) - 26, 40, 132)
+  // A tile taller than wide (landscape home screen, or a tall portrait tile) stacks
+  // art, text and controls vertically instead of side by side.
+  let tall = tileWidth != null && tileHeight != null && tileHeight > tileWidth * 1.3
+  let tallArt = tall ? clamp(min(tileWidth - 26, tileHeight * 0.45), 40, 240) : 0
+
+  onTap: media("open")
+
+  component Clock(s) {
+    Text { text: s == null ? "" : "${floor(s / 60)}:${pad(floor(s % 60), 2, "0")}"; style: label; color: muted; font: mono; maxLines: 1; width: len("${floor(s / 60)}") * 7 + 22 }
+  }
+
+  // Drawn, not glyphs: the launcher's icon font only carries weather symbols. Paths need an
+  // explicit fill: to be filled. Play/pause is a solid disc with the glyph in the background color.
+  component Control(kind, big = false) {
+    Box {
+      size: big ? 38 : 32
+      onTap: media(kind)
+      Canvas {
+        let cx = width / 2
+        let cy = height / 2
+        let d = min(width, height)
+        if kind == "toggle" {
+          circle(cx, cy, d / 2, fill: foreground)
+          if m.playing == true {
+            rect(cx - d * 0.15, cy - d * 0.18, d * 0.11, d * 0.36, radius: d * 0.03, fill: background)
+            rect(cx + d * 0.04, cy - d * 0.18, d * 0.11, d * 0.36, radius: d * 0.03, fill: background)
+          } else {
+            // The triangle's centroid sits right of its box: nudge it so it looks centered.
+            path([[cx - d * 0.12, cy - d * 0.2], [cx + d * 0.21, cy], [cx - d * 0.12, cy + d * 0.2]], closed: true, fill: background)
+          }
+        } else {
+          let dir = kind == "next" ? 1 : -1
+          path([[cx - d * 0.19 * dir, cy - d * 0.2], [cx + d * 0.1 * dir, cy], [cx - d * 0.19 * dir, cy + d * 0.2]], closed: true, fill: foreground)
+          rect(dir > 0 ? cx + d * 0.1 : cx - d * 0.18, cy - d * 0.2, d * 0.08, d * 0.4, radius: d * 0.03, fill: foreground)
+        }
+      }
+    }
+  }
+
+  // A small equalizer that only exists (and only animates) while something plays.
+  component Bars() {
+    Canvas {
+      width: 14
+      height: 12
+      for i in range(3) {
+        let h = 3 + (sin(time * (5 + i * 1.7) + i * 2) * 0.5 + 0.5) * (height - 3)
+        rect(i * 5, height - h, 3, h, radius: 1, color: accent)
+      }
+    }
+  }
+
+  component Art(src, d) {
+    Box {
+      size: d
+      // Rounded as much as the launcher's corner style: square on edge, 8dp on round.
+      radius: 8 * corners
+      clip: true
+      align: center
+      if src != null {
+        Image { src: src; fit: cover; fill: true }
+      } else {
+        // Gradients only fill inside a Canvas, not as a background.
+        Canvas {
+          rect(0, 0, width, height, fill: linear(0, 0, width, height, [alpha(accent, 0.55), alpha(magenta, 0.35)]))
+          text("♪", width / 2, height / 2, size: d * 0.45, align: center, color: alpha(foreground, 0.85))
+        }
+      }
+    }
+  }
+
+  // The source app, with a live equalizer while it plays.
+  component AppLine() {
+    Row {
+      align: center
+      gap: 6
+      if m.playing == true {
+        Bars { }
+      }
+      Text { text: lower(m.app ?? ""); style: label; color: m.playing == true ? accent : muted; maxLines: 1; weight: 1 }
+    }
+  }
+
+  if !allowed {
+    Column {
+      justify: center
+      gap: 6
+      Text { text: str.title; style: muted }
+      Text { text: str.allow; style: small; maxLines: 3 }
+    }
+  } else {
+    if !has {
+      if tall {
+        Column {
+          gap: 10
+          Art { src: null; d: tallArt }
+          Text { text: str.nothing; style: body; color: muted }
+          Text { text: str.start; style: small; color: muted; maxLines: 2 }
+        }
+      } else {
+        Row {
+          align: center
+          gap: 12
+          Art { src: null; d: art }
+          Column {
+            weight: 1
+            gap: 2
+            Text { text: str.nothing; style: body; color: muted }
+            Text { text: str.start; style: small; color: muted; maxLines: 1 }
+          }
+        }
+      }
+    } else {
+      if tall {
+        Column {
+          gap: 8
+          Art { src: m.art; d: tallArt }
+          Column {
+            gap: 2
+            AppLine { }
+            Text { text: m.title; style: body; bold: true; maxLines: 3 }
+            Text { text: m.artist ?? ""; style: small; color: muted; maxLines: 2 }
+            Text { text: m.album ?? ""; style: small; color: muted; maxLines: 1 }
+          }
+          Spacer { weight: 1 }
+          if dur > 0 {
+            Progress { value: pos; max: dur; color: accent; track: alpha(muted, 0.2); animate value: tween(900ms, "linear") }
+            Row {
+              align: center
+              gap: 4
+              Clock { s: pos }
+              Spacer { weight: 1 }
+              Clock { s: dur }
+            }
+          }
+          Row {
+            align: center
+            gap: 4
+            Spacer { weight: 1 }
+            Control { kind: "previous" }
+            Control { kind: "toggle"; big: true }
+            Control { kind: "next" }
+            Spacer { weight: 1 }
+          }
+        }
+      } else {
+        Row {
+          align: center
+          gap: 12
+          if !narrow {
+            Art { src: m.art; d: art }
+          }
+          Column {
+            weight: 1
+            gap: 2
+            AppLine { }
+            Text { text: m.title; style: body; bold: true; maxLines: narrow ? 2 : 1 }
+            Text { text: [m.artist, narrow ? null : m.album].filter(x => x != null).join(" · "); style: small; color: muted; maxLines: 1 }
+            Spacer { weight: 1 }
+            if dur > 0 {
+              Progress { value: pos; max: dur; color: accent; track: alpha(muted, 0.2); animate value: tween(900ms, "linear") }
+            }
+            Row {
+              align: center
+              gap: 4
+              if dur > 0 {
+                Clock { s: pos }
+                Text { text: "/"; style: label; color: alpha(muted, 0.5); width: 8 }
+                Clock { s: dur }
+              }
+              Spacer { weight: 1 }
+              Control { kind: "previous" }
+              Control { kind: "toggle"; big: true }
+              Control { kind: "next" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

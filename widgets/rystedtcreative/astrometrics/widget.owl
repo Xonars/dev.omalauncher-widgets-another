@@ -1,0 +1,244 @@
+// LCARS-style astrometrics panel: the moon's phase and a top-down orrery of
+// the solar system, worked out from the clock alone (no Linux, no network
+// besides the font). Colors are the theme's, so it follows theme changes.
+// Tap to switch the orrery between the whole system and the inner planets.
+widget "astrometrics" {
+  meta {
+    owl: 16
+    description: "LCARS moon phase and a heliocentric orrery of the solar system, computed from the clock."
+    version: "1.0.1"
+    license: "MIT"
+    category: "time"
+  }
+  page: 5
+  order: 1
+  size: 6x5
+  minSize: 5x4
+  padding: 6
+
+  // No shell commands and no packages. The font is a public file the launcher fetches itself.
+  strings {
+    en {
+      title: "ASTROMETRICS"
+      stardate: v => "STARDATE ${v}"
+      luna: "LUNA"
+      inner: "INNER"
+      outer: "OUTER"
+      sol: n => "SOL ${n}"
+      lunarPhase: "LUNAR PHASE"
+      illumination: "ILLUMINATION"
+      age: "AGE"
+      ageDays: v => "${v} D"
+      nextFull: "NEXT FULL"
+      nextNew: "NEXT NEW"
+      innerSystem: "INNER SYSTEM"
+      solarSystem: "SOLAR SYSTEM"
+      heliocentric: "HELIOCENTRIC"
+      newMoon: "NEW MOON"
+      waxingCrescent: "WAXING CRESCENT"
+      firstQuarter: "FIRST QUARTER"
+      waxingGibbous: "WAXING GIBBOUS"
+      fullMoon: "FULL MOON"
+      waningGibbous: "WANING GIBBOUS"
+      lastQuarter: "LAST QUARTER"
+      waningCrescent: "WANING CRESCENT"
+    }
+  }
+
+  source now = clock every 1m
+  state inner = false persist
+
+  onTap: inner = !inner
+
+  // LCARS-like condensed typeface (OFL), downloaded once by the launcher
+  let lcars = "https://raw.githubusercontent.com/google/fonts/main/ofl/antonio/Antonio%5Bwght%5D.ttf"
+
+  // ── time ────────────────────────────────────────────────────────────
+  let d = (now - 946728000) / 86400            // days since J2000.0
+  let T = d / 36525                             // Julian centuries
+  let stardate = (num(fmtTime(now, "yyyy")) - 1946) * 1000 + (num(fmtTime(now, "D")) - 1) / 365.25 * 1000
+
+  // ── moon (Meeus, low precision) ─────────────────────────────────────
+  let D = 297.8501921 + 445267.1114034 * T
+  let Ms = 357.5291092 + 35999.0502909 * T
+  let Mm = 134.9633964 + 477198.8675055 * T
+  let iA = 180 - D - 6.289 * sin(rad(Mm)) + 2.1 * sin(rad(Ms)) - 1.274 * sin(rad(2 * D - Mm)) - 0.658 * sin(rad(2 * D)) - 0.214 * sin(rad(2 * Mm)) - 0.11 * sin(rad(D))
+  let elong = ((180 - iA) % 360 + 360) % 360   // 0 new, 90 first quarter, 180 full
+  let illum = (1 + cos(rad(iA))) / 2
+  let synodic = 29.530589
+  let age = elong / 360 * synodic
+  let phaseIdx = floor((elong + 22.5) / 45) % 8
+  let phaseName = [str.newMoon, str.waxingCrescent, str.firstQuarter, str.waxingGibbous, str.fullMoon, str.waningGibbous, str.lastQuarter, str.waningCrescent][phaseIdx]
+  // first guess from the mean synodic month, then one correction step that
+  // re-evaluates the elongation at the guessed time (good to a few hours)
+  let ev0 = [
+    {goal: 180, t: now + ((180 - elong + 360) % 360) / 360 * synodic * 86400},
+    {goal: 360, t: now + (360 - elong) / 360 * synodic * 86400}
+  ]
+  let ev1 = ev0.map(v => merge(v, {T: (v.t - 946728000) / 86400 / 36525}))
+  let ev2 = ev1.map(v => merge(v, {D: 297.8501921 + 445267.1114034 * v.T, Ms: 357.5291092 + 35999.0502909 * v.T, Mm: 134.9633964 + 477198.8675055 * v.T}))
+  let ev3 = ev2.map(v => merge(v, {el: v.D + 6.289 * sin(rad(v.Mm)) - 2.1 * sin(rad(v.Ms)) + 1.274 * sin(rad(2 * v.D - v.Mm)) + 0.658 * sin(rad(2 * v.D)) + 0.214 * sin(rad(2 * v.Mm)) + 0.11 * sin(rad(v.D))}))
+  let ev4 = ev3.map(v => v.t + (((v.goal - v.el) % 360 + 540) % 360 - 180) / 360 * synodic * 86400)
+  let nextFull = ev4[0]
+  let nextNew = ev4[1]
+
+  // ── planets (JPL approximate Keplerian elements, J2000) ─────────────
+  // Abbreviations are orbital keys, not translated labels.
+  let els = [
+    {n: "MER", a: 0.38709927, e: 0.20563593, L0: 252.2503235, Lr: 149472.67411175, w: 77.45779628, c: muted, s: 2.2},
+    {n: "VEN", a: 0.72333566, e: 0.00677672, L0: 181.9790995, Lr: 58517.81538729, w: 131.60246718, c: yellow, s: 3},
+    {n: "TER", a: 1.00000261, e: 0.01671123, L0: 100.46457166, Lr: 35999.37244981, w: 102.93768193, c: blue, s: 3.2},
+    {n: "MAR", a: 1.52371034, e: 0.0933941, L0: -4.55343205, Lr: 19140.30268499, w: -23.94362959, c: red, s: 2.6},
+    {n: "JUP", a: 5.202887, e: 0.04838624, L0: 34.39644051, Lr: 3034.74612775, w: 14.72847983, c: orange, s: 4.6},
+    {n: "SAT", a: 9.53667594, e: 0.05386179, L0: 49.95424423, Lr: 1222.49362201, w: 92.59887831, c: bright_yellow, s: 4},
+    {n: "URA", a: 19.18916464, e: 0.04725744, L0: 313.23810451, Lr: 428.48202785, w: 170.9542763, c: cyan, s: 3.4},
+    {n: "NEP", a: 30.06992276, e: 0.00859048, L0: -55.12002969, Lr: 218.45945325, w: 44.96476227, c: bright_blue, s: 3.4}
+  ]
+  let k0 = els.map(p => merge(p, {M: rad(((p.L0 + p.Lr * T - p.w) % 360 + 360) % 360)}))
+  let k1 = k0.map(p => merge(p, {E: p.M + p.e * sin(p.M)}))
+  let k2 = k1.map(p => merge(p, {E: p.E - (p.E - p.e * sin(p.E) - p.M) / (1 - p.e * cos(p.E))}))
+  let k3 = k2.map(p => merge(p, {E: p.E - (p.E - p.e * sin(p.E) - p.M) / (1 - p.e * cos(p.E))}))
+  let planets = k3.map(p => merge(p, {
+    lon: deg(2 * atan2(sqrt(1 + p.e) * sin(p.E / 2), sqrt(1 - p.e) * cos(p.E / 2))) + p.w,
+    r: p.a * (1 - p.e * cos(p.E))
+  }))
+  let shown = inner ? planets.take(4) : planets
+  let amax = inner ? 1.75 : 31
+  let earthLon = planets[2].lon
+  let moonLon = earthLon + 180 + elong          // geocentric: sun's longitude + elongation
+
+  Canvas {
+    let W = width
+    let H = height
+    let g = 3                                    // LCARS gap between blocks
+    let SW = max(44, W * 0.15)                   // sidebar width
+    let BH = max(12, H * 0.05)                   // bar height
+    let Ro = SW * 0.75                           // elbow outer radius
+    let Ri = BH * 1.3                            // elbow inner radius
+    let EY = H * 0.25                            // elbow depth
+    let capW = BH * 1.6
+
+    // elbow outline: sidebar up the left, bar along the top to x = EL
+    let EL = W * 0.40
+    let quarter = range(0, 91, 10)
+    let elbow = flatten([
+      [[0, EY]],
+      quarter.map(t => [Ro - Ro * cos(rad(t)), Ro - Ro * sin(rad(t))]),
+      [[EL, 0], [EL, BH]],
+      quarter.map(t => [SW + Ri - Ri * sin(rad(t)), BH + Ri - Ri * cos(rad(t))]),
+      [[SW, EY]]
+    ])
+
+    // ── top frame ──
+    path(elbow, closed: true, fill: accent)
+    rect(EL + g, 0, W * 0.07, BH, fill: orange)
+    rect(W - capW, 0, capW, BH, radius: BH / 2, fill: orange)
+    rect(W - capW, 0, capW / 2, BH, fill: orange)
+    text(str.title, W - capW - g * 2, BH / 2, size: BH * 1.25, align: end, font: lcars, fontWeight: 600, letterSpacing: 1.5, color: accent)
+    text("01-${round(d) % 1000}", SW - 4, EY - 8, size: 10, align: end, font: lcars, fontWeight: 600, color: background)
+
+    // ── bottom frame (the same elbow, mirrored) ──
+    scale(1, -1, 0, H / 2) {
+      path(elbow, closed: true, fill: magenta)
+      rect(EL + g, 0, W * 0.07, BH, fill: blue)
+      rect(W - capW, 0, capW, BH, radius: BH / 2, fill: blue)
+      rect(W - capW, 0, capW / 2, BH, fill: blue)
+    }
+    text(str.stardate(fixed(stardate, 1)), W - capW - g * 2, H - BH / 2, size: BH * 1.1, align: end, font: lcars, fontWeight: 500, letterSpacing: 1, color: magenta)
+    text("47-${fmtTime(now, "HHmm")}", SW - 4, H - EY + 8, size: 10, align: end, font: lcars, fontWeight: 600, color: background)
+
+    // ── sidebar pills ──
+    let py0 = EY + g
+    let ph = (H - 2 * EY - 4 * g) / 3
+    rect(0, py0, SW, ph, fill: orange)
+    text(str.luna, SW - 4, py0 + ph - 8, size: 10, align: end, font: lcars, fontWeight: 600, color: background)
+    rect(0, py0 + ph + g, SW, ph, fill: inner ? yellow : blue)
+    text(inner ? str.inner : str.outer, SW - 4, py0 + 2 * ph + g - 8, size: 10, align: end, font: lcars, fontWeight: 600, color: background)
+    rect(0, py0 + 2 * (ph + g), SW, ph, fill: muted)
+    text(str.sol(len(shown)), SW - 4, py0 + 3 * ph + 2 * g - 8, size: 10, align: end, font: lcars, fontWeight: 600, color: background)
+
+    // ── content area ──
+    let cx0 = SW + 10
+    let cy0 = BH + 8
+    let cw = W - cx0 - 2
+    let ch = H - 2 * BH - 16
+
+    // moon panel
+    let mw = cw * 0.38
+    let mr = min(mw / 2 - 6, ch * 0.27)
+    let mx = cx0 + mw / 2
+    let my = cy0 + 12 + mr
+    let ce = cos(rad(elong))
+    let sd = elong < 180 ? 1 : -1
+    let half = range(0, 181, 6)
+    let lit = flatten([
+      half.map(t => [mx + sd * mr * sin(rad(t)), my - mr * cos(rad(t))]),
+      half.map(t => [mx + sd * mr * ce * sin(rad(t)), my + mr * cos(rad(t))])
+    ])
+    text(str.lunarPhase, cx0, cy0 + 4, size: 10, font: lcars, fontWeight: 500, letterSpacing: 2, color: muted)
+    circle(mx, my, mr, fill: alpha(muted, 0.18))
+    path(lit, closed: true, fill: mix(foreground, yellow, 0.15))
+    for k in range(7) {
+      circle(mx + (hash(k, 1) - 0.5) * mr * 1.2, my + (hash(k, 2) - 0.5) * mr * 1.2, mr * (0.06 + hash(k, 3) * 0.1), fill: alpha(background, 0.08))
+    }
+    circle(mx, my, mr + 3, stroke: alpha(accent, 0.6), width: 1)
+
+    let ry = my + mr + 18
+    let lh = max(13, (cy0 + ch - ry) / 5)
+    text(phaseName, cx0, ry, size: 14, font: lcars, fontWeight: 600, letterSpacing: 0.5, color: accent)
+    text(str.illumination, cx0, ry + lh, size: 10, font: lcars, color: muted)
+    text("${round(illum * 100)}%", cx0 + mw, ry + lh, size: 11, align: end, font: lcars, fontWeight: 600, color: foreground)
+    text(str.age, cx0, ry + 2 * lh, size: 10, font: lcars, color: muted)
+    text(str.ageDays(fixed(age, 1)), cx0 + mw, ry + 2 * lh, size: 11, align: end, font: lcars, fontWeight: 600, color: foreground)
+    text(str.nextFull, cx0, ry + 3 * lh, size: 10, font: lcars, color: muted)
+    text(upper(fmtTime(nextFull, "d MMM")), cx0 + mw, ry + 3 * lh, size: 11, align: end, font: lcars, fontWeight: 600, color: orange)
+    text(str.nextNew, cx0, ry + 4 * lh, size: 10, font: lcars, color: muted)
+    text(upper(fmtTime(nextNew, "d MMM")), cx0 + mw, ry + 4 * lh, size: 11, align: end, font: lcars, fontWeight: 600, color: orange)
+
+    // divider between panels
+    let dx = cx0 + mw + 10
+    rect(dx, cy0, 3, ch * 0.3, fill: alpha(accent, 0.7))
+    rect(dx, cy0 + ch * 0.3 + g, 3, ch * 0.2, fill: alpha(orange, 0.7))
+    rect(dx, cy0 + ch * 0.5 + 2 * g, 3, ch * 0.5 - 2 * g, fill: alpha(magenta, 0.7))
+
+    // orrery panel
+    let ox0 = dx + 10
+    let ow = cx0 + cw - ox0
+    let R = min(ow - 36, ch - 16) / 2 - 4
+    let ex = inner ? 0.75 : 0.32                 // orbit radius ~ a^ex keeps all eight readable
+    let ocx = ox0 + ow / 2
+    let ocy = cy0 + 16 + (ch - 16) / 2
+    text(inner ? str.innerSystem : str.solarSystem, ox0, cy0 + 4, size: 10, font: lcars, fontWeight: 500, letterSpacing: 2, color: muted)
+    text(str.heliocentric, ox0 + ow, cy0 + 4, size: 10, align: end, font: lcars, color: alpha(muted, 0.7))
+
+    // grid: outer ring with ticks every 30 degrees, crosshair
+    circle(ocx, ocy, R + 2, stroke: alpha(accent, 0.5), width: 1)
+    for i in range(12) {
+      rotate(i * 30, ocx, ocy) { line(ocx, ocy - R - 2, ocx, ocy - R + (i % 3 == 0 ? 6 : 3), stroke: i % 3 == 0 ? accent : alpha(accent, 0.6), width: 1.5) }
+    }
+    line(ocx - R, ocy, ocx + R, ocy, stroke: alpha(muted, 0.2), width: 1)
+    line(ocx, ocy - R, ocx, ocy + R, stroke: alpha(muted, 0.2), width: 1)
+
+    // orbits and planets
+    for p in shown {
+      let orr = R * pow(p.a / amax, ex)
+      let pr = R * pow(p.r / amax, ex)
+      let px = ocx + pr * cos(rad(p.lon))
+      let py = ocy - pr * sin(rad(p.lon))
+      circle(ocx, ocy, orr, stroke: p.n == "TER" ? alpha(blue, 0.55) : alpha(muted, 0.3), width: 1)
+      if p.n == "SAT" {
+        line(px - p.s * 2.1, py + 1.2, px + p.s * 2.1, py - 1.2, stroke: alpha(p.c, 0.8), width: 1.2, cap: round)
+      }
+      circle(px, py, p.s, fill: p.c)
+      if p.n == "TER" {
+        circle(px, py, p.s + 3, stroke: blue, width: 1)
+        circle(px + 7 * cos(rad(moonLon)), py - 7 * sin(rad(moonLon)), 1.4, fill: foreground)
+      }
+      if inner || p.a > 1.2 {
+        text(p.n, px + (px >= ocx ? 1 : -1) * (p.s + 4), py - p.s - 4, size: 8, align: px >= ocx ? "start" : "end", font: lcars, fontWeight: 600, color: alpha(p.c, 0.9))
+      }
+    }
+    circle(ocx, ocy, inner ? 6 : 3.5, fill: yellow)
+    circle(ocx, ocy, (inner ? 6 : 3.5) + 2, fill: alpha(yellow, 0.25))
+  }
+}

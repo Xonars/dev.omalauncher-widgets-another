@@ -4,7 +4,7 @@ app "APK Maker" {
   back: forceAdv || view != "apps"
   onBack: { forceAdv = false; view = "apps"; appStep = ""; showMore = false }
 
-  meta { owl: 9; description: "Turn ideas into Android apps with Claude Code, Codex or OpenCode. Build on your phone, review changes, sync with GitHub and prepare Google Play releases."; version: "3.0.0"; license: "MIT"; category: "dev" }
+  meta { owl: 9; description: "Turn ideas into Android apps with Claude Code, Codex or OpenCode. Build on your phone, review changes, sync with GitHub and prepare Google Play releases."; version: "3.0.1"; license: "MIT"; category: "dev" }
 
   requires { pacman: ["bash", "coreutils", "grep", "sed", "tar", "gzip", "jq", "git", "github-cli", "curl", "unzip", "util-linux", "jdk17-openjdk", "android-tools", "openssl", "nano", "less", "opencode", "findutils", "gawk", "procps-ng", "bubblewrap", "python", "python-pillow"] }
 

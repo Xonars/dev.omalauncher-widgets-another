@@ -29,22 +29,16 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
-      - name: Owner-only catalog
+      - name: Verify collection sources and resource packages
         run: |
-          python3 - <<'CHECK'
-          from pathlib import Path
-          for kind in ('widgets', 'faces', 'apps'):
-              root = Path(kind)
-              root.mkdir(exist_ok=True)
-              unexpected = [str(p) for p in root.iterdir() if p.is_dir() and p.name != 'xonars']
-              if unexpected:
-                  raise SystemExit(f'Unexpected catalog authors: {unexpected}')
-          CHECK
+          python3 -m unittest discover -s tests/store -v
+          python3 tools/verify-local-store.py
       - name: Catalog
         run: |
           java -jar tools/owl.jar index .
           java -jar tools/owl.jar index . --faces
           java -jar tools/owl.jar index . --apps
+          python3 tools/verify-local-store.py --catalogs
       - name: Verify catalog previews
         run: |
           python3 - <<'CHECK'
@@ -64,7 +58,7 @@ jobs:
       - name: Site
         run: |
           mkdir _site
-          cp -r index.json faces.json apps.json widgets faces apps w _site/
+          cp -r index.json faces.json apps.json widgets faces apps w resources store-collection.json _site/
           touch _site/.nojekyll
       - uses: actions/upload-pages-artifact@v3
         with:

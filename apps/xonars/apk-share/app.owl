@@ -1,13 +1,65 @@
 app "APK Share" {
+  // Fixed SHA-256 resource package; installed only inside this entry's private directory.
+  let storeBootstrap = """
+# Template embedded in store OWL. Packages are fixed and SHA-256 verified.
+import fcntl
+import hashlib
+import io
+import os
+from pathlib import Path, PurePosixPath
+import tempfile
+import urllib.request
+import zipfile
+
+
+def install(url, digest, entry):
+    if not entry or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789-" for c in entry):
+        raise ValueError("Invalid store entry")
+    root = Path.home() / '.local/share/omalauncher-store' / entry
+    if any(p.is_symlink() for p in [root, *root.parents]):
+        raise ValueError('Symlink in resource destination')
+    root.mkdir(parents=True, exist_ok=True)
+    with (root / '.install.lock').open('w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        marker = root / '.installed'
+        if marker.exists() and marker.read_text() == digest:
+            return
+        with urllib.request.urlopen(url, timeout=60) as response:
+            payload = response.read(32 * 1024 * 1024 + 1)
+        if len(payload) > 32 * 1024 * 1024 or hashlib.sha256(payload).hexdigest() != digest:
+            raise ValueError('Store resource SHA-256 mismatch')
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            members = archive.infolist()
+            if sum(x.file_size for x in members) > 128 * 1024 * 1024:
+                raise ValueError('Store resource package too large')
+            for info in members:
+                path = PurePosixPath(info.filename)
+                if path.is_absolute() or '..' in path.parts or not path.parts or path.parts[0] not in ('widgets', 'support'):
+                    raise ValueError('Invalid store resource path')
+                target = root.joinpath(*path.parts)
+                # No symlinks in the destination chain or package extraction.
+                if any(p.is_symlink() for p in [target, *target.parents]):
+                    raise ValueError('Symlink in resource destination')
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as output:
+                    output.write(archive.read(info))
+                    temporary = Path(output.name)
+                os.replace(temporary, target)
+        marker.write_text(digest)
+
+install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/132485d88422723fbd32dad1bfda5dbcef37462240a714f22e86e4ef18010809.zip', '132485d88422723fbd32dad1bfda5dbcef37462240a714f22e86e4ef18010809', 'xonars-apk-share')
+"""
+  let storeInstall = "python -c ${sh(storeBootstrap)}"
+
   title: "APK Share"
   icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 17 24 7l18 10v23H6zM6 17l18 10 18-10M24 27v13"/><path d="M24 3v14m-5-5 5 5 5-5"/></svg>"""
-  meta { owl: 8; description: "Install local APK files directly on Android; optional APK-only HTTP sharing."; version: "2.0"; license: "MIT"; category: "dev" }
-  requires { pacman: ["python"] }
+  meta { owl: 8; description: "Install local APK files directly on Android; optional APK-only HTTP sharing. · ресурсы при первом запуске"; version: "2.0.1"; license: "MIT"; category: "dev" }
+  requires { pacman: ["python", "python"] }
   state directory = "~/APK" persist
   state bindAddress = "127.0.0.1" persist
   state operation = ""
-  source server = cmd("python ~/.config/omalauncher/widgets/apk-share/backend.py status --directory ${sh(directory)}") every 2s json timeout 30s
-  source listing = cmd("python ~/.config/omalauncher/widgets/apk-share/backend.py list --directory ${sh(directory)}") every 60s json timeout 30s
+  source server = cmd("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-apk-share/widgets/apk-share/backend.py status --directory ${sh(directory)}") every 2s json timeout 30s
+  source listing = cmd("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-apk-share/widgets/apk-share/backend.py list --directory ${sh(directory)}") every 60s json timeout 30s
   let address = server.url ?? "http://127.0.0.1:8765/"
   let running = server.status == "Running"
   let statusColor = running ? green : server.status == "Error" ? red : muted
@@ -22,8 +74,8 @@ app "APK Share" {
     Row {
       gap: 6
       wrap: true
-      Button { text: "Start"; onTap: { operation = run("python ~/.config/omalauncher/widgets/apk-share/backend.py start --directory ${sh(directory)} --bind ${sh(bindAddress)}"); refresh() } }
-      Button { text: "Stop"; color: muted; onTap: { operation = run("python ~/.config/omalauncher/widgets/apk-share/backend.py stop"); refresh() } }
+      Button { text: "Start"; onTap: { operation = run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-apk-share/widgets/apk-share/backend.py start --directory ${sh(directory)} --bind ${sh(bindAddress)}"); refresh() } }
+      Button { text: "Stop"; color: muted; onTap: { operation = run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-apk-share/widgets/apk-share/backend.py stop"); refresh() } }
       Button { text: "Refresh"; color: muted; onTap: refresh() }
       Button { text: "Copy URL"; color: accent; onTap: copy(address) }
     }
@@ -42,8 +94,13 @@ app "APK Share" {
           if details {
             Text { text: apk.path; style: small; color: muted; maxLines: 1 }
           }
-          if running && listing.directory == server.directory {
-            Button { text: "Download"; onTap: url(address + sub(apk.url, 1, len(apk.url))) }
+          Row {
+            gap: 6
+            wrap: true
+            if running && listing.directory == server.directory {
+              Button { text: "Download"; onTap: url(address + sub(apk.url, 1, len(apk.url))) }
+            }
+            Button { text: "Install"; onTap: run("omalauncher-install ${sh(apk.full_path)} 'APK Share'") }
           }
           Rule { }
         }
@@ -55,7 +112,7 @@ app "APK Share" {
       padding: 12
       scroll: true
       gap: 12
-      Text { text: "Нажмите Start в разделе раздачи, затем Download у APK. Откройте скачанный файл в Android и подтвердите установку."; style: small; color: muted }
+      Text { text: "Нажмите Install у APK и подтвердите установку в Android. Для скачивания нажмите Start, затем Download."; style: small; color: muted }
       Button { text: "Обновить список"; onTap: refresh() }
       Heading { label: "КАТАЛОГ APK" }
       Text { text: "Путь к каталогу (абсолютный или ~/...)"; style: small; color: muted }

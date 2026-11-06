@@ -1,5 +1,17 @@
 # Cassette
 
+Автор оригинала: [Xonars](https://github.com/Xonars/dev.omalauncher-widgets-another).
+
+Локальная разработка; сведения об исходных компонентах и лицензиях сохранены в файлах.
+
+Локальная упаковка и сопровождение: Xonars. Исходная лицензия: MIT. Уведомления о лицензиях в исходниках и ресурсах сохранены.
+
+Дополнительный пакет ресурсов не требуется.
+
+---
+
+# Cassette
+
 An independent OWL client for Yandex Music, inspired by
 [Rirusha/Cassette](https://github.com/Rirusha/Cassette). This is an original OWL/Python
 implementation, not a GTK port. No GTK binaries or upstream artwork are bundled.

@@ -1,5 +1,5 @@
 app "Cassette" {
-  meta { owl: 19; description: "Yandex Music client with search, library, downloads and Android media controls. English and Russian UI."; version: "1.11"; license: "MIT"; category: "media" }
+  meta { owl: 19; description: "Yandex Music client with search, library, downloads and Android media controls. English and Russian UI."; version: "1.11.1"; license: "MIT"; category: "media" }
   let backend = """
 #!/usr/bin/env python3
 '''Token-free mpv IPC bridge for Cassette OWL.'''
@@ -190,7 +190,10 @@ def ensure_player():
             pass
         Path(SOCKET).unlink(missing_ok=True)
         subprocess.Popen(['mpv', '--idle=yes', '--no-video', '--no-terminal',
-            '--audio-display=no', '--input-ipc-server=' + SOCKET],
+            '--audio-display=no', '--ao=pulse', '--audio-device=pulse/android',
+            '--audio-samplerate=48000', '--audio-buffer=1', '--pulse-buffer=500',
+            '--demuxer-readahead-secs=15', '--cache-pause-wait=3',
+            '--input-ipc-server=' + SOCKET],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             start_new_session=True)
         for _ in range(50):
@@ -258,7 +261,7 @@ def main(args):
         return
     if action in ('next', 'previous', 'stop-control'):
         # The Android owner keeps OWL's queue live; no token ever leaves Android.
-        subprocess.run(['owl-send', 'cassette.owl', 'set', 'mediaControl',
+        subprocess.run(['owl-send', 'market-app-xonars-cassette.owl', 'set', 'mediaControl',
                         json.dumps({'action': action, 'nonce': time.time_ns()})],
                        check=True, timeout=8, capture_output=True)
         return
@@ -341,7 +344,7 @@ if __name__ == '__main__':
   title: ""
   icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="9" width="42" height="30" rx="4"/><circle cx="15" cy="22" r="5"/><circle cx="33" cy="22" r="5"/><path d="M20 22h8M11 39l4-9h18l4 9"/></svg>"""
   state token = null secret
-  state language = "en" persist
+  state language = "ru" persist
   let english = language == "en"
   let labels = {"Главная": "Home", "Поиск": "Search", "Любимое": "Liked", "Плейлисты": "Playlists", "Волна": "My Wave", "Очередь": "Queue", "Скачанное": "Downloads", "Настройки": "Settings", "Треки": "Tracks", "Альбомы": "Albums", "Артисты": "Artists"}
   state tab = "Главная"

@@ -1,0 +1,231 @@
+widget "Темы и обои" {
+  // Fixed SHA-256 resource package; installed only inside this entry's private directory.
+  let storeBootstrap = """
+# Template embedded in store OWL. Packages are fixed and SHA-256 verified.
+import fcntl
+import hashlib
+import io
+import os
+from pathlib import Path, PurePosixPath
+import tempfile
+import urllib.request
+import zipfile
+
+
+def install(url, digest, entry):
+    if not entry or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789-" for c in entry):
+        raise ValueError("Invalid store entry")
+    root = Path.home() / '.local/share/omalauncher-store' / entry
+    if any(p.is_symlink() for p in [root, *root.parents]):
+        raise ValueError('Symlink in resource destination')
+    root.mkdir(parents=True, exist_ok=True)
+    with (root / '.install.lock').open('w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        marker = root / '.installed'
+        if marker.exists() and marker.read_text() == digest:
+            return
+        with urllib.request.urlopen(url, timeout=60) as response:
+            payload = response.read(32 * 1024 * 1024 + 1)
+        if len(payload) > 32 * 1024 * 1024 or hashlib.sha256(payload).hexdigest() != digest:
+            raise ValueError('Store resource SHA-256 mismatch')
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            members = archive.infolist()
+            if sum(x.file_size for x in members) > 128 * 1024 * 1024:
+                raise ValueError('Store resource package too large')
+            for info in members:
+                path = PurePosixPath(info.filename)
+                if path.is_absolute() or '..' in path.parts or not path.parts or path.parts[0] not in ('widgets', 'support'):
+                    raise ValueError('Invalid store resource path')
+                target = root.joinpath(*path.parts)
+                # No symlinks in the destination chain or package extraction.
+                if any(p.is_symlink() for p in [target, *target.parents]):
+                    raise ValueError('Symlink in resource destination')
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as output:
+                    output.write(archive.read(info))
+                    temporary = Path(output.name)
+                os.replace(temporary, target)
+        marker.write_text(digest)
+
+install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/9cd6336320c9b6de04f5f1fd429280436a86fe9c7196c79017eda13554047e31.zip', '9cd6336320c9b6de04f5f1fd429280436a86fe9c7196c79017eda13554047e31', 'xonars-themes')
+"""
+  let storeInstall = "python -c ${sh(storeBootstrap)}"
+
+  meta { owl: 17; description: "Темы, палитры и каталог обоев · ресурсы при первом запуске" ; version: "1.0.1"; license: "MIT"; category: "system" }
+  requires { pacman: ["python", "python", "bash", "python-pillow"] }
+  size: 6x2
+  minSize: 1x1
+  // Каталог использует уменьшенные превью из локального кэша.
+  source data = cmd("python -c ${sh(storeBootstrap)} && python3 ~/.local/share/omalauncher-store/xonars-themes/widgets/theme-catalog/catalog.py list") every 5m json timeout 120s
+  source appearance = cmd("python -c ${sh(storeBootstrap)} && python3 ~/.local/share/omalauncher-store/xonars-themes/widgets/theme-catalog/catalog.py status") every 5s json
+  state tab = "themes"
+  state query = ""
+  state favorites = [] persist
+  state onlyFavorites = false persist
+  state allWalls = false
+  state message = ""
+  let themes = data.themes ?? []
+  let current = appearance.theme
+  let active = find(themes, t => t.name == current)
+  let names = themes.map(t => t.name)
+  let total = max(1, len(names))
+  let index = max(0, indexOf(names, current))
+  let previous = names[(index + total - 1) % total]
+  let next = names[(index + 1) % total]
+  let favoriteThemes = themes.filter(t => contains(favorites, t.name))
+  let filteredThemes = onlyFavorites ? favoriteThemes : themes
+  let shownThemes = trim(query) == "" ? filteredThemes : rank(filteredThemes, query)
+  let walls = flatten((allWalls ? themes : themes.filter(t => t.name == current)).map(t => t.walls))
+  let shownWalls = walls.filter(w => contains(lower(w.name + " " + w.theme), lower(query)))
+  let landscape = (screenWidth ?? 360) > (screenHeight ?? 800)
+  let gridColumns = max(1, floor(((screenWidth ?? 360) - 24) / 156))
+  let cardWidth = ((screenWidth ?? 360) - 24 - (gridColumns - 1) * 10) / gridColumns
+  let previewHeight = clamp((cardWidth - 16) * 0.6, 80, landscape ? 100 : 140)
+  onTap: { refresh(); screen() }
+
+  Row {
+    fill: true
+    align: center
+    gap: 8
+    Text {
+      text: "‹"; fontSize: 36; padding: [10, 8]
+      onTap: { if len(names) > 0 { haptic(); message = run("python -c ${sh(storeBootstrap)} && python3 ~/.local/share/omalauncher-store/xonars-themes/widgets/theme-catalog/catalog.py set ${sh(previous)}") } }
+    }
+    Column {
+      weight: 1; gap: 10
+      Text { text: current ?? "…"; fontSize: (tileWidth ?? 360) < 240 ? 18 : 24; maxLines: 1; align: center }
+      Row {
+        gap: 3
+        for c in active.swatch ?? [background, foreground, accent, red, green, yellow, blue, magenta] {
+          Box { height: 10; weight: 1; background: c; radius: 2 * corners }
+        }
+      }
+    }
+    Text {
+      text: "›"; fontSize: 36; padding: [10, 8]
+      onTap: { if len(names) > 0 { haptic(); message = run("python -c ${sh(storeBootstrap)} && python3 ~/.local/share/omalauncher-store/xonars-themes/widgets/theme-catalog/catalog.py set ${sh(next)}") } }
+    }
+  }
+
+  component ThemeCard(t) {
+    let selected = current == t.name
+    let favorite = contains(favorites, t.name)
+    Column {
+      padding: 8; gap: 8; radius: 10 * corners
+      background: alpha(surface, 0.65)
+      border: selected ? 2 : 1; borderColor: selected ? accent : border
+      onTap: { haptic(); message = run("python -c ${sh(storeBootstrap)} && python3 ~/.local/share/omalauncher-store/xonars-themes/widgets/theme-catalog/catalog.py set ${sh(t.name)}") }
+      if t.preview != null {
+        Image { src: t.preview; height: previewHeight; fill: width; fit: cover; clip: true; radius: 5 * corners; label: t.name }
+      } else {
+        Box { height: previewHeight; fill: width; background: t.swatch[0] ?? background; align: center
+          Text { text: "Aa"; fontSize: 32; align: center; color: t.swatch[1] ?? foreground }
+        }
+      }
+      Row {
+        align: center; gap: 4
+        Text { text: selected ? "✓ ${t.name}" : t.name; weight: 1; style: small; bold: selected; maxLines: 1 }
+        Text {
+          text: favorite ? "★" : "☆"; fontSize: 24; padding: [8, 6]
+          color: favorite ? accent : muted
+          onTap: {
+            haptic()
+            if favorite { favorites = favorites.filter(n => n != t.name) }
+            else { favorites = favorites + [t.name] }
+          }
+        }
+      }
+      Row { gap: 2; for c in t.swatch { Box { height: 8; weight: 1; background: c } } }
+    }
+  }
+
+  component Navigation() {
+      Row {
+        gap: 8
+        for item in [{id: "themes", name: "Темы"}, {id: "walls", name: "Обои"}] {
+          Text {
+            text: item.name; weight: 1; align: center; padding: [12, landscape ? 6 : 10]
+            background: tab == item.id ? alpha(accent, 0.2) : surface
+            border: 1; borderColor: tab == item.id ? accent : border; radius: 8 * corners
+            onTap: { tab = item.id; query = "" }
+          }
+        }
+      }
+  }
+
+  screen {
+    title: "Темы и обои"
+    Column {
+      fill: true; gap: landscape ? 6 : 10; padding: 12
+      if landscape {
+        Row {
+          gap: 12; align: center
+          Navigation { weight: 1 }
+          Input { text: query; weight: 1; placeholder: tab == "themes" ? "Найти тему…" : "Найти обои…"; onChange: query = value }
+        }
+      } else {
+        Navigation { }
+        Input { text: query; placeholder: tab == "themes" ? "Найти тему…" : "Найти обои…"; onChange: query = value }
+      }
+      if data == null { Text { text: "Загрузка каталога…"; style: small; color: muted } }
+      if message != "" { Text { text: message; style: small; color: red } }
+      if tab == "themes" {
+        Row {
+          gap: 8
+          for filter in [{id: false, name: "Все · ${len(themes)}"}, {id: true, name: "★ Избранные · ${len(favoriteThemes)}"}] {
+            Text {
+              text: filter.name; weight: 1; align: center; padding: [10, 8]; style: small
+              background: onlyFavorites == filter.id ? alpha(accent, 0.2) : surface
+              border: 1; borderColor: onlyFavorites == filter.id ? accent : border; radius: 8 * corners
+              onTap: onlyFavorites = filter.id
+            }
+          }
+        }
+        if !landscape { Text { text: "Нажмите тему, чтобы применить · ☆ — в избранное"; fontSize: 11; color: muted } }
+        Text { text: "${len(shownThemes)} тем · сейчас ${current ?? "…"}"; style: small; color: muted; maxLines: 1 }
+        Grid {
+          columns: gridColumns
+          lazy: true; weight: 1; gap: 10; onPull: refresh()
+          for t in shownThemes key t.name { ThemeCard { t: t } }
+        }
+        if data != null && len(shownThemes) == 0 {
+          Column {
+            gap: 8; padding: 12
+            Text { text: onlyFavorites && query == "" ? "Здесь будут любимые темы" : "Темы не найдены"; align: center }
+            Text { text: onlyFavorites && query == "" ? "Откройте «Все» и нажмите ☆ на карточке темы" : "Попробуйте другое название или очистите поиск"; style: small; color: muted; align: center }
+            Button { text: onlyFavorites && query == "" ? "Посмотреть все темы" : "Сбросить поиск"; onTap: { if query != "" { query = "" } else { onlyFavorites = false } } }
+          }
+        }
+      } else {
+        Row {
+          align: center
+          Text { text: allWalls ? "Все темы · ${len(shownWalls)}" : "${current ?? "…"} · ${len(shownWalls)}"; weight: 1; style: small; maxLines: 1 }
+          Button { text: allWalls ? "Текущая тема" : "Все темы"; onTap: allWalls = !allWalls }
+        }
+        Grid {
+          columns: gridColumns
+          lazy: true; weight: 1; gap: 10; onPull: refresh()
+          for w in shownWalls key w.path {
+            let selected = current == w.theme && (appearance.background ?? active.walls[0].name) == w.name
+            Column {
+              padding: 6; gap: 6; radius: 10 * corners
+              background: alpha(surface, 0.65)
+              border: selected ? 2 : 1; borderColor: selected ? accent : border
+              onTap: { haptic(); message = run("python -c ${sh(storeBootstrap)} && python3 ~/.local/share/omalauncher-store/xonars-themes/widgets/theme-catalog/catalog.py set ${sh(w.theme)} ${sh(w.name)}") }
+              if w.preview != null {
+                Image { src: w.preview; height: previewHeight; fill: width; fit: cover; clip: true; radius: 6 * corners; label: w.name }
+              } else {
+                Box { height: previewHeight; fill: width; background: surface; align: center
+                  Text { text: "Нет превью"; style: small; color: muted; align: center }
+                }
+              }
+              Text { text: selected ? "✓ ${w.name}" : w.name; style: small; maxLines: 1 }
+              if allWalls { Text { text: w.theme; fontSize: 10; color: muted; maxLines: 1 } }
+            }
+          }
+        }
+        if len(shownWalls) == 0 { Text { text: "Обои не найдены"; color: muted } }
+      }
+    }
+  }
+}

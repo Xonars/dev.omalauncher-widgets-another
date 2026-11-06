@@ -1,5 +1,17 @@
 # Шахматы
 
+Автор оригинала: [vitalii-khomenko](https://github.com/SimonSchubert/omarchy-widgets/tree/main/widgets/vitalii-khomenko/chess).
+
+Приложение и адаптация Xonars на основе виджета vitalii-khomenko.
+
+Локальная упаковка и сопровождение: Xonars. Исходная лицензия: MIT. Уведомления о лицензиях в исходниках и ресурсах сохранены.
+
+Дополнительный пакет ресурсов не требуется.
+
+---
+
+# Шахматы
+
 OWL-приложение Xonars на основе виджета vitalii-khomenko.
 Исходный виджет: https://github.com/SimonSchubert/omarchy-widgets/tree/main/widgets/vitalii-khomenko/chess
 
