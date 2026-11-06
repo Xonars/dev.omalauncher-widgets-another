@@ -39,7 +39,7 @@ def main():
    text=text.replace('  source workNums = ', '  let storeWorkCounts = """\n'+helper+'"""\n  source workNums = ',1)
    text=re.sub(r'^  source workNums = .*$', lambda m:'  source workNums = cmd("python -c ${sh(storeWorkCounts)} ${sh(repo)}") every 10s timeout 20s',text,flags=re.M)
 
-  if filename=='cassette.owl': text=text.replace("'cassette.owl'", "'market-app-xonars-cassette.owl'")
+  if filename=='cassette.owl': text=text.replace("'cassette.owl'", "'market-app-xonars-xonars-cassette.owl'")
   paths=DEPENDENCIES.get(filename,[]); replacements={}
   if paths:
    replacements={'~/.config/omalauncher/widgets':f'~/.local/share/omalauncher-store/{entry}/widgets','/root/.config/omalauncher/widgets':f'/root/.local/share/omalauncher-store/{entry}/widgets','$HOME/.config/omalauncher/widgets':f'$HOME/.local/share/omalauncher-store/{entry}/widgets',"'.config/omalauncher/widgets'":f"'.local/share/omalauncher-store/{entry}/widgets'"}
@@ -99,6 +99,7 @@ def main():
   text=text.replace('category: "reading"', 'category: "productivity"')
   # A version change causes existing store installs to receive the packaged helpers.
   text=re.sub(r'(\bversion:\s*")([^"]+)(")',lambda m:m[1]+bumped_version(m[2])+m[3],text,count=1)
+  if filename=='cassette.owl': text=text.replace('version: "1.11.1"', 'version: "1.11.2"')
   if kind=='app' and not re.search(r'^\s*icon:',text,re.M):
    pos=re.search(r'^app\s+"[^"]+"\s*\{',text,re.M).end(); text=text[:pos]+'\n  icon: "<svg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 48 48\'><rect x=\'8\' y=\'8\' width=\'32\' height=\'32\' rx=\'6\' fill=\'currentColor\'/></svg>"\n'+text[pos:]
   owl=folder/(kind+'.owl'); owl.write_text(text.rstrip()+'\n')

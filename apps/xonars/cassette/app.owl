@@ -1,5 +1,5 @@
 app "Cassette" {
-  meta { owl: 19; description: "Yandex Music client with search, library, downloads and Android media controls. English and Russian UI."; version: "1.11.1"; license: "MIT"; category: "media" }
+  meta { owl: 19; description: "Yandex Music client with search, library, downloads and Android media controls. English and Russian UI."; version: "1.11.2"; license: "MIT"; category: "media" }
   let backend = """
 #!/usr/bin/env python3
 '''Token-free mpv IPC bridge for Cassette OWL.'''
@@ -261,7 +261,7 @@ def main(args):
         return
     if action in ('next', 'previous', 'stop-control'):
         # The Android owner keeps OWL's queue live; no token ever leaves Android.
-        subprocess.run(['owl-send', 'market-app-xonars-cassette.owl', 'set', 'mediaControl',
+        subprocess.run(['owl-send', 'market-app-xonars-xonars-cassette.owl', 'set', 'mediaControl',
                         json.dumps({'action': action, 'nonce': time.time_ns()})],
                        check=True, timeout=8, capture_output=True)
         return
