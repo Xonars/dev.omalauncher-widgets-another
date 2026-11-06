@@ -57,7 +57,7 @@ jobs:
           CHECK
       - name: Site
         run: |
-          mkdir _site
+          mkdir -p _site faces
           cp -r index.json faces.json apps.json widgets faces apps w resources store-collection.json _site/
           touch _site/.nojekyll
       - uses: actions/upload-pages-artifact@v3
