@@ -1,6 +1,7 @@
 # omarchy-widgets-another by Xonars
 
-Полная локальная коллекция телефона с ресурсами: [local/phone-widgets](local/phone-widgets/SNAPSHOT.md).
+Полная локальная коллекция телефона с ресурсами (обновлена 6 ноября 2026): [local/phone-widgets](local/phone-widgets/SNAPSHOT.md).
+Авторы оригиналов и локальных адаптаций: [AUTHORS.md](local/phone-widgets/AUTHORS.md).
 Сторонние работы сохраняют исходное авторство и не смешиваются с каталогом Xonars.
 
 OWL apps и widgets Xonars: `apps/xonars/` и `widgets/xonars/`.

@@ -6,17 +6,14 @@ widget "cava terminal" {
   meta {
     owl: 2
     description: "Cava audio visualizer when idle. Tap to resume your shell; tap away to return to cava."
-    version: "1.1"
+    version: "1.2"
     license: "MIT"
     category: "system"
   }
   requires { pacman: ["bash", "foot", "tmux", "cava"] }
 
-  // Separate tmux server: no changes to your normal tmux configuration.
-  // Focus changes swap windows; the shell keeps running behind the visualizer.
-  // Restart only the visualizer on resize: cava can keep its original dimensions.
-  // Destroy this session when its terminal closes, including on widget reload.
+  // Isolated terminal session with automatic recovery of the shell and animation.
   Terminal {
-    command: 'exec tmux -L "owl-cava-$$" -f /dev/null new-session -d -s cava -n shell "bash -i" \; new-window -t cava: -n visualizer "cava" \; set-hook -w -t cava:visualizer window-resized "respawn-pane -k -t cava:visualizer" \; set-option -g status off \; set-option -g focus-events on \; set-hook -g client-focus-in "select-window -t cava:shell" \; set-hook -g client-focus-out "select-window -t cava:visualizer" \; set-hook -g client-attached "set-option -t cava destroy-unattached on" \; select-window -t cava:visualizer \; attach-session -t cava'
+    command: 'exec bash ~/.config/omalauncher/widgets/terminal-support/session.sh cava'
   }
 }

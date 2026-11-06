@@ -6,12 +6,20 @@ widget "Системная панель" {
   padding: 10
   requires { pacman: ["bash", "gawk", "coreutils"] }
 
-  source cpuSample = cmd("""
-    { awk '/^cpu / {print; exit}' /proc/stat; sleep 0.4; awk '/^cpu / {print; exit}' /proc/stat; } |
-    awk 'NR==1 {for(i=2;i<=9;i++) total+=$i; idle=$5+$6; next}
-         NR==2 {for(i=2;i<=9;i++) nextTotal+=$i; delta=nextTotal-total;
-                if(delta>0) printf "%.1f", 100*(1-($5+$6-idle)/delta)}'
-  """) every 3s
+  source cpuTicks = cmd("awk '/^cpu / {total=0; for(i=2;i<=9;i++) total+=$i; print total, $5+$6; exit}' /proc/stat") every 3s
+  state previousTotal = null
+  state previousIdle = null
+  state cpu = null
+  on cpuTicks first {
+    let ticks = words(cpuTicks)
+    let total = num(ticks[0])
+    let idle = num(ticks[1])
+    if previousTotal != null && total > previousTotal {
+      cpu = clamp(100 * (1 - (idle - previousIdle) / (total - previousTotal)), 0, 100)
+    }
+    previousTotal = total
+    previousIdle = idle
+  }
   source sys = android.system every 3s
   source bat = android.battery
   source power = android.power every 3s
@@ -19,7 +27,6 @@ widget "Системная панель" {
   state selected = "cpu"
   let compact = (tileWidth ?? 300) < 260 || (tileHeight ?? 240) < 210
   let dial = compact ? 42 : 60
-  let cpu = clamp(num(cpuSample), 0, 100)
   let ram = sys.memory.total > 0 ? sys.memory.used / sys.memory.total * 100 : null
   let cpuHistory = history(cpu, 40)
   let ramHistory = history(ram, 40)
@@ -57,7 +64,7 @@ widget "Системная панель" {
     gap: 8
     Row {
       align: center
-      Text { text: "${bat.temp}° ${bat.charging ? 'ϟ' : ''}"; color: foreground; fontSize: 10; weight: 1 }
+      Text { text: bat.charging ? "ϟ" : ""; color: foreground; fontSize: 10; weight: 1 }
       Box {
         width: 28; height: 22; radius: 6; background: alpha(accent, 0.13)
         onTap: screen()
@@ -112,7 +119,7 @@ widget "Системная панель" {
         Text { text: "БАТАРЕЯ"; color: green; letterSpacing: 2; fontSize: 12 }
         Text { text: "${bat.level}% · ${bat.charging ? 'заряжается' : 'разряжается'}"; fontSize: 26; bold: true }
         Progress { value: bat.level; color: bat.level < 20 ? red : green; height: 6 }
-        Text { text: "${bat.temp} °C · ${bat.voltage} В"; fontSize: 13 }
+        Text { text: "${bat.voltage} В"; fontSize: 13 }
         if power.watts != null { Text { text: "Мощность: ${fixed(abs(power.watts), 1)} Вт"; color: foreground; fontSize: 12 } }
         if power.chargeTime > 0 && bat.charging { Text { text: "До полного заряда: ${fmtDuration(power.chargeTime)}"; color: foreground; fontSize: 12 } }
         Button { text: "Настройки батареи ↗"; onTap: settings("battery") }

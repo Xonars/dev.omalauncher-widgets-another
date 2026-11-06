@@ -1,24 +1,34 @@
 widget "Темы и обои" {
   meta { owl: 17; description: "Темы, палитры и каталог обоев" }
-  requires { pacman: ["python", "bash"] }
+  requires { pacman: ["python", "bash", "python-pillow"] }
   size: 6x2
   minSize: 1x1
-  source data = cmd("python3 ~/.config/omalauncher/widgets/theme-catalog/catalog.py") every 10s json
+  // Каталог использует уменьшенные превью из локального кэша.
+  source data = cmd("python3 ~/.config/omalauncher/widgets/theme-catalog/catalog.py list") every 5m json timeout 120s
+  source appearance = cmd("python3 ~/.config/omalauncher/widgets/theme-catalog/catalog.py status") every 5s json
   state tab = "themes"
   state query = ""
+  state favorites = [] persist
+  state onlyFavorites = false persist
   state allWalls = false
   state message = ""
   let themes = data.themes ?? []
-  let current = data.theme
+  let current = appearance.theme
   let active = find(themes, t => t.name == current)
   let names = themes.map(t => t.name)
   let total = max(1, len(names))
   let index = max(0, indexOf(names, current))
   let previous = names[(index + total - 1) % total]
   let next = names[(index + 1) % total]
-  let shownThemes = themes.filter(t => contains(lower(t.name), lower(query)))
+  let favoriteThemes = themes.filter(t => contains(favorites, t.name))
+  let filteredThemes = onlyFavorites ? favoriteThemes : themes
+  let shownThemes = trim(query) == "" ? filteredThemes : rank(filteredThemes, query)
   let walls = flatten((allWalls ? themes : themes.filter(t => t.name == current)).map(t => t.walls))
   let shownWalls = walls.filter(w => contains(lower(w.name + " " + w.theme), lower(query)))
+  let landscape = (screenWidth ?? 360) > (screenHeight ?? 800)
+  let gridColumns = max(1, floor(((screenWidth ?? 360) - 24) / 156))
+  let cardWidth = ((screenWidth ?? 360) - 24 - (gridColumns - 1) * 10) / gridColumns
+  let previewHeight = clamp((cardWidth - 16) * 0.6, 80, landscape ? 100 : 140)
   onTap: { refresh(); screen() }
 
   Row {
@@ -47,48 +57,93 @@ widget "Темы и обои" {
 
   component ThemeCard(t) {
     let selected = current == t.name
+    let favorite = contains(favorites, t.name)
     Column {
       padding: 8; gap: 8; radius: 10 * corners
       background: alpha(surface, 0.65)
       border: selected ? 2 : 1; borderColor: selected ? accent : border
       onTap: { haptic(); message = run("python3 ~/.config/omalauncher/widgets/theme-catalog/catalog.py set ${sh(t.name)}") }
       if t.preview != null {
-        Image { src: t.preview; height: 94; fill: width; fit: cover; clip: true; radius: 5 * corners; label: t.name }
+        Image { src: t.preview; height: previewHeight; fill: width; fit: cover; clip: true; radius: 5 * corners; label: t.name }
       } else {
-        Box { height: 94; fill: width; background: t.swatch[0] ?? background; align: center
+        Box { height: previewHeight; fill: width; background: t.swatch[0] ?? background; align: center
           Text { text: "Aa"; fontSize: 32; align: center; color: t.swatch[1] ?? foreground }
         }
       }
-      Text { text: selected ? "✓ ${t.name}" : t.name; style: small; bold: selected; maxLines: 1 }
+      Row {
+        align: center; gap: 4
+        Text { text: selected ? "✓ ${t.name}" : t.name; weight: 1; style: small; bold: selected; maxLines: 1 }
+        Text {
+          text: favorite ? "★" : "☆"; fontSize: 24; padding: [8, 6]
+          color: favorite ? accent : muted
+          onTap: {
+            haptic()
+            if favorite { favorites = favorites.filter(n => n != t.name) }
+            else { favorites = favorites + [t.name] }
+          }
+        }
+      }
       Row { gap: 2; for c in t.swatch { Box { height: 8; weight: 1; background: c } } }
     }
   }
 
-  screen {
-    title: "Темы и обои"
-    Column {
-      fill: true; gap: 10; padding: 12
+  component Navigation() {
       Row {
         gap: 8
         for item in [{id: "themes", name: "Темы"}, {id: "walls", name: "Обои"}] {
           Text {
-            text: item.name; weight: 1; align: center; padding: [12, 10]
+            text: item.name; weight: 1; align: center; padding: [12, landscape ? 6 : 10]
             background: tab == item.id ? alpha(accent, 0.2) : surface
             border: 1; borderColor: tab == item.id ? accent : border; radius: 8 * corners
             onTap: { tab = item.id; query = "" }
           }
         }
       }
-      Input { text: query; placeholder: tab == "themes" ? "Найти тему…" : "Найти обои…"; onChange: query = value }
+  }
+
+  screen {
+    title: "Темы и обои"
+    Column {
+      fill: true; gap: landscape ? 6 : 10; padding: 12
+      if landscape {
+        Row {
+          gap: 12; align: center
+          Navigation { weight: 1 }
+          Input { text: query; weight: 1; placeholder: tab == "themes" ? "Найти тему…" : "Найти обои…"; onChange: query = value }
+        }
+      } else {
+        Navigation { }
+        Input { text: query; placeholder: tab == "themes" ? "Найти тему…" : "Найти обои…"; onChange: query = value }
+      }
+      if data == null { Text { text: "Загрузка каталога…"; style: small; color: muted } }
       if message != "" { Text { text: message; style: small; color: red } }
       if tab == "themes" {
-        Text { text: "${len(shownThemes)} тем · ${current ?? "…"}"; style: small; color: muted; maxLines: 1 }
+        Row {
+          gap: 8
+          for filter in [{id: false, name: "Все · ${len(themes)}"}, {id: true, name: "★ Избранные · ${len(favoriteThemes)}"}] {
+            Text {
+              text: filter.name; weight: 1; align: center; padding: [10, 8]; style: small
+              background: onlyFavorites == filter.id ? alpha(accent, 0.2) : surface
+              border: 1; borderColor: onlyFavorites == filter.id ? accent : border; radius: 8 * corners
+              onTap: onlyFavorites = filter.id
+            }
+          }
+        }
+        if !landscape { Text { text: "Нажмите тему, чтобы применить · ☆ — в избранное"; fontSize: 11; color: muted } }
+        Text { text: "${len(shownThemes)} тем · сейчас ${current ?? "…"}"; style: small; color: muted; maxLines: 1 }
         Grid {
-          columns: (screenWidth ?? 360) > 600 ? 3 : 2
+          columns: gridColumns
           lazy: true; weight: 1; gap: 10; onPull: refresh()
           for t in shownThemes key t.name { ThemeCard { t: t } }
         }
-        if len(shownThemes) == 0 { Text { text: "Темы не найдены"; color: muted } }
+        if data != null && len(shownThemes) == 0 {
+          Column {
+            gap: 8; padding: 12
+            Text { text: onlyFavorites && query == "" ? "Здесь будут любимые темы" : "Темы не найдены"; align: center }
+            Text { text: onlyFavorites && query == "" ? "Откройте «Все» и нажмите ☆ на карточке темы" : "Попробуйте другое название или очистите поиск"; style: small; color: muted; align: center }
+            Button { text: onlyFavorites && query == "" ? "Посмотреть все темы" : "Сбросить поиск"; onTap: { if query != "" { query = "" } else { onlyFavorites = false } } }
+          }
+        }
       } else {
         Row {
           align: center
@@ -96,16 +151,22 @@ widget "Темы и обои" {
           Button { text: allWalls ? "Текущая тема" : "Все темы"; onTap: allWalls = !allWalls }
         }
         Grid {
-          columns: (screenWidth ?? 360) > 600 ? 3 : 2
+          columns: gridColumns
           lazy: true; weight: 1; gap: 10; onPull: refresh()
           for w in shownWalls key w.path {
-            let selected = current == w.theme && data.background == w.name
+            let selected = current == w.theme && (appearance.background ?? active.walls[0].name) == w.name
             Column {
               padding: 6; gap: 6; radius: 10 * corners
               background: alpha(surface, 0.65)
               border: selected ? 2 : 1; borderColor: selected ? accent : border
               onTap: { haptic(); message = run("python3 ~/.config/omalauncher/widgets/theme-catalog/catalog.py set ${sh(w.theme)} ${sh(w.name)}") }
-              Image { src: w.path; height: 154; fill: width; fit: cover; clip: true; radius: 6 * corners; label: w.name }
+              if w.preview != null {
+                Image { src: w.preview; height: previewHeight; fill: width; fit: cover; clip: true; radius: 6 * corners; label: w.name }
+              } else {
+                Box { height: previewHeight; fill: width; background: surface; align: center
+                  Text { text: "Нет превью"; style: small; color: muted; align: center }
+                }
+              }
               Text { text: selected ? "✓ ${w.name}" : w.name; style: small; maxLines: 1 }
               if allWalls { Text { text: w.theme; fontSize: 10; color: muted; maxLines: 1 } }
             }
