@@ -10,17 +10,19 @@ widget "Темы и обои" {
   state query = ""
   state favorites = [] persist
   state onlyFavorites = false persist
+  state arrowsFavoritesOnly = false persist
   state allWalls = false
   state message = ""
   let themes = data.themes ?? []
   let current = appearance.theme
   let active = find(themes, t => t.name == current)
-  let names = themes.map(t => t.name)
-  let total = max(1, len(names))
-  let index = max(0, indexOf(names, current))
-  let previous = names[(index + total - 1) % total]
-  let next = names[(index + 1) % total]
   let favoriteThemes = themes.filter(t => contains(favorites, t.name))
+  let navigationThemes = arrowsFavoritesOnly ? favoriteThemes : themes
+  let names = navigationThemes.map(t => t.name)
+  let total = max(1, len(names))
+  let index = indexOf(names, current)
+  let previous = names[index < 0 ? total - 1 : (index + total - 1) % total]
+  let next = names[(index + 1) % total]
   let filteredThemes = onlyFavorites ? favoriteThemes : themes
   let shownThemes = trim(query) == "" ? filteredThemes : rank(filteredThemes, query)
   let walls = flatten((allWalls ? themes : themes.filter(t => t.name == current)).map(t => t.walls))
@@ -36,12 +38,17 @@ widget "Темы и обои" {
     align: center
     gap: 8
     Text {
-      text: "‹"; fontSize: 36; padding: [10, 8]
+      text: "‹"; fontSize: 36; padding: [10, 8]; color: len(names) > 0 ? foreground : muted
       onTap: { if len(names) > 0 { haptic(); message = run("python3 ~/.config/omalauncher/widgets/theme-catalog/catalog.py set ${sh(previous)}") } }
     }
     Column {
       weight: 1; gap: 10
       Text { text: current ?? "…"; fontSize: (tileWidth ?? 360) < 240 ? 18 : 24; maxLines: 1; align: center }
+      Text {
+        text: arrowsFavoritesOnly ? "Стрелки: ★ избранные" : "Стрелки: все темы"
+        fontSize: 10; maxLines: 1; align: center; color: arrowsFavoritesOnly ? accent : muted
+        onTap: { haptic(); arrowsFavoritesOnly = !arrowsFavoritesOnly }
+      }
       Row {
         gap: 3
         for c in active.swatch ?? [background, foreground, accent, red, green, yellow, blue, magenta] {
@@ -50,7 +57,7 @@ widget "Темы и обои" {
       }
     }
     Text {
-      text: "›"; fontSize: 36; padding: [10, 8]
+      text: "›"; fontSize: 36; padding: [10, 8]; color: len(names) > 0 ? foreground : muted
       onTap: { if len(names) > 0 { haptic(); message = run("python3 ~/.config/omalauncher/widgets/theme-catalog/catalog.py set ${sh(next)}") } }
     }
   }
@@ -118,6 +125,21 @@ widget "Темы и обои" {
       if data == null { Text { text: "Загрузка каталога…"; style: small; color: muted } }
       if message != "" { Text { text: message; style: small; color: red } }
       if tab == "themes" {
+        Row {
+          gap: 8; align: center
+          Text { text: "Стрелки:"; style: small; color: muted }
+          for mode in [{favorites: false, name: "Все темы"}, {favorites: true, name: "★ Избранные"}] {
+            Text {
+              text: mode.name; weight: 1; align: center; padding: [10, 8]; style: small
+              background: arrowsFavoritesOnly == mode.favorites ? alpha(accent, 0.2) : surface
+              border: 1; borderColor: arrowsFavoritesOnly == mode.favorites ? accent : border; radius: 8 * corners
+              onTap: arrowsFavoritesOnly = mode.favorites
+            }
+          }
+        }
+        if arrowsFavoritesOnly && len(favoriteThemes) == 0 {
+          Text { text: "Добавьте хотя бы одну тему в избранное для переключения стрелками"; fontSize: 11; color: muted }
+        }
         Row {
           gap: 8
           for filter in [{id: false, name: "Все · ${len(themes)}"}, {id: true, name: "★ Избранные · ${len(favoriteThemes)}"}] {
