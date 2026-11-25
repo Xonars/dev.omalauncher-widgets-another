@@ -1,0 +1,70 @@
+widget "Oma Another Features" {
+  // Fixed SHA-256 resource package; installed only inside this entry's private directory.
+  let storeBootstrap = """
+# Template embedded in store OWL. Packages are fixed and SHA-256 verified.
+import fcntl
+import hashlib
+import io
+import os
+from pathlib import Path, PurePosixPath
+import tempfile
+import urllib.request
+import zipfile
+
+
+def install(url, digest, entry):
+    if not entry or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789-" for c in entry):
+        raise ValueError("Invalid store entry")
+    root = Path.home() / '.local/share/omalauncher-store' / entry
+    if any(p.is_symlink() for p in [root, *root.parents]):
+        raise ValueError('Symlink in resource destination')
+    root.mkdir(parents=True, exist_ok=True)
+    with (root / '.install.lock').open('w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        marker = root / '.installed'
+        if marker.exists() and marker.read_text() == digest:
+            return
+        with urllib.request.urlopen(url, timeout=60) as response:
+            payload = response.read(32 * 1024 * 1024 + 1)
+        if len(payload) > 32 * 1024 * 1024 or hashlib.sha256(payload).hexdigest() != digest:
+            raise ValueError('Store resource SHA-256 mismatch')
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            members = archive.infolist()
+            if sum(x.file_size for x in members) > 128 * 1024 * 1024:
+                raise ValueError('Store resource package too large')
+            for info in members:
+                path = PurePosixPath(info.filename)
+                if path.is_absolute() or '..' in path.parts or not path.parts or path.parts[0] not in ('widgets', 'support'):
+                    raise ValueError('Invalid store resource path')
+                target = root.joinpath(*path.parts)
+                # No symlinks in the destination chain or package extraction.
+                if any(p.is_symlink() for p in [target, *target.parents]):
+                    raise ValueError('Symlink in resource destination')
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as output:
+                    output.write(archive.read(info))
+                    temporary = Path(output.name)
+                os.replace(temporary, target)
+        marker.write_text(digest)
+
+install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/e1480cf52542a71ce76d7a3267e8ed39416fe9d2213e295e92b865c353eed7a4.zip', 'e1480cf52542a71ce76d7a3267e8ed39416fe9d2213e295e92b865c353eed7a4', 'xonars-oma-another-features-widget')
+"""
+  let storeInstall = "python -c ${sh(storeBootstrap)}"
+
+  meta { owl: 10; version: "1.0.1"; description: "Количество возможностей OMA Another. Нажмите, чтобы открыть каталог отличий. · ресурсы при первом запуске"; category: "productivity" ; license: "MIT" }
+  requires { pacman: ["python"] }
+  page: 1
+  size: 3x2
+  minSize: 3x2
+  source catalog = cmd("python -c ${sh(storeBootstrap)} && cat ~/.local/share/omalauncher-store/xonars-oma-another-features-widget/widgets/oma-another-features/catalog.json") timeout 60s json
+  let total = len(catalog.features ?? [])
+  onTap: open("o:market-app-xonars-xonars-oma-another-features.owl")
+  Column { gap: 3; justify: spaceBetween; fill: true
+    Text { text: "OMA ANOTHER"; font: sans; fontSize: 11; letterSpacing: 1; color: accent; bold: true; maxLines: 1 }
+    Row { gap: 10; align: center
+      Text { text: catalog == null ? "…" : str(total); font: sans; fontSize: 42; color: accent; bold: true }
+      Text { text: "уникальных\nфункций"; font: sans; fontSize: 13; weight: 1 }
+    }
+    Text { text: "Каталог возможностей →"; font: sans; fontSize: 11; color: muted; maxLines: 1 }
+  }
+}

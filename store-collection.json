@@ -21,7 +21,7 @@
     "source": "76-oma-update-app.owl",
     "path": "apps/xonars/oma-update/app.owl",
     "author": "xonars",
-    "resources": "resources/ccc5216fd545900edc372a2383395937b90d931d486176bfeebc3b9738a1a10f.zip"
+    "resources": "resources/f0068214284eaaae4b1fb9dd41fabc5038e28698587a5de2c7046e0aba0458a1.zip"
   },
   {
     "source": "81-developer-guide.owl",
@@ -39,7 +39,19 @@
     "source": "83-themes.owl",
     "path": "widgets/xonars/themes/widget.owl",
     "author": "xonars",
-    "resources": "resources/9cd6336320c9b6de04f5f1fd429280436a86fe9c7196c79017eda13554047e31.zip"
+    "resources": "resources/be79a60c5b588597f8a2a97a1efef810293d3b6b506cb60c0d8e190ebea35c98.zip"
+  },
+  {
+    "source": "84-oma-another-features-app.owl",
+    "path": "apps/xonars/oma-another-features/app.owl",
+    "author": "xonars",
+    "resources": "resources/c40eb777b4b0a1c6c1d72034f5933fd8d4162e18750ac7df9437becb44f7e7e6.zip"
+  },
+  {
+    "source": "85-oma-another-features.owl",
+    "path": "widgets/xonars/oma-another-features-widget/widget.owl",
+    "author": "xonars",
+    "resources": "resources/e1480cf52542a71ce76d7a3267e8ed39416fe9d2213e295e92b865c353eed7a4.zip"
   },
   {
     "source": "apk-maker-app.owl",
@@ -48,15 +60,69 @@
     "resources": null
   },
   {
+    "source": "browser.owl",
+    "path": "apps/xonars/browser/app.owl",
+    "author": "xonars",
+    "resources": "resources/2fb64db8de506049363218954ee6e5f2b12b2ae3428c33e1900fb70a6d1e24f3.zip"
+  },
+  {
     "source": "cassette.owl",
     "path": "apps/xonars/cassette/app.owl",
     "author": "xonars",
     "resources": null
   },
   {
+    "source": "chatgpt.owl",
+    "path": "apps/xonars/chatgpt/app.owl",
+    "author": "xonars",
+    "resources": "resources/b51112c24097635d72077be1a86bbf3a63823ba1d9e35b30d46c8756ae157447.zip"
+  },
+  {
     "source": "chess-app.owl",
     "path": "apps/xonars/chess-app/app.owl",
     "author": "xonars",
+    "resources": null
+  },
+  {
+    "source": "fixation.owl",
+    "path": "apps/xonars/fixation/app.owl",
+    "author": "xonars",
+    "resources": "resources/f1ed1767eedfc80992f4cd03ede0f7dd37bf476639d48170e9cfaaaa7747f97c.zip"
+  },
+  {
+    "source": "ghost-letters.owl",
+    "path": "apps/xonars/ghost-letters/app.owl",
+    "author": "xonars",
+    "resources": "resources/66d958d6e109341366c1c783e4ef1e70395b9b9963f16c852adcca30afabca64.zip"
+  },
+  {
+    "source": "gitworld.owl",
+    "path": "apps/xonars/gitworld/app.owl",
+    "author": "xonars",
+    "resources": "resources/cbc49958a925839f08b12a9f846d27dcb26fc4bad55bb35a748e7c2997df153f.zip"
+  },
+  {
+    "source": "keypunch.owl",
+    "path": "apps/xonars/keypunch/app.owl",
+    "author": "xonars",
+    "resources": null
+  },
+  {
+    "source": "lofi-radio-widget.owl",
+    "path": "widgets/xonars/lofi-radio-widget/widget.owl",
+    "author": "xonars",
+    "resources": "resources/92a0275693720f985c472f07036c3b14a0d7b4ee87fd7287ac28332ff5f04696.zip"
+  },
+  {
+    "source": "lofi-radio.owl",
+    "path": "apps/xonars/lofi-radio/app.owl",
+    "author": "xonars",
+    "resources": "resources/adc7db29c9034fd93f7aa7b6b6dabf48cdca4e928de2b1b7de850eeeb48a2bce.zip"
+  },
+  {
+    "source": "market-allapknoafk-fortune.owl",
+    "path": "widgets/allapknoafk/fortune/widget.owl",
+    "author": "allapknoafk",
     "resources": null
   },
   {
@@ -108,8 +174,32 @@
     "resources": null
   },
   {
+    "source": "market-app-simonschubert-pixel-pinball.owl",
+    "path": "apps/simonschubert/pixel-pinball/app.owl",
+    "author": "simonschubert",
+    "resources": null
+  },
+  {
     "source": "market-app-simonschubert-power-atlas.owl",
     "path": "apps/simonschubert/power-atlas/app.owl",
+    "author": "simonschubert",
+    "resources": null
+  },
+  {
+    "source": "market-app-simonschubert-space-bounce.owl",
+    "path": "apps/simonschubert/space-bounce/app.owl",
+    "author": "simonschubert",
+    "resources": null
+  },
+  {
+    "source": "market-app-simonschubert-sunset-heist.owl",
+    "path": "apps/simonschubert/sunset-heist/app.owl",
+    "author": "simonschubert",
+    "resources": null
+  },
+  {
+    "source": "market-app-simonschubert-warp-tube.owl",
+    "path": "apps/simonschubert/warp-tube/app.owl",
     "author": "simonschubert",
     "resources": null
   },
@@ -129,6 +219,18 @@
     "source": "market-cbarland-codex-quota-compact.owl",
     "path": "widgets/cbarland/codex-quota-compact/widget.owl",
     "author": "cbarland",
+    "resources": null
+  },
+  {
+    "source": "market-jonasallencodes-digital-clock-copy-fb01f1c2-da15-466e-91fa-598dfb50097f.owl",
+    "path": "widgets/jonasallencodes/digital-clock-wide/widget.owl",
+    "author": "jonasallencodes",
+    "resources": null
+  },
+  {
+    "source": "market-jonasallencodes-digital-clock.owl",
+    "path": "widgets/jonasallencodes/digital-clock/widget.owl",
+    "author": "jonasallencodes",
     "resources": null
   },
   {
@@ -174,8 +276,20 @@
     "resources": null
   },
   {
+    "source": "market-satwikgawand-github-contributions.owl",
+    "path": "widgets/satwikgawand/github-contributions/widget.owl",
+    "author": "satwikgawand",
+    "resources": null
+  },
+  {
     "source": "market-simonschubert-fetch.owl",
     "path": "widgets/simonschubert/fetch/widget.owl",
+    "author": "simonschubert",
+    "resources": null
+  },
+  {
+    "source": "market-simonschubert-focus.owl",
+    "path": "widgets/simonschubert/focus/widget.owl",
     "author": "simonschubert",
     "resources": null
   },
@@ -210,21 +324,51 @@
     "resources": null
   },
   {
+    "source": "market-zshadow168-hub-netz7.owl",
+    "path": "widgets/zshadow168/hub-netz7/widget.owl",
+    "author": "zshadow168",
+    "resources": null
+  },
+  {
     "source": "noboru.owl",
     "path": "apps/xonars/noboru/app.owl",
     "author": "xonars",
     "resources": "resources/104a9bb18b1c79144c8628427db0014cbafe2ecfc7988ace473e7a0c5ac71127.zip"
   },
   {
+    "source": "owl-studio-example.owl",
+    "path": "apps/xonars/owl-studio-example/app.owl",
+    "author": "xonars",
+    "resources": null
+  },
+  {
+    "source": "owl-studio-v01.owl",
+    "path": "apps/xonars/owl-studio-v01/app.owl",
+    "author": "xonars",
+    "resources": "resources/9186540e8c3b47149427607d2992319b9434c384f340a53972c5cb92fa4a0949.zip"
+  },
+  {
     "source": "pinterest-wallswap.owl",
     "path": "apps/xonars/pinterest-wallswap/app.owl",
     "author": "xonars",
-    "resources": "resources/525d41b2e71cf1fc6db543ccb6930778f7fc841eb2339a9300f3b70c628da7b5.zip"
+    "resources": "resources/e2c670757208b64e36c09bbbbd231984dc7b9b0eed11e2f56942b78171c8d272.zip"
+  },
+  {
+    "source": "quattro-system.owl",
+    "path": "widgets/xonars/quattro-system/widget.owl",
+    "author": "xonars",
+    "resources": null
   },
   {
     "source": "quiet-reader.owl",
     "path": "apps/xonars/quiet-reader/app.owl",
     "author": "xonars",
     "resources": "resources/b2d5ea1e009376ab93a974e3cf6553cce3a5b35e53a0054fc2b879287699310a.zip"
+  },
+  {
+    "source": "telegram.owl",
+    "path": "apps/xonars/telegram/app.owl",
+    "author": "xonars",
+    "resources": "resources/08766a9fe9c556752882ca49543195ed7c42a0cda741667c819a0b57af8e6c48.zip"
   }
 ]

@@ -47,17 +47,26 @@ def install(url, digest, entry):
                 os.replace(temporary, target)
         marker.write_text(digest)
 
-install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/525d41b2e71cf1fc6db543ccb6930778f7fc841eb2339a9300f3b70c628da7b5.zip', '525d41b2e71cf1fc6db543ccb6930778f7fc841eb2339a9300f3b70c628da7b5', 'xonars-pinterest-wallswap')
+install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/e2c670757208b64e36c09bbbbd231984dc7b9b0eed11e2f56942b78171c8d272.zip', 'e2c670757208b64e36c09bbbbd231984dc7b9b0eed11e2f56942b78171c8d272', 'xonars-pinterest-wallswap')
 """
   let storeInstall = "python -c ${sh(storeBootstrap)}"
 
-  title: settings ? "Настройки" : savePin != null ? "Сохранить пин" : feedView ? "Лента" : downloadsView ? "Загрузки" : fullscreen ? "" : selectedBoard != null ? selectedBoard.name : "Pinterest · Доски"
+  title: fullscreen ? "" : settings ? "Настройки" : savePin != null ? "Сохранить пин" : feedView ? "" : downloadsView ? "Загрузки" : fullscreen ? "" : selectedBoard != null ? selectedBoard.name : "Pinterest · Доски"
   statusBar: !fullscreen
   back: fullscreen || settings || downloadsView || feedView || savePin != null || selectedBoard != null
   onBack: { if settings { settings = false } else if savePin != null { if !pinSaveBusy { savePin = null } } else if feedPin != null { feedPin = null } else if feedView { feedView = false } else if downloadsView { downloadsView = false } else if fullscreen { fullscreen = false } else { selectedBoard = null } }
-  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="38" height="38" rx="4"/><circle cx="16" cy="16" r="3"/><path d="M5 35l12-12 9 9 8-12 9 12"/></svg>"""
-  meta { owl: 13; description: "Просмотр изображений из публичных досок Pinterest · ресурсы при первом запуске"; version: "1.2.1"; license: "MIT"; category: "media" }
-  requires { pacman: ["python", "python", "curl", "bash", "coreutils", "python-requests", "chromium", "nodejs"] }
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect x=".5" y=".5" width="47" height="47" rx="9" fill="#19191d"/><rect x=".5" y=".5" width="47" height="47" rx="9" fill="currentColor" fill-opacity=".30" stroke="currentColor" stroke-opacity=".78"/><defs><g id="symbol"><rect x="5" y="5" width="38" height="38" rx="4"/><circle cx="16" cy="16" r="3"/><path d="M5 35l12-12 9 9 8-12 9 12"/></g></defs><g transform="translate(4.38 4.38) scale(0.817)" fill="none" stroke="#faf8f3" stroke-linecap="round" stroke-linejoin="round" stroke-width="3.06"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g><g transform="translate(4.38 4.38) scale(0.817)" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="3.06" opacity=".16"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g></svg>"""
+  meta { owl: 13; description: "Просмотр изображений из публичных досок Pinterest · ресурсы при первом запуске"; version: "1.3.1"; license: "MIT"; category: "media" }
+  // Install gallery-dl==1.32.18 in the app's venv with pinterest-wallswap/install-deps.sh.
+  requires { pacman: ["python", "curl", "bash", "coreutils", "python-requests", "chromium", "nodejs", "python-pip"] }
+  // screenWidth follows the current app window, including desktop resizing.
+  let viewWidth = max(240, screenWidth ?? 400)
+  let desktop = viewWidth >= 840
+  let pagePadding = desktop ? 20 : 6
+  let laneGap = desktop ? 12 : 8
+  let feedColumns = viewWidth < 360 ? 1 : desktop ? max(3, floor((viewWidth - pagePadding * 2 + laneGap) / (260 + laneGap))) : viewWidth >= 600 ? 3 : 2
+  let feedCardWidth = (viewWidth - pagePadding * 2 - laneGap * (feedColumns - 1)) / feedColumns
+  let boardColumns = viewWidth < 360 ? 1 : max(2, floor((viewWidth - 24 + 12) / 232))
   state feedView = false
   state feedPin = null
   state savePin = null
@@ -126,7 +135,6 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/525d
   state boardsRefresh = 0
   state fullscreen = false
   state out = ""
-  state busy = false
   let effectiveProfiles = accountInfo.connected == true ? "${profiles},${accountInfo.username}" : profiles
   let profileCfg = toJson({profiles: effectiveProfiles})
   let cfg = toJson({boards: boards, profiles: effectiveProfiles})
@@ -136,26 +144,20 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/525d
   let accountBoardIds = accountBoards.map(b => b.id)
   let availableBoards = flatten([accountBoards, (catalog.boards ?? []).filter(b => accountBoardIds.indexOf(b.id) < 0)])
   let visibleBoards = availableBoards.filter(b => contains(lower("${b.profile} ${b.name}"), lower(boardSearch)))
-  source maintenance = cmd(selectedBoard == null ? "true" : "python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-pinterest-wallswap/widgets/pinterest-wallswap/viewer.py info ${sh(cfg)}") every 5s json
-  source store = file("~/.cache/pinterest-wallswap/viewer.json") json
-  let matchingBoard = selectedBoard != null && store.cfg.boards[0] == selectedBoard.id
-  let st = matchingBoard ? store.history[store.index] ?? null : null
+  state galleryPage = 0
+  state galleryIndex = 0
+  state swipeX = 0
+  source boardGallery = cmd(selectedBoard == null ? "echo '{}'" : "python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-pinterest-wallswap/widgets/pinterest-wallswap/gallery.py ${sh(cfg)}; : ${int(galleryPage)}") json timeout 120s
+  let galleryItems = boardGallery.boardId == selectedBoard.id ? boardGallery.items ?? [] : []
+  let galleryPin = galleryItems[galleryIndex]
+  on selectedBoard { galleryPage = 0; galleryIndex = 0; swipeX = 0 }
   source downloadMaintenance = cmd("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-pinterest-wallswap/widgets/pinterest-wallswap/downloads.py status") every 3s json
   source downloadState = file("~/.local/state/pinterest-wallswap/downloads.json") json
   let downloadJobs = downloadState.jobs ?? {}
   let downloadList = values(downloadJobs).sortBy(j => -j.created)
   let activeDownloads = downloadList.filter(j => j.status == "queued" || j.status == "downloading")
   let selectedDownload = selectedBoard == null ? null : downloadJobs[selectedBoard.id]
-  let localMode = matchingBoard && store.mode == "local"
-  let hasPrevious = matchingBoard && (localMode ? store.localIndex > 0 : store.index > 0)
-  let hasNext = !localMode || store.localIndex + 1 < store.localCount
   let validProfiles = match(trim(profileDraft), "^[A-Za-z0-9_]{1,64}( *, *[A-Za-z0-9_]{1,64})*$") != null
-  on out { busy = false }
-  let hasImg = st != null && st.image != null
-  let err = matchingBoard ? store.error ?? "" : ""
-  let loading = busy || (matchingBoard && store.pending == true)
-  let statusText = loading ? "Готовлю изображение…" : err != "" ? err : localMode ? "Сохранённая копия · ${store.localIndex + 1} / ${store.localCount}" : "В запасе: ${len(store.queue ?? [])} из 4"
-
   // Arrows drawn as lines, so they sit in the middle of their circles whatever the font: a right
   // arrow turned by `turn` degrees.
   component Glyph(turn = 0, base = false, tint = accent, s = 18) {
@@ -228,7 +230,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/525d
       }
       Text { text: "Сейчас: ${profiles}"; style: small; color: muted; maxLines: 3 }
       Text { text: "Фоновая загрузка"; style: title }
-      Text { text: "Пока приложение открыто, заранее загружаются 4 изображения. «Далее» показывает готовый файл, а запас автоматически пополняется. При открытии другой доски запас загружается заново только из неё."; color: muted }
+      Text { text: "Доска открывается сеткой изображений. Нажмите на пин для просмотра на весь экран и листайте свайпами влево и вправо. Скачанные доски доступны из локальной копии."; color: muted }
     }
   } else if savePin != null {
     Column {
@@ -280,8 +282,29 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/525d
     }
   } else if feedView {
     Column {
-      padding: [12, 8]
+      fill: true
+      gap: 0
+      Row {
+        padding: [12, 8]
+        gap: 8
+        align: center
+        Text { text: "‹"; width: 40; font: sans; fontSize: 30; onTap: { if feedPin != null { feedPin = null } else { feedView = false } } }
+        Text { text: "Pinterest"; font: sans; fontSize: 26; fontWeight: 700; weight: 1 }
+        if desktop {
+          Button { text: "Лента"; onTap: feedPin = null }
+          Button { text: "Доски"; onTap: { feedView = false; feedPin = null } }
+          Button { text: "Настройки"; onTap: { profileDraft = profiles; saveDraft = saveDirectory; settingsResult = ""; settings = true } }
+        }
+        Box {
+          width: 44; height: 44; radius: 22; background: alpha(surface, 0.6); align: center
+          onTap: { if !feedBusy && accountInfo.connected == true { feedPin = null; feedBusy = true; feedOut = run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-pinterest-wallswap/widgets/pinterest-wallswap/account.py refresh") } }
+          Text { text: feedBusy ? "…" : "↻"; font: sans; fontSize: 26; align: center }
+        }
+      }
+      Column {
+      weight: 1
       scroll: true
+      padding: [pagePadding, 4]
       gap: 12
       if accountInfo.connected != true {
         Text { text: "Войдите в Pinterest"; style: title }
@@ -300,13 +323,10 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/525d
         }
       } else {
         Row {
-          wrap: true
-          gap: 10
-          if feedPin != null {
-            Button { text: "‹ Лента"; onTap: feedPin = null }
-          }
-          Button { text: feedBusy ? "Загрузка…" : "Обновить ленту"; onTap: { if !feedBusy { feedPin = null; feedBusy = true; feedOut = run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-pinterest-wallswap/widgets/pinterest-wallswap/account.py refresh") } } }
-          Text { text: accountInfo.username; style: small; color: muted }
+          padding: [8, 2]
+          align: center
+          Text { text: feedPin != null ? "Просмотр пина" : "Для вас"; font: sans; fontSize: 18; fontWeight: 700; weight: 1 }
+          Text { text: accountInfo.username; font: sans; fontSize: 11; color: muted; maxLines: 1 }
         }
         if feedMessage != "" {
           Text { text: feedMessage; color: green; maxLines: 3 }
@@ -322,26 +342,43 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/525d
           Button { text: "Сохранить на доску"; onTap: { savePin = feedPin; pinBoardSearch = ""; pinBoardPage = 0; pinSaveOut = ""; accountOut = run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-pinterest-wallswap/widgets/pinterest-wallswap/account.py boards") } }
           Button { text: "Открыть пин"; onTap: url(feedPin.page) }
         } else {
-          Grid {
-            columns: 2
-            gap: 10
+          Row {
+            gap: laneGap
             fill: width
-            for p in (feedState.items ?? []).take(20) key p.id {
+            align: top
+            for lane in range(feedColumns) {
               Column {
-                gap: 6
-                padding: 6
-                radius: 12
-                background: alpha(surface, 0.6)
-                Box {
-                  height: 180
-                  fill: width
-                  clip: true
-                  radius: 10
-                  onTap: feedPin = p
-                  Image { src: p.image; fit: cover; fill: true; label: p.title }
+                weight: 1
+                gap: 14
+                for p, i in (feedState.items ?? []).take(20) key p.id {
+                  if i % feedColumns == lane {
+                    let pinWidth = feedCardWidth
+                    let pinHeight = p.width > 0 && p.height > 0 ? pinWidth * p.height / p.width : pinWidth * (i % 3 == 0 ? 1.6 : i % 3 == 1 ? 1.25 : 1)
+                    Column {
+                      gap: 2
+                      Box {
+                        height: min(pinWidth * 2.4, max(pinWidth * 0.7, pinHeight))
+                        fill: width
+                        clip: true
+                        radius: 18
+                        background: alpha(surface, 0.7)
+                        onTap: feedPin = p
+                        Image { src: p.image; fit: cover; fill: true; label: p.title }
+                      }
+                      Row {
+                        gap: 4
+                        padding: [6, 0]
+                        align: center
+                        Text { text: p.title; font: sans; fontSize: 11; fontWeight: 600; maxLines: 2; weight: 1; onTap: feedPin = p }
+                        Box {
+                          width: 36; height: 40; align: center; radius: 18
+                          onTap: { savePin = p; pinBoardSearch = ""; pinBoardPage = 0; pinSaveOut = ""; accountOut = run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-pinterest-wallswap/widgets/pinterest-wallswap/account.py boards") }
+                          Text { text: "•••"; font: sans; fontSize: 15; align: center }
+                        }
+                      }
+                    }
+                  }
                 }
-                Text { text: p.title; fontSize: 11; maxLines: 2; minLines: 2 }
-                Button { text: "На доску"; onTap: { savePin = p; pinBoardSearch = ""; pinBoardPage = 0; pinSaveOut = ""; accountOut = run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-pinterest-wallswap/widgets/pinterest-wallswap/account.py boards") } }
               }
             }
           }
@@ -352,6 +389,25 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/525d
             Text { text: feedBusy ? "Загружаю вашу ленту…" : "Нажмите «Обновить ленту»"; color: muted }
           }
         }
+      }
+      }
+      if !desktop {
+      Row {
+        padding: [12, 8]
+        gap: 8
+        Box { weight: 1; height: 44; radius: 22; background: alpha(accent, 0.18); align: center
+          Text { text: "Лента"; font: sans; fontSize: 13; fontWeight: 700; align: center }
+          onTap: feedPin = null
+        }
+        Box { weight: 1; height: 44; radius: 22; align: center
+          Text { text: "Доски"; font: sans; fontSize: 13; align: center }
+          onTap: { feedView = false; feedPin = null }
+        }
+        Box { weight: 1; height: 44; radius: 22; align: center
+          Text { text: "Настройки"; font: sans; fontSize: 13; align: center }
+          onTap: { profileDraft = profiles; saveDraft = saveDirectory; settingsResult = ""; settings = true }
+        }
+      }
       }
     }
   } else if downloadsView {
@@ -401,7 +457,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/525d
           Row {
             gap: 10
             if j.saved > 0 {
-              Button { text: "Открыть"; onTap: { selectedBoard = j.board; downloadsView = false; fullscreen = false; busy = true; out = run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-pinterest-wallswap/widgets/pinterest-wallswap/viewer.py open ${sh(toJson({boards: [j.board.id], profiles: effectiveProfiles}))}; date +%s%N") } }
+              Button { text: "Открыть"; onTap: { selectedBoard = j.board; downloadsView = false; fullscreen = false } }
             }
             if !running {
               Button { text: done || outdated ? "Обновить" : "Повторить"; onTap: downloadOut = run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-pinterest-wallswap/widgets/pinterest-wallswap/downloads.py start ${sh(toJson({board: j.board, saveDirectory: saveDirectory}))}") }
@@ -410,113 +466,86 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/525d
         }
       }
     }
-  } else if fullscreen && hasImg {
+  } else if fullscreen && galleryPin != null {
     Box {
       fill: true
       background: #000000
-      Image { src: st.image; fit: contain; fill: true; label: st.title }
+      Box {
+        fill: true
+        drag: horizontal
+        onDrag: swipeX = swipeX + dx
+        onDragEnd: {
+          if swipeX < -50 || vx < -500 { galleryIndex = min(len(galleryItems) - 1, galleryIndex + 1) }
+          else if swipeX > 50 || vx > 500 { galleryIndex = max(0, galleryIndex - 1) }
+          swipeX = 0
+        }
+        Image { src: galleryPin.image; fit: contain; fill: true; label: galleryPin.title; offset: [swipeX, 0] }
+      }
       Column {
         fill: true
         padding: [12, 0, 12, 16]
         Spacer { weight: 1 }
         Column {
-          padding: 10
-          gap: 8
-          radius: 14
-          background: #000000bb
-          Text { text: loading || err != "" ? statusText : st.title; color: err != "" && !busy ? red : #ffffff; fontSize: 12; maxLines: 2; align: center }
-          Row {
-            gap: 12
-            Box {
-              weight: 1
-              height: 48
-              radius: 24
-              background: #ffffff22
-              opacity: !busy && hasPrevious ? 1 : 0.35
-              onTap: { if !busy && hasPrevious { haptic(); busy = true; out = run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-pinterest-wallswap/widgets/pinterest-wallswap/viewer.py prev ${sh(cfg)} 2>&1 | tail -1; date +%s%N") } }
-              Row { fill: true; align: center; justify: center; gap: 8
-                Glyph { turn: 180; tint: #ffffff }
-                Text { text: "Назад"; color: #ffffff; fontSize: 13 }
-              }
-            }
-            Box {
-              weight: 1
-              height: 48
-              radius: 24
-              background: alpha(accent, 0.8)
-              opacity: loading || !hasNext ? 0.35 : 1
-              onTap: { if !loading && hasNext { haptic(); busy = true; out = run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-pinterest-wallswap/widgets/pinterest-wallswap/viewer.py next ${sh(cfg)} 2>&1 | tail -1; date +%s%N") } }
-              Row { fill: true; align: center; justify: center; gap: 8
-                Text { text: "Далее"; color: #ffffff; fontSize: 13 }
-                Glyph { tint: #ffffff }
-              }
-            }
-          }
+          padding: 10; gap: 6; radius: 14; background: #000000bb
+          Text { text: galleryPin.title; color: #ffffff; fontSize: 12; maxLines: 2; align: center }
+          Text { text: "${galleryIndex + 1} / ${len(galleryItems)} · Листайте свайпом"; color: #ffffff; fontSize: 11; align: center }
+          Button { text: "Открыть пин"; onTap: url(galleryPin.page) }
         }
       }
       Box {
-        width: 48
-        height: 48
-        offset: [12, screenTop + 12]
-        radius: 24
-        background: #00000099
-        align: center
+        width: 48; height: 48; offset: [12, screenTop + 12]; radius: 24
+        background: #00000099; align: center
         onTap: fullscreen = false
         Text { text: "×"; fontSize: 28; color: #ffffff; align: center }
       }
     }
   } else if selectedBoard != null {
     Column {
-      padding: [12, 0]
+      padding: [pagePadding, 0]
       scroll: true
       gap: 14
       Row {
-        gap: 10
-        Button { text: "‹ Доски"; onTap: { fullscreen = false; selectedBoard = null } }
-        Text { text: "${selectedBoard.profile} · ${selectedBoard.count} изображений"; weight: 1; style: small; color: muted; maxLines: 1 }
-      }
-      Row {
-        gap: 10
-        Button { text: selectedDownload.status == "completed" ? "Обновить копию" : selectedDownload.status == "downloading" || selectedDownload.status == "queued" ? "В загрузках…" : "Загрузить всё"; onTap: { if selectedDownload.status != "downloading" && selectedDownload.status != "queued" { downloadOut = run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-pinterest-wallswap/widgets/pinterest-wallswap/downloads.py start ${sh(toJson({board: selectedBoard, saveDirectory: saveDirectory}))}") } downloadsView = true } }
+        gap: 10; wrap: true
+        Button { text: "‹ Доски"; onTap: selectedBoard = null }
+        Button { text: "Загрузить всё"; onTap: { downloadOut = run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-pinterest-wallswap/widgets/pinterest-wallswap/downloads.py start ${sh(toJson({board: selectedBoard, saveDirectory: saveDirectory}))}"); downloadsView = true } }
         Button { text: "Загрузки"; onTap: downloadsView = true }
       }
-      if selectedDownload != null {
-        Text { text: selectedDownload.dirty == true ? "Нужно обновить копию · сохранено ${selectedDownload.saved}" : selectedDownload.status == "completed" ? "✓ Сохранено ${selectedDownload.saved} изображений" : selectedDownload.status == "error" ? "Загрузка завершилась с ошибкой · сохранено ${selectedDownload.saved}" : "↓ Сохранено ${selectedDownload.saved} / ≈ ${selectedDownload.expected}"; style: small; color: selectedDownload.dirty == true ? staleTint : selectedDownload.status == "completed" ? green : selectedDownload.status == "error" ? red : accent; maxLines: 2 }
+      if boardGallery.boardId != selectedBoard.id {
+        Text { text: "Загружаю изображения доски…"; color: muted }
+      } else if boardGallery.error != null {
+        Text { text: boardGallery.error; color: red; maxLines: 4 }
+        Button { text: "Повторить"; onTap: refresh() }
+      } else if len(galleryItems) == 0 {
+        Text { text: "На доске нет изображений"; color: muted }
       }
-      Box {
-        fill: width
-        height: min(420, (screenHeight ?? 800) * 0.5)
-        align: center
-        if hasImg {
-          Box { radius: 10 * corners; clip: true; onTap: fullscreen = true
-            Image { src: st.image; fit: contain; height: min(420, (screenHeight ?? 800) * 0.5); opacity: 1; animate opacity: tween(200ms, "ease") }
-          }
-        } else {
-          Text { text: busy ? "Загрузка…" : "Загружаю изображения доски…"; color: muted; align: center }
-        }
-      }
-      if hasImg {
-        Column {
-          gap: 2
-          Text { text: st.title; style: title; maxLines: 3 }
-          Text { text: st.credit; color: muted; maxLines: 2 }
-          Text { text: "${st.size}"; style: small; color: muted }
-        }
-      }
-      Text { text: statusText; color: err != "" && !busy ? red : muted; visible: statusText != "" }
       Row {
-        justify: spaceEvenly
-        Box { weight: 1; onTap: { if !loading && hasNext { haptic(); busy = true; out = run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-pinterest-wallswap/widgets/pinterest-wallswap/viewer.py next ${sh(cfg)} 2>&1 | tail -1; date +%s%N") } }
-          Action { label: "Далее"; active: !loading && hasNext }
+        gap: laneGap; fill: width; align: top
+        for lane in range(feedColumns) {
+          Column {
+            weight: 1; gap: 14
+            for p, i in galleryItems.drop(galleryPage * 20).take(20) {
+              if i % feedColumns == lane {
+                let pinHeight = p.width > 0 && p.height > 0 ? feedCardWidth * p.height / p.width : feedCardWidth * (i % 3 == 0 ? 1.6 : i % 3 == 1 ? 1.25 : 1)
+                Column {
+                  gap: 4
+                  onTap: { galleryIndex = galleryPage * 20 + i; swipeX = 0; fullscreen = true }
+                  Box {
+                    height: min(feedCardWidth * 2.4, max(feedCardWidth * 0.7, pinHeight))
+                    fill: width; clip: true; radius: 18; background: alpha(surface, 0.7)
+                    Image { src: p.image; fit: cover; fill: true; label: p.title }
+                  }
+                  Text { text: p.title; font: sans; fontSize: 11; fontWeight: 600; maxLines: 2; padding: [6, 0] }
+                }
+              }
+            }
+          }
         }
-        Box { weight: 1; onTap: { if !busy && hasPrevious { haptic(); busy = true; out = run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-pinterest-wallswap/widgets/pinterest-wallswap/viewer.py prev ${sh(cfg)} 2>&1 | tail -1; date +%s%N") } }
-          Action { label: "Назад"; turn: 180; active: !busy && st != null && hasPrevious }
-        }
-        Box { weight: 1; onTap: { if hasImg && st.page != "" { url(st.page) } }
-          Action { label: "Пин"; turn: -45; active: hasImg && st.page != "" }
-        }
-        Box { weight: 1; onTap: { if hasImg { fullscreen = true } }
-          Action { label: "На весь экран"; turn: -45; active: hasImg }
+      }
+      Row {
+        gap: 10
+        if galleryPage > 0 { Button { text: "Предыдущие"; onTap: galleryPage = galleryPage - 1 } }
+        if (galleryPage + 1) * 20 < len(galleryItems) || boardGallery.more == true {
+          Button { text: "Следующие изображения"; onTap: galleryPage = galleryPage + 1 }
         }
       }
     }
@@ -527,6 +556,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/525d
       gap: 14
       Row {
         gap: 10
+        wrap: !desktop
         Text { text: profiles; weight: 1; style: small; color: muted; maxLines: 1 }
         Button { text: "Загрузки (${len(activeDownloads)})"; onTap: downloadsView = true }
         Button { text: "Настройки"; onTap: { profileDraft = profiles; saveDraft = saveDirectory; settingsResult = ""; settings = true } }
@@ -558,8 +588,8 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/525d
           }
         }
         Grid {
-          columns: 2
-          gap: 8
+          columns: boardColumns
+          gap: desktop ? 12 : 8
           fill: width
           for b in visibleBoards.drop(boardPage * 40).take(40) key b.id {
             let savedBoard = downloadJobs[b.id]
@@ -574,12 +604,12 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/525d
               background: outdatedBoard ? alpha(staleTint, 0.18) : completedBoard ? alpha(green, 0.12) : savingBoard ? alpha(accent, 0.12) : alpha(surface, 0.8)
               border: 1
               borderColor: outdatedBoard ? staleTint : completedBoard ? green : savingBoard ? accent : alpha(muted, 0.2)
-              onTap: { haptic(); selectedBoard = b; fullscreen = false; busy = true; out = run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-pinterest-wallswap/widgets/pinterest-wallswap/viewer.py open ${sh(toJson({boards: [b.id], profiles: effectiveProfiles}))}; date +%s%N") }
-              Text { text: outdatedBoard ? "Нужно докачать · ${savedBoard.saved}" : completedBoard ? "✓ Скачано · ${savedBoard.saved}" : savingBoard ? "↓ Загрузка · ${savedBoard.saved}" : savedBoard.saved > 0 ? "Частично · ${savedBoard.saved}" : savedBoard.status == "error" ? "Ошибка загрузки" : "Не скачано"; fontSize: 9; color: outdatedBoard ? staleTint : completedBoard ? green : savedBoard.status == "error" ? red : savingBoard ? accent : muted; maxLines: 1 }
-              Text { text: b.name; fontSize: 12; fontWeight: 600; maxLines: 2; minLines: 2 }
+              onTap: { haptic(); selectedBoard = b; fullscreen = false }
+              Text { text: outdatedBoard ? "Нужно докачать · ${savedBoard.saved}" : completedBoard ? "✓ Скачано · ${savedBoard.saved}" : savingBoard ? "↓ Загрузка · ${savedBoard.saved}" : savedBoard.saved > 0 ? "Частично · ${savedBoard.saved}" : savedBoard.status == "error" ? "Ошибка загрузки" : "Не скачано"; fontSize: desktop ? 12 : 9; color: outdatedBoard ? staleTint : completedBoard ? green : savedBoard.status == "error" ? red : savingBoard ? accent : muted; maxLines: 1 }
+              Text { text: b.name; fontSize: desktop ? 16 : 12; fontWeight: 600; maxLines: 2; minLines: 2 }
               Row {
                 gap: 6
-                Text { text: "${b.profile} · ${b.count}"; weight: 1; fontSize: 10; color: muted; maxLines: 1 }
+                Text { text: "${b.profile} · ${b.count}"; weight: 1; fontSize: desktop ? 12 : 10; color: muted; maxLines: 1 }
                 Text { text: "›"; color: accent; fontSize: 18 }
               }
             }

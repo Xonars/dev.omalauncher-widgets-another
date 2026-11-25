@@ -1,0 +1,1129 @@
+app "Письма призрака" {
+  // Fixed SHA-256 resource package; installed only inside this entry's private directory.
+  let storeBootstrap = """
+# Template embedded in store OWL. Packages are fixed and SHA-256 verified.
+import fcntl
+import hashlib
+import io
+import os
+from pathlib import Path, PurePosixPath
+import tempfile
+import urllib.request
+import zipfile
+
+
+def install(url, digest, entry):
+    if not entry or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789-" for c in entry):
+        raise ValueError("Invalid store entry")
+    root = Path.home() / '.local/share/omalauncher-store' / entry
+    if any(p.is_symlink() for p in [root, *root.parents]):
+        raise ValueError('Symlink in resource destination')
+    root.mkdir(parents=True, exist_ok=True)
+    with (root / '.install.lock').open('w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        marker = root / '.installed'
+        if marker.exists() and marker.read_text() == digest:
+            return
+        with urllib.request.urlopen(url, timeout=60) as response:
+            payload = response.read(32 * 1024 * 1024 + 1)
+        if len(payload) > 32 * 1024 * 1024 or hashlib.sha256(payload).hexdigest() != digest:
+            raise ValueError('Store resource SHA-256 mismatch')
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            members = archive.infolist()
+            if sum(x.file_size for x in members) > 128 * 1024 * 1024:
+                raise ValueError('Store resource package too large')
+            for info in members:
+                path = PurePosixPath(info.filename)
+                if path.is_absolute() or '..' in path.parts or not path.parts or path.parts[0] not in ('widgets', 'support'):
+                    raise ValueError('Invalid store resource path')
+                target = root.joinpath(*path.parts)
+                # No symlinks in the destination chain or package extraction.
+                if any(p.is_symlink() for p in [target, *target.parents]):
+                    raise ValueError('Symlink in resource destination')
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as output:
+                    output.write(archive.read(info))
+                    temporary = Path(output.name)
+                os.replace(temporary, target)
+        marker.write_text(digest)
+
+install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/66d958d6e109341366c1c783e4ef1e70395b9b9963f16c852adcca30afabca64.zip', '66d958d6e109341366c1c783e4ef1e70395b9b9963f16c852adcca30afabca64', 'xonars-ghost-letters')
+"""
+  let storeInstall = "python -c ${sh(storeBootstrap)}"
+
+  meta { owl: 18; description: "Карточное расследование с тайной перепиской · ресурсы при первом запуске"; version: "1.7.1"; category: "games" ; license: "MIT" }
+  title: "Письма призрака"
+  icon: appIcon
+  requires { pacman: ["python"] }
+
+  state mode = "killer"
+  state seats = 5
+  state humans = 1
+  state localGhost = false
+  state overlay = ""
+  state revealed = ""
+  state evidence = ""
+  state reviewRound = null
+  state choices = {}
+  state ballotPage = null
+  state ghostNotes = {}
+  state selectionToken = ""
+  state queued = ""
+  state receipt = ""
+  state caseView = null
+  state problem = ""
+  state readKey = random(1000000000)
+
+  // Shell reads can be shared for a second. Each new instance loads its own saved turn.
+  source caseReport = cmd("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-ghost-letters/widgets/ghost-letters/game.py view ${int(readKey)}") every 15m json status
+  let game = caseView ?? caseReport.out
+  let phase = game.phase ?? ""
+  let token = "${game.id}:${game.rev}"
+  let layoutWidth = screenWidth ?? 0
+  let layoutHeight = screenHeight ?? 0
+  let wideDesk = layoutWidth >= 640 && (layoutWidth >= 900 || layoutWidth > layoutHeight)
+  let roomyDesk = layoutWidth >= 900 && layoutHeight >= 480
+  let showDesk = wideDesk && len(game.board ?? []) > 0
+  let shownPage = showDesk && (evidence == "board" || evidence == "letters") ? "" : evidence
+  let privateTurn = game.actor != null
+  let covered = privateTurn && revealed != token
+  let config = {mode: mode, total: seats, humans: humans, human_ghost: localGhost}
+  let missing = game.groups.any(g => g.required && get(choices, g.key, null) == null)
+  let ballot = phase == "ballot"
+  let ballotSections = ballot ? game.groups : []
+  let activeBallot = ballotSections.find(g => g.key == ballotPage) ?? first(ballotSections)
+  let pendingBallot = ballotSections.filter(g => get(choices, g.key, null) == null)
+  let ballotReady = get(choices, activeBallot.key, null) != null
+  let conflicting = (choices.send != null && choices.send == choices.discard) ||
+                    (choices.echo != null && choices.echo == choices.silence) ||
+                    (choices.seal != null && choices.seal == choices.discard)
+  let setup = phase == "setup"
+  let loading = caseView == null && caseReport == null
+  let failed = caseView == null && !loading && !caseReport.ok
+  let parchment = #f1e2c7
+  let gold = #d7ad74
+  let dim = #bbad9d
+  let ink = #211b22
+  let shell = #19171e
+  let panel = #28232c
+  let rule = #473946
+  let plum = #633d54
+  let pale = #efd2ac
+  let moss = #a9c6a1
+  let ash = #d0a5a5
+  let violet = #c0a9e5
+  let categoryColors = {"0": #e7b485, "1": #9dcad6, "2": #c0a9e5}
+  let markColors = {"Эхо": #a9c6a1, "Тишина": #d0a5a5, "Печать": #c0a9e5}
+  let markSymbols = {"Эхо": "↗", "Тишина": "↘", "Печать": "✦"}
+  let script = "python ~/.local/share/omalauncher-store/xonars-ghost-letters/widgets/ghost-letters/game.py"
+
+  on token first {
+    if token != selectionToken {
+      revealed = ""
+      choices = {}
+      ballotPage = null
+      ghostNotes = {}
+      reviewRound = null
+      evidence = ""
+      selectionToken = token
+    }
+    if token != queued { queued = "" }
+  }
+
+  on receipt {
+    if value != "" {
+      let answer = parseJson(value)
+      if answer.game != null { caseView = answer.game }
+      else { problem = answer.error ?? "Ход не сохранён. Попробуй ещё раз." }
+      queued = ""
+    }
+  }
+
+  // Back covers a private hand before the app can be left.
+  back: overlay != "" || (privateTurn && !covered) || shownPage != ""
+  onBack: {
+    if overlay != "" { overlay = "" }
+    else {
+      evidence = ""
+      revealed = ""
+    }
+  }
+
+  component RuleLabel(heading) {
+    Text { text: heading; font: sans; color: gold; fontSize: 12; fontWeight: 700; letterSpacing: 0.6 }
+  }
+
+  component Copy(body, shade = #bbad9d) {
+    Text { text: body; font: sans; fontSize: 15; color: shade }
+  }
+
+  component Action(label, hot = true, allowed = true) {
+    Box {
+      fill: width
+      height: 47
+      radius: 9
+      border: 1
+      borderColor: hot ? (allowed ? gold : rule) : rule
+      background: hot ? (allowed ? gold : panel) : panel
+      align: center
+      Text {
+        text: label
+        font: sans
+        fontSize: showDesk ? 13 : 15
+        fontWeight: 700
+        maxLines: 2
+        align: center
+        color: hot && allowed ? ink : (allowed ? parchment : dim)
+      }
+    }
+  }
+
+  component Stepping(label, amount, minimum, maximum, isSeats) {
+    Row {
+      align: center
+      gap: 10
+      Text { text: label; color: parchment; fontSize: 15; weight: 1 }
+      Box {
+        width: 44; height: 42; radius: 7; align: center
+        border: 1; borderColor: rule; background: shell
+        onTap: {
+          if amount > minimum {
+            if isSeats {
+              seats = seats - 1
+              humans = min(humans, seats - (localGhost ? 0 : 1))
+            } else {
+              humans = humans - 1
+              if humans == 1 { localGhost = false }
+            }
+          }
+        }
+        Text { text: "−"; align: center; fontSize: 22; color: amount > minimum ? gold : dim }
+      }
+      Text { text: "${amount}"; width: 25; align: center; font: mono; color: parchment; fontSize: 16 }
+      Box {
+        width: 44; height: 42; radius: 7; align: center
+        border: 1; borderColor: rule; background: shell
+        onTap: {
+          if amount < maximum {
+            if isSeats { seats = seats + 1 } else { humans = humans + 1 }
+          }
+        }
+        Text { text: "+"; align: center; fontSize: 22; color: amount < maximum ? gold : dim }
+      }
+    }
+  }
+
+  component Suspicion(count) {
+    Text {
+      text: "${count}"; color: count > 0 ? ash : dim
+      font: sans; fontWeight: 700; fontSize: 12; padding: [7, 3]; radius: 5
+      background: count > 0 ? alpha(ash, 0.17) : alpha(dim, 0.08)
+    }
+  }
+
+  component Clue(entry, marked = false, tint = #d7ad74, voting = false) {
+    let tone = entry.correct ? moss : (entry.voted ? ash : get(markColors, entry.mark, tint))
+    Column {
+      fill: width
+      gap: 5
+      padding: [8, 7]
+      radius: 9
+      border: 1
+      borderColor: marked || entry.correct || entry.voted ? tone : mix(rule, tone, 0.19)
+      background: mix(panel, tone, marked ? 0.23 : 0.065)
+      Row {
+        align: center
+        gap: 7
+        Box {
+          size: 30; radius: 7; align: center
+          background: alpha(tone, 0.15)
+          Text { text: entry.glyph; font: sans; fontSize: 17; color: tone; align: center }
+        }
+        Text { text: entry.label; font: sans; weight: 1; color: parchment; fontWeight: 650; fontSize: 14; maxLines: 2 }
+        if entry.suspicions != null { Suspicion { count: entry.suspicions } }
+        if marked || voting {
+          Box {
+            size: 22; radius: 11; align: center
+            background: marked ? tone : alpha(tone, 0.06)
+            border: 1; borderColor: marked ? tone : alpha(tone, 0.4)
+            if marked { Text { text: "✓"; color: ink; font: sans; fontSize: 13; bold: true; align: center } }
+          }
+        }
+      }
+      if entry.mark != null || entry.detail != null || entry.correct || entry.voted {
+        Text {
+          text: entry.mark != null ? "${get(markSymbols, entry.mark, "•")}  ${entry.mark}" :
+                (entry.detail ?? (entry.correct ? (entry.voted ? "✓ Верно" : "Истинная улика") : "Голосование"))
+          color: tone; font: sans; fontSize: 11; fontWeight: 650
+        }
+      }
+      if len(entry.supporters ?? []) > 0 {
+        Box { fill: width; height: 1; background: alpha(tone, 0.24) }
+        Flow {
+          gap: 4
+          for name in entry.supporters key name {
+            Text {
+              text: name; padding: [6, 3]; radius: 5; background: alpha(tone, 0.11)
+              color: tone; font: sans; fontSize: 12; fontWeight: 650
+            }
+          }
+        }
+      }
+    }
+  }
+
+  component CategoryLabel(label, tint = #d7ad74) {
+    Row {
+      align: center; gap: 8
+      Box { width: 3; height: 19; radius: 2; background: tint }
+      Text { text: label; color: tint; font: sans; fontSize: 16; fontWeight: 700; weight: 1 }
+    }
+  }
+
+  component Table(rows) {
+    Column {
+      gap: 9
+      for category in rows {
+        let tone = get(categoryColors, category.key, gold)
+        Column {
+          gap: 7
+          padding: 9; border: 1; borderColor: alpha(tone, 0.2); radius: 11
+          background: alpha(tone, 0.045)
+          CategoryLabel { label: category.label; tint: tone }
+          Grid {
+            columns: 2
+            gap: 6
+            for clue in category.cards key clue.value { Clue { entry: clue; tint: tone } }
+          }
+        }
+      }
+    }
+  }
+
+  component ReferenceCard(entry, tint = #d7ad74, focused = false) {
+    let tone = entry.correct ? moss : (entry.voted ? ash : get(markColors, entry.mark, tint))
+    Row {
+      fill: width; align: center; gap: 5
+      padding: roomyDesk ? [9, 8] : [6, 4]
+      radius: 6; background: mix(panel, tone, focused ? 0.24 : 0.10)
+      border: 1; borderColor: alpha(tone, focused ? 0.9 : (entry.correct || entry.voted ? 0.65 : 0.2))
+      Text { text: entry.correct ? "✓" : (entry.mark != null ? get(markSymbols, entry.mark, "•") : entry.glyph); font: sans; color: tone; fontSize: 13 }
+      Column {
+        weight: 1; gap: 1
+        Text { text: entry.label; font: sans; color: parchment; fontWeight: 650; fontSize: roomyDesk ? 16 : 13; maxLines: 2 }
+        if entry.mark != null { Text { text: entry.mark; font: sans; color: tone; fontSize: roomyDesk ? 13 : 11 } }
+      }
+    }
+  }
+
+  component DeskBoard(rows) {
+    Column {
+      gap: 7
+      CategoryLabel { label: "Стол расследования" }
+      for category in rows key category.key {
+        let tone = get(categoryColors, category.key, gold)
+        let spoken = (game.statement.clues ?? []).find(c => c.key == category.key).value
+        let picked = ballot && !covered && activeBallot.key == category.key ? get(choices, category.key, null) : null
+        let focus = spoken ?? picked
+        let tested = game.statement.tests ?? []
+        Column {
+          gap: 4
+          Text { text: category.label; font: sans; color: tone; fontSize: roomyDesk ? 16 : 13; fontWeight: 700 }
+          Grid {
+            columns: 2
+            gap: 4
+            for clue in category.cards key clue.value {
+              ReferenceCard { entry: clue; tint: tone; focused: clue.value == focus || tested.any(card => card.value == clue.value) }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  component DeskLetter(letter) {
+    Column {
+      gap: 4
+      RuleLabel { heading: letter.round == 0 ? "Первое письмо" : "Раунд ${letter.round}" }
+      if len(letter.cards) == 0 { Copy { body: "Все карты ушли в архив." } }
+      for clue in letter.cards key clue.value { ReferenceCard { entry: clue } }
+    }
+  }
+
+  component DeskPost(letters) {
+    Column {
+      fill: height
+      gap: 8
+      CategoryLabel { label: "Письма Призрака" }
+      if len(letters) == 0 {
+        Copy { body: "Письма ещё не открыты." }
+      } else {
+        DeskLetter { letter: first(letters) }
+        if len(letters) > 1 {
+          Box { height: 1; fill: width; background: rule }
+          Column {
+            weight: 1; scroll: true; gap: 9
+            for letter in letters.drop(1) key letter.round { DeskLetter { letter: letter } }
+          }
+        }
+      }
+    }
+  }
+
+  component Lines(rows) {
+    Column {
+      gap: 6
+      for line in rows {
+        Column {
+          gap: 2
+          Text { text: line.label; font: sans; color: gold; fontSize: 12; fontWeight: 600 }
+          Text { text: line.value; font: sans; color: parchment; fontSize: 14 }
+        }
+      }
+    }
+  }
+
+  component Opinion(player, opinion, spotlight = false) {
+    Column {
+      fill: width; gap: 8; padding: 12; radius: 12; border: 1
+      borderColor: spotlight ? alpha(gold, 0.45) : rule
+      background: spotlight ? linear(0, 0, 1, 1, [#352a34, panel]) : panel
+      Row {
+        align: center; gap: 8
+        Box {
+          size: spotlight ? 37 : 28; radius: 7; align: center
+          background: alpha(gold, 0.15)
+          Text { text: sub(player, 0, 1); color: gold; font: serif; fontSize: spotlight ? 23 : 17; align: center }
+        }
+        Text { text: player; color: parchment; font: serif; fontSize: spotlight ? 27 : 20; weight: 1 }
+      }
+      if opinion == null { Copy { body: "Пропускает ход." } }
+      if opinion.checking != null {
+        RuleLabel { heading: "↻  Проверяет версию · ${opinion.checking}" }
+      }
+      if opinion.claim != null || len(opinion.tests ?? []) > 0 {
+        Column {
+          gap: 4; padding: 9; radius: 8; border: 1; borderColor: alpha(gold, 0.22)
+          background: alpha(gold, 0.06)
+          if opinion.claim != null {
+            Text { text: "«Я отправил: ${opinion.claim.label}»"; color: parchment; font: sans; fontSize: 16; fontWeight: 700 }
+            Text {
+              text: opinion.claim.mark == null ? "Призрак не открыл эту карту" : "Призрак открыл · ${opinion.claim.mark}"
+              color: opinion.claim.mark == null ? dim : get(markColors, opinion.claim.mark, gold)
+              font: sans; fontSize: 12
+            }
+            if opinion.claim.disputed {
+              Text { text: "Эту карту назвали несколько игроков"; color: ash; font: sans; fontSize: 12; fontWeight: 700 }
+            }
+          }
+          if len(opinion.tests ?? []) > 0 {
+            RuleLabel { heading: "Проверял" }
+            Flow {
+              gap: 5
+              for clue in opinion.tests key clue.value {
+                Text {
+                  text: clue.label; color: parchment; font: sans; fontSize: 14
+                  padding: [6, 3]; radius: 5; background: alpha(gold, 0.14)
+                }
+              }
+            }
+          }
+        }
+      }
+      if opinion.suspect != null {
+        Row {
+          align: center; gap: 8; padding: [8, 7]; radius: 7
+          background: alpha(ash, 0.13); border: 1; borderColor: alpha(ash, 0.24)
+          Text { text: "Подозревает →"; color: ash; font: sans; fontSize: 12 }
+          Text { text: opinion.suspect; color: parchment; font: sans; fontSize: spotlight ? 18 : 15; fontWeight: 700; weight: 1 }
+          Suspicion { count: opinion.suspicions }
+        }
+      }
+      Grid {
+        columns: spotlight && roomyDesk ? 3 : 1; gap: 5
+        for clue in (opinion.clues ?? []).filter(c => len(opinion.clues) > 1 || !(opinion.tests ?? []).any(t => t.value == c.value)) key clue.key {
+          let tone = get(categoryColors, clue.key, gold)
+          Row {
+            align: center; gap: 7; padding: [8, 6]; radius: 7; background: alpha(tone, 0.075)
+            Box { width: 2; height: 21; radius: 1; background: tone }
+            Column {
+              weight: 1; gap: 1
+              Text { text: clue.category; color: tone; font: sans; fontSize: 11 }
+              Text { text: clue.label; color: parchment; font: sans; fontSize: 15; fontWeight: 700 }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  component BallotTabs(sections, active) {
+    Column {
+      gap: 6
+      Row {
+        Text {
+          text: "Заполнено ${len(sections) - len(pendingBallot)} из ${len(sections)}"
+          color: dim; font: sans; fontSize: 12; weight: 1
+        }
+        Text { text: "Тайный бюллетень"; color: dim; font: sans; fontSize: 12 }
+      }
+      Grid {
+        columns: min(showDesk && !roomyDesk ? 2 : 4, len(sections)); gap: 5
+        for section in sections key section.key {
+          let tone = get(categoryColors, section.key, ash)
+          let current = section.key == active
+          let complete = get(choices, section.key, null) != null
+          Box {
+            fill: width; height: 38; align: center; radius: 7
+            border: 1; borderColor: current ? tone : rule
+            background: mix(panel, tone, current ? 0.19 : 0.04)
+            onTap: ballotPage = section.key
+            Text {
+              text: complete ? "✓ ${section.label}" : section.label
+              color: current || complete ? tone : dim; font: sans; fontSize: 12; fontWeight: 700; align: center
+            }
+          }
+        }
+      }
+    }
+  }
+
+  component Roster(players) {
+    Column {
+      gap: 6
+      CategoryLabel { label: "Подозрения игроков" }
+      for player in players key player.name {
+        Row {
+          align: center; gap: 6; padding: [7, 3]; radius: 6; background: alpha(ash, 0.05)
+          Text { text: player.name; font: sans; color: parchment; fontSize: 14; weight: 1 }
+          Text { text: player.role != "" ? "${player.seat} · ${player.role}" : player.seat; font: sans; color: dim; fontSize: 12 }
+          if player.suspicions != null { Suspicion { count: player.suspicions } }
+        }
+      }
+    }
+  }
+
+  component MailAudit(rounds) {
+    let active = reviewRound ?? first(rounds).round
+    Column {
+      gap: 10
+      Text { text: "Кто что отправил"; color: parchment; font: serif; fontSize: 29 }
+      Flow {
+        gap: 5
+        for log in rounds key log.round {
+          Box {
+            width: 78; height: 36; align: center; radius: 7; background: active == log.round ? gold : panel
+            onTap: reviewRound = log.round
+            Text { text: "Раунд ${log.round}"; font: sans; align: center; color: active == log.round ? ink : parchment }
+          }
+        }
+      }
+      for log in rounds.filter(item => item.round == active) key log.round {
+        for item in log.entries key item.player {
+          Column {
+            gap: 4; padding: 9; radius: 8; background: panel; border: 1
+            borderColor: item.bluff ? ash : rule
+            Row {
+              align: center
+              Text { text: item.player; color: parchment; font: sans; fontWeight: 700; weight: 1 }
+              if item.bluff { RuleLabel { heading: "Блеф" } }
+            }
+            Copy { body: "В ящик → ${item.sent}"; shade: parchment }
+            if item.claim != null { Copy { body: "В обсуждении → ${item.claim}"; shade: item.bluff ? ash : moss } }
+          }
+        }
+      }
+    }
+  }
+
+  component Post(letters) {
+    Column {
+      gap: 10
+      RuleLabel { heading: "ПИСЬМА" }
+      if len(letters) == 0 { Copy { body: "Ящик пока пуст." } }
+      for letter in letters key letter.round {
+        Column {
+          gap: 5
+          padding: 10
+          radius: 9
+          border: 1
+          borderColor: rule
+          Text { text: letter.round == 0 ? "Первое письмо" : "Раунд ${letter.round}"; color: parchment; font: sans; fontWeight: 700; fontSize: 15 }
+          if len(letter.cards) > 0 {
+            Grid {
+              columns: 2
+              gap: 6
+              for clue in letter.cards key clue.value { Clue { entry: clue } }
+            }
+          } else { Copy { body: "Призрак не открыл карт." } }
+          if letter.round > 0 {
+            Text { text: "В архиве · ${letter.missing}"; color: dim; font: mono; fontSize: 12 }
+          }
+        }
+      }
+    }
+  }
+
+  component RoundTracker(current, total) {
+    Column {
+      weight: 1
+      gap: 4
+      RuleLabel { heading: "РАУНД ${current} ИЗ ${total}" }
+      Row {
+        fill: width; gap: 4
+        for step in range(total) {
+          Box { weight: 1; height: 4; radius: 2; background: step + 1 == current ? gold : (step + 1 < current ? #937764 : rule) }
+        }
+      }
+    }
+  }
+
+  component Verdict(rows) {
+    Column {
+      gap: 8
+      CategoryLabel { label: "Верные улики · ${rows.count(r => r.correct)} из ${len(rows)}" }
+      for category in rows key category.key {
+        let tone = get(categoryColors, category.key, gold)
+        Column {
+          gap: 6; padding: 9; radius: 10; border: 1; borderColor: alpha(tone, 0.25)
+          background: alpha(tone, 0.06)
+          Row {
+            align: center
+            Text { text: category.label; font: sans; fontWeight: 700; color: tone; weight: 1 }
+            Text {
+              text: category.correct ? "✓ Угадано" : (category.voted == null ? "Ничья" : "Промах")
+              font: sans; fontSize: 12; color: category.correct ? moss : ash
+            }
+          }
+          Row {
+            gap: 6
+            Column {
+              weight: 1; gap: 3
+              RuleLabel { heading: "Истинная улика" }
+              Clue { entry: category.truth; tint: moss }
+            }
+            if !category.correct {
+              Column {
+                weight: 1; gap: 3
+                RuleLabel { heading: "Выбор стола" }
+                if category.voted != null { Clue { entry: category.voted; tint: ash } }
+                else { Copy { body: "Голоса разделились" } }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  component Links(items, tint) {
+    Column {
+      gap: 4
+      for link in items {
+        Row {
+          align: center; gap: 6
+          Text { text: "↳"; font: sans; fontSize: 19; color: tint }
+          Column {
+            weight: 1; gap: 1
+            Text { text: "${link.category} · ${link.target.label}"; font: sans; fontWeight: 700; fontSize: 14; color: parchment }
+            Text { text: "Общая тема · ${link.theme}"; font: sans; fontSize: 12; color: tint }
+          }
+        }
+      }
+    }
+  }
+
+  component SceneTitle(heading, description) {
+    Column {
+      gap: 5
+      Text { text: heading; font: serif; fontSize: 30; color: parchment; maxLines: 3 }
+      if description != "" { Copy { body: description } }
+    }
+  }
+
+  component Debrief(rounds, human) {
+    let activeRound = reviewRound ?? first(rounds).round
+    Column {
+      gap: 11
+      SceneTitle {
+        heading: "Разбор Призрака"
+        description: human ? "Записи, которые Призрак сделал во время партии." : "Какие ассоциации Призрак использовал, чтобы направить расследование."
+      }
+      if len(rounds) == 0 { Copy { body: "Призрак пока не отправил ни одного письма." } }
+      Flow {
+        gap: 6
+        for letter in rounds key letter.round {
+          let selected = letter.round == activeRound
+          Box {
+            width: letter.round == 0 ? 77 : 43; height: 38; radius: 7; align: center
+            background: selected ? gold : panel
+            border: 1; borderColor: selected ? gold : rule
+            onTap: reviewRound = letter.round
+            Text {
+              text: letter.round == 0 ? "Первое" : "${letter.round}"
+              font: sans; fontSize: 14; fontWeight: 700; align: center; color: selected ? ink : parchment
+            }
+          }
+        }
+      }
+      for letter in rounds.filter(r => r.round == activeRound) key letter.round {
+        Column {
+          gap: 9
+          padding: 10; radius: 11; background: alpha(gold, 0.045); border: 1; borderColor: rule
+          CategoryLabel { label: letter.round == 0 ? "Первое письмо" : "Раунд ${letter.round}" }
+          if letter.summary != "" { Copy { body: letter.summary } }
+          for item in letter.entries key item.card.value {
+            let tone = get(markColors, item.card.mark, gold)
+            Column {
+              gap: 5
+              padding: 8; radius: 9; background: shell; border: 1; borderColor: alpha(tone, 0.24)
+              Clue { entry: item.card }
+              if item.comment != "" { Copy { body: item.comment; shade: parchment } }
+              else { Copy { body: "К этой карте Призрак не оставил пояснения." } }
+              if len(item.links) > 0 { Links { items: item.links; tint: tone } }
+              if len(item.other) > 0 {
+                Text {
+                  text: item.card.mark == "Тишина" ? "Связь с истинными уликами" : "Могло напомнить и о других уликах"
+                  font: sans; fontSize: 12; color: dim
+                }
+                Links { items: item.other; tint: dim }
+              }
+            }
+          }
+          if len(letter.archived) > 0 {
+            Text { text: "В архиве · ${join(letter.archived.map(c => c.label), ", ")}"; font: sans; color: dim; fontSize: 13 }
+          }
+        }
+      }
+    }
+  }
+
+  component Envelope() {
+    Canvas {
+      fill: width
+      height: 118
+      let cx = width / 2
+      circle(cx, 57, 52, stroke: rule, width: 1)
+      circle(cx, 57, 40, stroke: rule, width: 1)
+      for i in range(3) {
+        let x1 = cx - 106 + i * 88
+        let y1 = i == 1 ? 9 : 27 + i * 29
+        line(x1 - 4, y1, x1 + 4, y1, stroke: gold, width: 1)
+        line(x1, y1 - 4, x1, y1 + 4, stroke: gold, width: 1)
+      }
+      rotate(-9, cx, 63) {
+        rect(cx - 56, 32, 112, 68, radius: 8, fill: ink)
+        rect(cx - 56, 27, 112, 68, radius: 8, fill: pale)
+        path([[cx - 56, 88], [cx, 55], [cx + 56, 88]], stroke: #9b6d5c, width: 1)
+        path([[cx - 55, 33], [cx, 73], [cx + 55, 33]], closed: true, fill: #eadaba)
+        path([[cx - 55, 33], [cx, 73], [cx + 55, 33]], stroke: #9b6d5c, width: 1)
+        circle(cx, 70, 11, fill: #854e62)
+        circle(cx, 70, 7, stroke: #c88c8c, width: 1)
+        circle(cx, 70, 2, fill: pale)
+      }
+    }
+  }
+
+  Column {
+    fill: true
+    background: shell
+    padding: [16, 10, 16, 14]
+    gap: 10
+    Row {
+      align: center
+      Text {
+        text: setup || loading || failed ? "✉  ПОЧТОВЫЙ ЯЩИК" : "${game.mode}"
+        color: gold; fontWeight: 700; fontSize: 12; letterSpacing: 0.6; weight: 1
+      }
+      Box {
+        width: 46; height: 36; radius: 8; align: center
+        border: 1; borderColor: rule; background: panel
+        onTap: { overlay = overlay == "help" ? "" : "help" }
+        Text { text: "?"; color: gold; align: center; fontWeight: 700; fontSize: 17 }
+      }
+      if !setup && !loading && !failed {
+        Box {
+          width: 46; height: 36; radius: 8; align: center
+          border: 1; borderColor: rule; background: panel
+          onTap: { overlay = overlay == "reset" ? "" : "reset" }
+          Text { text: "↺"; color: gold; align: center; fontSize: 19 }
+        }
+      }
+    }
+
+    Row {
+      weight: 1
+      fill: width
+      align: top
+      gap: 12
+      if showDesk {
+        Column {
+          width: min(layoutWidth * 0.32, 410)
+          fill: height
+          scroll: true
+          padding: 8
+          background: alpha(gold, 0.035)
+          radius: 10; border: 1; borderColor: rule
+          DeskBoard { rows: game.board }
+          Roster { players: game.roster }
+        }
+      }
+      Column {
+        weight: 1
+        fill: height
+        gap: 9
+        if overlay == "help" {
+          Column {
+            weight: 1; scroll: true; gap: 13
+            SceneTitle { heading: "Как играть"; description: "" }
+            Lines { rows: [
+              {label: "1 · Роли и стол", value: "Игра рассчитана на 4–12 участников, включая ботов. Узнайте роли по очереди. Убийца тайно назначает по одной истинной улике из четырёх вариантов в каждой категории."},
+              {label: "2 · Почта", value: "Каждый, кроме Призрака, отправляет карту с руки. Призрак может отметить одно письмо «Эхо» (есть связь с истиной), второе — «Тишина» (ложный след), а также приложить одну карту с руки как печать. Остальные письма уходят в закрытый архив."},
+              {label: "3 · Ход Призрака и обсуждение", value: "Когда все отправили свои карты, Призрак показывает письма раунда всему столу. После этого участники по очереди высказывают версии. Можно назвать другую карту. В следующем раунде можно перепроверить чужую версию. Число рядом с игроком показывает, сколько участников сейчас его подозревают."},
+              {label: "4 · Голосование", value: "Выберите три улики и одного подозреваемого. Побеждает вариант с наибольшим числом голосов. При ничьей проводится один повторный тур. В одиночной игре твой голос решает ничью, если он за один из лидирующих вариантов."},
+              {label: "5 · Развязка", value: "Для раскрытия дела нужны три верные улики или две улики и арест убийцы. Если задержан сообщник, он выбывает из голосования и проводится ещё один арест. После раскрытия дела убийца может отнять победу, угадав свидетеля или эксперта."},
+              {label: "Передача телефона", value: "Личные экраны закрыты до нажатия «Открыть мой ход». Кнопка «Назад» скрывает открытый ход. Партия сохраняется после каждого хода."}
+            ] }
+          }
+          Box { fill: width; onTap: overlay = ""; Action { label: "Вернуться"; hot: false } }
+        } else if overlay == "reset" {
+          Column {
+            weight: 1; gap: 12
+            SceneTitle { heading: "Начать заново?"; description: "Текущая партия будет удалена." }
+            Box {
+              fill: width
+              onTap: {
+                problem = ""
+                receipt = ""
+                receipt = run("${script} reset ${sh(token)}")
+                overlay = ""
+                revealed = ""
+              }
+              Action { label: "Завершить партию" }
+            }
+            Box { fill: width; onTap: overlay = ""; Action { label: "Продолжить партию"; hot: false } }
+          }
+        } else if loading || failed {
+          Column {
+            weight: 1; justify: center; gap: 8
+            SceneTitle {
+              heading: loading ? "Открываем ящик…" : "Не удалось открыть игру"
+              description: failed ? "Проверь, что Linux запущен, и попробуй снова." : ""
+            }
+            if failed { Box { fill: width; onTap: refresh(); Action { label: "Повторить" } } }
+          }
+        } else if setup {
+          Column {
+            weight: 1
+            scroll: true
+            gap: 11
+            Column {
+              background: linear(0, 0, 1, 1, [#302735, #211b25])
+              border: 1; borderColor: rule; radius: 14; padding: [14, 9, 14, 14]
+              gap: 2
+              Envelope {}
+              Text { text: "Письма призрака"; font: serif; fontSize: 33; align: center; color: parchment }
+              Text { text: "Карточное расследование"; fontSize: 14; align: center; color: dim }
+            }
+            RuleLabel { heading: "СОСТАВ ДЕЛА" }
+            Grid {
+              columns: 2
+              gap: 7
+              for option in game.modes key option.key {
+                Column {
+                  height: 54
+                  justify: center
+                  padding: [10, 5]
+                  border: 1
+                  borderColor: mode == option.key ? gold : rule
+                  radius: 8
+                  background: mode == option.key ? plum : panel
+                  onTap: mode = option.key
+                  Text { text: option.label; fontSize: 13; color: parchment; maxLines: 2; fontWeight: mode == option.key ? 700 : 500 }
+                }
+              }
+            }
+            RuleLabel { heading: "ЗА СТОЛОМ" }
+            Column {
+              padding: [10, 6]
+              gap: 4
+              radius: 10
+              border: 1
+              borderColor: rule
+              background: panel
+              Stepping { label: "Всего участников"; amount: seats; minimum: 4; maximum: 12; isSeats: true }
+              Stepping { label: "Людей на телефоне"; amount: humans; minimum: 1; maximum: seats - (localGhost ? 0 : 1); isSeats: false }
+              if humans > 1 {
+                Row {
+                  height: 40
+                  align: center
+                  onTap: {
+                    localGhost = !localGhost
+                    if !localGhost { humans = min(humans, seats - 1) }
+                  }
+                  Text { text: "Призрак"; color: parchment; fontSize: 15; weight: 1 }
+                  Text { text: localGhost ? "Человек" : "Бот"; color: gold; fontSize: 14 }
+                }
+              }
+            }
+            Text {
+              text: "Ботов: ${seats - humans}  ·  Раундов: ${seats == 4 ? 5 : (seats <= 7 ? 4 : (seats <= 10 ? 3 : 2))}"
+              color: dim
+              font: mono
+              fontSize: 12
+            }
+          }
+          Box {
+            fill: width
+            onTap: {
+              problem = ""
+              receipt = ""
+              receipt = run("${script} start - ${sh(toJson(config))}")
+            }
+            Action { label: "Открыть дело" }
+          }
+        } else if covered {
+          Column {
+            weight: 1; justify: center; gap: 9; scroll: true
+            if !showDesk || layoutHeight >= 440 { Envelope {} }
+            Text { text: "Передай телефон"; font: serif; fontSize: showDesk ? 26 : 32; align: center; color: parchment }
+            Text { text: game.actor.label; color: gold; fontWeight: 700; fontSize: 19; align: center }
+            Text { text: "Личный экран. Открывай, когда телефон у тебя."; color: dim; align: center; fontSize: 14 }
+          }
+          Box {
+            fill: width
+            onTap: {
+              if queued != token { revealed = token }
+            }
+            Action { label: queued == token ? "Передаём ход…" : "Открыть мой ход"; allowed: queued != token }
+          }
+        } else {
+          if game.round > 0 && phase != "result" {
+            Row {
+              align: center
+              RoundTracker { current: game.round; total: game.rounds }
+              if !showDesk && phase != "opening" {
+                Box {
+                  width: 88; height: 36; align: center; radius: 7
+                  background: evidence == "board" ? plum : panel
+                  border: 1; borderColor: rule
+                  onTap: { evidence = evidence == "board" ? "" : "board" }
+                  Text { text: "Стол"; color: parchment; align: center; fontSize: 13 }
+                }
+                Box {
+                  width: 88; height: 36; align: center; radius: 7
+                  background: evidence == "letters" ? plum : panel
+                  border: 1; borderColor: rule
+                  onTap: { evidence = evidence == "letters" ? "" : "letters" }
+                  Text { text: "Письма"; color: parchment; align: center; fontSize: 13 }
+                }
+              }
+            }
+          }
+          // A new turn starts at the top of its own scroll view.
+          for sheet in [game] key "${token}/${shownPage}/${activeBallot.key ?? ""}" {
+            Column {
+              weight: 1
+              scroll: true
+              gap: 12
+              if shownPage == "debrief" {
+                Debrief { rounds: sheet.debrief; human: sheet.ghost_is_human }
+              } else if shownPage == "mail-audit" {
+                MailAudit { rounds: sheet.mail_audit }
+              } else if shownPage == "letters" {
+                Post { letters: sheet.letters }
+              } else if shownPage == "board" {
+                Table { rows: sheet.board }
+                Roster { players: sheet.roster }
+                if sheet.phase == "ballot" && len(sheet.notes) > 0 {
+                  RuleLabel { heading: "ВЕРСИИ" }
+                  for opinion in sheet.notes key opinion.player { Opinion { player: opinion.player; opinion: opinion } }
+                }
+              } else {
+                if sheet.phase == "statement" {
+                  Opinion { player: sheet.speaker; opinion: sheet.statement; spotlight: true }
+                } else {
+                  SceneTitle { heading: sheet.phase == "discussion" ? "Версии за столом" : sheet.title; description: ballot || sheet.phase == "discussion" ? "" : sheet.brief }
+                }
+                if privateTurn {
+                  Column {
+                    gap: 5; padding: 11; radius: 10; border: 1; borderColor: rule; background: panel
+                    RuleLabel { heading: sheet.actor.role == "Призрак" ? sheet.actor.label : "${sheet.actor.label} · ${sheet.actor.role}" }
+                    if phase == "role" { Copy { body: sheet.actor.brief; shade: parchment } }
+                    Lines { rows: sheet.actor.knowledge }
+                    if len(sheet.actor.recheck ?? []) > 0 {
+                      Copy { body: "Перепроверка · ${join(sheet.actor.recheck, " · ")}" }
+                    }
+                  }
+                }
+                if len(sheet.outcome) > 0 {
+                  Box {
+                    fill: width; radius: 9
+                    onTap: { reviewRound = null; evidence = "debrief" }
+                    Action { label: "✉  Разбор Призрака" }
+                  }
+                  if len(sheet.mail_audit ?? []) > 0 {
+                    Box {
+                      fill: width; radius: 9
+                      onTap: { reviewRound = null; evidence = "mail-audit" }
+                      Action { label: "Кто что отправил"; hot: false }
+                    }
+                  }
+                  Verdict { rows: sheet.verdict }
+                  Column {
+                    gap: 7; padding: 11; radius: 10; border: 1; borderColor: sheet.success ? moss : ash; background: panel
+                    Lines { rows: sheet.outcome }
+                  }
+                }
+                if !showDesk && sheet.phase == "intro" && len(sheet.letters) > 0 { Post { letters: sheet.letters.take(1) } }
+                if !showDesk && (sheet.phase == "reveal" || sheet.phase == "note" || sheet.phase == "statement" || sheet.phase == "discussion") {
+                  Post { letters: sheet.letters.take(1) }
+                }
+                if sheet.phase == "discussion" {
+                  if !showDesk { Roster { players: sheet.roster } }
+                  Grid {
+                    columns: showDesk && layoutWidth >= 1200 ? 2 : 1
+                    gap: 8
+                    for opinion in sheet.notes key opinion.player {
+                      Opinion { player: opinion.player; opinion: opinion }
+                    }
+                  }
+                  if len(sheet.notes) == 0 { Copy { body: "Никто не предложил версию." } }
+                }
+                if ballot {
+                  BallotTabs { sections: ballotSections; active: activeBallot.key }
+                  if activeBallot.options.any(c => len(c.supporters) > 0) {
+                    Text { text: "Под вариантами — кто их поддержал в обсуждении."; color: dim; font: sans; fontSize: 12 }
+                  }
+                  if activeBallot.key == "suspect" {
+                    Text { text: "Число рядом с именем — сколько игроков его подозревают."; color: dim; font: sans; fontSize: 12 }
+                  }
+                  if sheet.brief != "" { Copy { body: sheet.brief } }
+                }
+                let shownGroups = ballot ? [activeBallot] : sheet.groups
+                for section in shownGroups key section.key {
+                  let tone = get(categoryColors, section.key, (section.key == "echo" ? moss :
+                                (section.key == "silence" || section.key == "person" || section.key == "suspect" ? ash : (section.key == "seal" ? violet : gold))))
+                  let selected = get(choices, section.key, null)
+                  let checked = section.multiple ? (selected ?? []) : []
+                  let canExplain = (phase == "opening" || phase == "sort") &&
+                                   (section.key == "echo" || section.key == "silence" || section.key == "seal")
+                  Column {
+                    gap: 7
+                    if !ballot { CategoryLabel { label: section.label; tint: tone } }
+                    if section.multiple {
+                      Text {
+                        text: len(checked) == 0 ? "Можно отметить несколько" : "Отмечено · ${len(checked)}"
+                        color: dim; font: sans; fontSize: 12
+                      }
+                    }
+                    Grid {
+                      columns: 2
+                      gap: 6
+                      for option in section.options key option.value {
+                        Box {
+                          fill: width
+                          radius: 9
+                          onTap: {
+                            if canExplain { ghostNotes = remove(ghostNotes, section.key) }
+                            if section.multiple {
+                              let updated = checked.any(x => x == option.value) ? checked.filter(x => x != option.value) : checked + [option.value]
+                              choices = len(updated) > 0 ? set(choices, section.key, updated) : remove(choices, section.key)
+                            } else if selected == option.value { choices = remove(choices, section.key) }
+                            else { choices = set(choices, section.key, option.value) }
+                          }
+                          Clue { entry: option; tint: tone; marked: section.multiple ? checked.any(x => x == option.value) : selected == option.value; voting: ballot || section.multiple }
+                        }
+                      }
+                    }
+                    if canExplain && get(choices, section.key, null) != null {
+                      Column {
+                        gap: 3; padding: [9, 6]; radius: 8; background: panel; border: 1; borderColor: rule
+                        RuleLabel { heading: "Заметка для финала" }
+                        Input {
+                          text: get(ghostNotes, section.key, "")
+                          placeholder: section.key == "silence" ? "От какой версии ты хотел отвести детективов?" : "На какую улику ты намекал и почему?"
+                          lines: 3; fontSize: 15
+                          onChange: ghostNotes = set(ghostNotes, section.key, sub(value, 0, 300))
+                        }
+                      }
+                    }
+                  }
+                }
+                if sheet.phase == "board" || sheet.phase == "result" {
+                  if !showDesk { Table { rows: sheet.board } }
+                  Roster { players: sheet.roster }
+                }
+                if len(sheet.tallies) > 0 {
+                  RuleLabel { heading: "ПОДСЧЁТ ГОЛОСОВ" }
+                  for tally, i in sheet.tallies {
+                    Column {
+                      gap: 6; padding: 10; radius: 9; border: 1; borderColor: rule
+                      Text { text: "Голосование ${i + 1}"; color: parchment; fontSize: 14; fontWeight: 700 }
+                      Lines { rows: tally }
+                    }
+                  }
+                }
+                if !showDesk && sheet.phase == "result" { Post { letters: sheet.letters } }
+              }
+            }
+          }
+          if conflicting && shownPage == "" {
+            Text { text: "Выбери разные карты."; color: ash; fontSize: 13; align: center }
+          }
+          if shownPage != "" {
+            Box { fill: width; onTap: evidence = ""; Action { label: phase == "result" ? "Вернуться к итогам" : "Вернуться к ходу"; hot: false } }
+          } else if phase == "result" {
+            Box {
+              fill: width
+              onTap: {
+                problem = ""
+                receipt = ""
+                receipt = run("${script} reset ${sh(token)}")
+              }
+              Action { label: "Новое дело" }
+            }
+          } else {
+            let ready = (ballot ? (!missing || ballotReady) : !missing) && !conflicting && queued != token
+            Box {
+              fill: width
+              onTap: {
+                if ready && ballot && missing {
+                  ballotPage = first(pendingBallot).key
+                } else if ready {
+                  queued = token
+                  problem = ""
+                  receipt = ""
+                  if privateTurn {
+                    revealed = ""
+                    receipt = run("${script} submit ${sh(token)} ${sh(toJson(set(choices, "comments", ghostNotes)))}")
+                  } else { receipt = run("${script} advance ${sh(token)}") }
+                }
+              }
+              Action {
+                label: queued == token ? "Сохраняем ход…" :
+                       (ballot && missing ? (ballotReady ? "Далее · ${first(pendingBallot).label}" : "Выбери вариант") :
+                       (phase == "opening" && choices.seal == null ? "Пропустить первое письмо" :
+                       (phase == "note" && !game.groups.any(g => get(choices, g.key, null) != null) ? "Пропустить" : game.action)))
+                allowed: ready
+              }
+            }
+          }
+        }
+        if problem != "" { Text { text: problem; color: ash; fontSize: 13; align: center } }
+      }
+      if showDesk {
+        Column {
+          width: min(layoutWidth * 0.27, 335)
+          fill: height
+          padding: 8
+          background: alpha(gold, 0.035)
+          radius: 10; border: 1; borderColor: rule
+          DeskPost { letters: game.letters }
+        }
+      }
+    }
+  }
+
+  asset appIcon = base64"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"
+}

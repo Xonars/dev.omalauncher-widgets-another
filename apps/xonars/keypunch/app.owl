@@ -1,0 +1,94 @@
+app "Keypunch" {
+  meta { owl: 18; version: "1.0.1"; description: "Typing practice with voices from computing. EN / RU."; category: "productivity" ; license: "MIT" }
+  title: ""
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect x=".5" y=".5" width="47" height="47" rx="9" fill="#19191d"/><rect x=".5" y=".5" width="47" height="47" rx="9" fill="currentColor" fill-opacity=".30" stroke="currentColor" stroke-opacity=".78"/><defs><g id="symbol"><rect x="8" y="8" width="32" height="32" rx="8"/><path d="M15 32h18M18 26l6-10 6 10"/></g></defs><g transform="translate(1.08 1.08) scale(0.955)" fill="none" stroke="#faf8f3" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.62"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g><g transform="translate(1.08 1.08) scale(0.955)" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.62" opacity=".16"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g></svg>"""
+  source now = clock every 1s
+  state language = "ru" persist
+  let mode = 0
+  state index = 0
+  state typed = ""
+  state active = false
+  state done = false
+  state started = 0
+  state stopped = 0
+  state errors = 0
+  state strokes = 0
+  state bank = 0
+  state records = {} persist
+  state recent = [] persist
+  let ru = language == "ru"
+  let quotes = [{"author": "Linus Torvalds", "en": "Talk is cheap. Show me the code.", "ru": "Разговоры ничего не стоят. Покажите мне код.", "link": "https://lkml.org/lkml/2000/8/25/132"}, {"author": "Edsger Dijkstra", "en": "Simplicity is prerequisite for reliability.", "ru": "Простота — необходимое условие надёжности.", "link": "https://dave.cheney.net/paste/clear-is-better-than-clever.pdf"}, {"author": "Donald Knuth", "en": "Premature optimization is the root of all evil.", "ru": "Преждевременная оптимизация — корень всех зол.", "link": "https://web.stanford.edu/class/archive/cs/cs106b/cs106b.1184/styleguide.shtml"}, {"author": "Martin Fowler", "en": "Good programmers write code that humans can understand.", "ru": "Хорошие программисты пишут код, понятный людям.", "link": "https://www.thoughtworks.com/content/dam/thoughtworks/documents/books/bk_Refactoring2-free-chapter_en.pdf"}, {"author": "Alan Perlis", "en": "One man's constant is another man's variable.", "ru": "Константа одного человека — переменная другого.", "link": "https://www.cs.yale.edu/homes/perlis-alan/quotes.html"}, {"author": "Alan Perlis", "en": "Simplicity does not precede complexity, but follows it.", "ru": "Простота не предшествует сложности, а следует за ней.", "link": "https://www.cs.yale.edu/homes/perlis-alan/quotes.html"}, {"author": "Tim Peters", "en": "Explicit is better than implicit.", "ru": "Явное лучше неявного.", "link": "https://peps.python.org/pep-0020/"}, {"author": "Tim Peters", "en": "Readability counts.", "ru": "Читаемость имеет значение.", "link": "https://peps.python.org/pep-0020/"}, {"author": "Tim Peters", "en": "Errors should never pass silently.", "ru": "Ошибки никогда не должны замалчиваться.", "link": "https://peps.python.org/pep-0020/"}]
+  let quote = quotes[index % len(quotes)]
+  let target = ru ? quote.ru : quote.en
+  let correct = len(filter(range(min(len(typed), len(target))), i => sub(typed, i, i + 1) == sub(target, i, i + 1)))
+  let elapsed = started == 0 ? 0 : max(0.1, (done ? stopped : now) - started)
+  let speed = elapsed > 0 ? round((bank + correct) * 12 / elapsed) : 0
+  let accuracy = strokes > 0 ? round(max(0, strokes - errors) * 100 / strokes) : 100
+  let recordKey = "${language}-${mode}"
+  let record = get(records, recordKey, 0)
+  let remaining = done ? 0 : active && mode > 0 ? max(0, ceil(mode - elapsed)) : mode
+  let finish = active && ((mode > 0 && elapsed >= mode) || (mode == 0 && typed == target))
+  when finish {
+    stopped = mode > 0 ? started + mode : now
+    active = false
+    done = true
+    records = set(records, recordKey, max(record, speed))
+    recent = ([{lang: language, wpm: speed, acc: accuracy, seconds: round(elapsed)}] + recent).take(8)
+    haptic()
+  }
+  Column {
+    fill: true
+    background: background
+    padding: [24, 20]
+    gap: 24
+    scroll: true
+    Row {
+      align: center
+      Text { text: "Keypunch"; fontSize: 18; weight: 1; color: muted }
+      Text {
+        text: "↻"
+        fontSize: 24
+        color: muted
+        padding: [12, 10]
+        onTap: { index = (index + 1) % len(quotes); typed = ""; active = false; done = false; started = 0; errors = 0; strokes = 0; bank = 0 }
+      }
+      Text {
+        text: upper(language)
+        fontSize: 13
+        color: muted
+        padding: [12, 10]
+        onTap: { language = ru ? "en" : "ru"; typed = ""; active = false; done = false; started = 0; errors = 0; strokes = 0; bank = 0 }
+      }
+    }
+    Spacer { height: 20 }
+    Column {
+      gap: 16
+      Text {
+        font: mono
+        fontSize: 24
+        spans: map(range(len(target)), i => {text: sub(target, i, i + 1), color: i < len(typed) ? (sub(typed, i, i + 1) == sub(target, i, i + 1) ? accent : red) : foreground, bold: i == len(typed) && !done})
+      }
+      Text { text: "— ${quote.author}"; fontSize: 12; color: muted; onTap: url(quote.link) }
+    }
+    if !done {
+      Input {
+        text: typed; lines: 3; fontSize: 16
+        placeholder: ru ? "Печатайте здесь…" : "Type here…"
+        onChange: {
+          if !active && len(value) > 0 { started = now; active = true }
+          let added = max(0, len(value) - len(typed))
+          errors = errors + len(filter(range(len(value)), i => (i >= len(typed) || sub(value, i, i + 1) != sub(typed, i, i + 1)) && sub(value, i, i + 1) != sub(target, i, i + 1)))
+          strokes = strokes + max(added, len(filter(range(len(value)), i => i < len(typed) && sub(value, i, i + 1) != sub(typed, i, i + 1))))
+          typed = value
+        }
+      }
+    }
+    if active || done {
+      Text {
+        text: "${speed} WPM   ·   ${accuracy}%" + (done ? (ru ? "   ·   Готово" : "   ·   Done") : "")
+        fontSize: 13
+        color: muted
+      }
+    }
+  }
+}

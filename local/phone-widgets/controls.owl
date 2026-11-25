@@ -2,8 +2,11 @@ panel "controls" {
   // A control center for swiping down on home: the phone's switches, the volume, what's playing, the next alarm and
   // the notifications. Pick it in settings › gestures, or set gestures.swipe-down = "controls.owl" in style.toml.
   // Like the drawer it's yours to change: ask your agent to edit it.
-  meta { description: "Swipe down for the phone's switches, volume, media, the next alarm and your notifications"; version: "1.0"; license: "MIT"; category: "system"; owl: 13 }
+  meta { description: "Swipe down for the phone's switches, volume, media, the next alarm and your notifications"; version: "1.4"; license: "MIT"; category: "system"; owl: 27 }
+  fps: 30
   asset gear = base64"PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0iY3VycmVudENvbG9yIiBkPSJNMTkuMTQsMTIuOTRjMC4wNCwtMC4zIDAuMDYsLTAuNjEgMC4wNiwtMC45NGMwLC0wLjMyIC0wLjAyLC0wLjY0IC0wLjA3LC0wLjk0bDIuMDMsLTEuNThjMC4xOCwtMC4xNCAwLjIzLC0wLjQxIDAuMTIsLTAuNjFsLTEuOTIsLTMuMzJjLTAuMTIsLTAuMjIgLTAuMzcsLTAuMjkgLTAuNTksLTAuMjJsLTIuMzksMC45NmMtMC41LC0wLjM4IC0xLjAzLC0wLjcgLTEuNjIsLTAuOTRMMTQuNCwyLjgxYy0wLjA0LC0wLjI0IC0wLjI0LC0wLjQxIC0wLjQ4LC0wLjQxaC0zLjg0Yy0wLjI0LDAgLTAuNDMsMC4xNyAtMC40NywwLjQxTDkuMjUsNS4zNUM4LjY2LDUuNTkgOC4xMiw1LjkyIDcuNjMsNi4yOUw1LjI0LDUuMzNjLTAuMjIsLTAuMDggLTAuNDcsMCAtMC41OSwwLjIyTDIuNzQsOC44N0MyLjYyLDkuMDggMi42Niw5LjM0IDIuODYsOS40OGwyLjAzLDEuNThDNC44NCwxMS4zNiA0LjgsMTEuNjkgNC44LDEyczAuMDIsMC42NCAwLjA3LDAuOTRsLTIuMDMsMS41OGMtMC4xOCwwLjE0IC0wLjIzLDAuNDEgLTAuMTIsMC42MWwxLjkyLDMuMzJjMC4xMiwwLjIyIDAuMzcsMC4yOSAwLjU5LDAuMjJsMi4zOSwtMC45NmMwLjUsMC4zOCAxLjAzLDAuNyAxLjYyLDAuOTRsMC4zNiwyLjU0YzAuMDUsMC4yNCAwLjI0LDAuNDEgMC40OCwwLjQxaDMuODRjMC4yNCwwIDAuNDQsLTAuMTcgMC40NywtMC40MWwwLjM2LC0yLjU0YzAuNTksLTAuMjQgMS4xMywtMC41NiAxLjYyLC0wLjk0bDIuMzksMC45NmMwLjIyLDAuMDggMC40NywwIDAuNTksLTAuMjJsMS45MiwtMy4zMmMwLjEyLC0wLjIyIDAuMDcsLTAuNDcgLTAuMTIsLTAuNjFMMTkuMTQsMTIuOTR6TTEyLDE1LjZjLTEuOTgsMCAtMy42LC0xLjYyIC0zLjYsLTMuNnMxLjYyLC0zLjYgMy42LC0zLjZzMy42LDEuNjIgMy42LDMuNlMxMy45OCwxNS42IDEyLDE1LjZ6Ii8+PC9zdmc+"
+  asset wifiIcon = base64"PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJjdXJyZW50Q29sb3IiIHN0cm9rZS13aWR0aD0iMiIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48cGF0aCBkPSJNMiA4YTE2IDE2IDAgMCAxIDIwIDBNNSAxMmExMSAxMSAwIDAgMSAxNCAwTTkgMTZhNSA1IDAgMCAxIDYgMCIvPjxjaXJjbGUgY3g9IjEyIiBjeT0iMjAiIHI9IjEiLz48L3N2Zz4="
+  asset btIcon = base64"PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJjdXJyZW50Q29sb3IiIHN0cm9rZS13aWR0aD0iMiIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48cGF0aCBkPSJNNyA3bDEwIDEwLTUgNVYybDUgNUw3IDE3Ii8+PC9zdmc+"
   source m = android.modes
   source v = android.volume
   source md = android.media
@@ -11,12 +14,22 @@ panel "controls" {
   // For the dot on the settings button while system updates wait, as the drawer shows it.
   source d = android.drawer
   source n = android.notifications
+  source bat = android.battery
+  source power = android.power every 5s
+  source hiddenHome = file("~/.local/share/omalauncher/hidden-home-widgets/hidden.json") json
   source now = clock every 30s
 
   // How much the panel covers home: 1 solid, 0 clear. Its sections have a background of their own, so they stay readable.
   opacity: 0.97
 
   // The notification being answered, by key: its reply field shows under it.
+  state compact = true persist
+  // Pick four or six unique entries, in order: wifi, bluetooth, dnd, torch, sound, airplane.
+  state compactOrder = ["wifi", "bluetooth", "dnd", "torch"] persist
+  state compactVolume = true persist
+  state expanding = ""
+  let grouped = groupBy(n.items ?? [], item => item.icon)
+  let orderedNotices = compact ? flatten(values(grouped)) : (n.items ?? [])
   state replying = ""
   // The notification being swiped, by key, and how far; and the one let go of to dismiss, hidden until it's gone.
   state dragging = ""
@@ -34,10 +47,19 @@ panel "controls" {
   // Only switches a tap flips right here. Android lets a launcher read wifi, bluetooth, airplane mode and the rest but
   // not switch them, and a tap that only opens Android's own panel for one isn't a switch.
   let toggles = [
-      {name: "torch", on: m.torch == true, sub: m.torch == null ? "none" : (m.torch ? (m.torchLevel != null ? "${m.torchLevel}%" : "on") : "off"), act: m.torch == null ? null : "torch"},
-      {name: "dnd", on: m.dnd == true, sub: m.dndAllows == "all" ? "off" : (m.dndAllows == "none" ? "silence" : m.dndAllows), act: "dnd"},
-      {name: "sound", on: !v.muted, sub: v.muted ? "muted" : "${v.level}%", act: "sound"}
-    ]
+    {name: "WI-FI", icon: "W", on: m.wifi, sub: m.wifi == null ? "НАСТРОЙКИ ↗" : (m.wifi ? "ВКЛ" : "ВЫКЛ"), act: "wifi"},
+    {name: "BLUETOOTH", icon: "B", on: m.bluetooth, sub: m.bluetooth == null ? "НАСТРОЙКИ ↗" : (m.bluetooth ? "ВКЛ" : "ВЫКЛ"), act: "bluetooth"},
+    {name: "НЕ БЕСПОК.", icon: "☾", on: m.dnd, sub: m.dnd ? "ВКЛ" : "ВЫКЛ", act: "dnd"},
+    {name: "ТЁМНАЯ ТЕМА", icon: "◐", on: m.dark, sub: m.dark ? "ВКЛ" : "ВЫКЛ", act: "dark"},
+    {name: "ЗВУК", icon: "♪", on: !v.muted, sub: v.muted ? "ВЫКЛ" : "ВКЛ", act: "sound"},
+    {name: "ВИДЖЕТЫ", icon: "▦", on: false, sub: "НУЖНО ОБНОВЛ.", act: "widgets"},
+    {name: "ФОНАРИК", icon: "ϟ", on: m.torch, sub: m.torch == null ? "НЕДОСТУПЕН" : (m.torch ? "ВКЛ" : "ВЫКЛ"), act: "torch"},
+    {name: "АВИАРЕЖИМ", icon: "✈", on: m.airplane, sub: m.airplane ? "ВКЛ" : "ВЫКЛ", act: "airplane"},
+    {name: "ГЕОЛОКАЦИЯ", icon: "◎", on: m.location, sub: m.location ? "ВКЛ" : "ВЫКЛ", act: "location"},
+    {name: "АВТОПОВОРОТ", icon: "↻", on: m.rotate, sub: m.rotate ? "ВКЛ" : "ВЫКЛ", act: "display"},
+    {name: "ЭНЕРГОСБЕР.", icon: "▱", on: m.saver, sub: m.saver ? "ВКЛ" : "ВЫКЛ", act: "battery"},
+    {name: "АУДИОВЫХОД", icon: "↗", on: false, sub: "ВЫБРАТЬ ↗", act: "output"}
+  ]
   // What long-pressing dnd offers, by what android.modes' dndAllows says gets through; dnd(...) takes the same words.
   let dndLevels = [
       {level: "all", name: "off", about: "everything gets through"},
@@ -108,14 +130,23 @@ panel "controls" {
 
   Column {
     fill: true
-    gap: 12
-    padding: 16
+    gap: 8
+    padding: 14
     scroll: true
 
     Row {
       fill: width
       align: center
-      Text { text: "control"; fontSize: 28; color: accent; weight: 1 }
+      Column {
+        weight: 1
+        if compact {
+          Text { text: fmtTime(now, "HH:mm"); fontSize: 28; color: accent }
+          Text { text: fmtTime(now, "EEE d MMM") + "   " + str(bat.level) + "%"; color: muted }
+        } else {
+          Text { text: "КОНТРОЛЬ //"; fontSize: 16; bold: true; letterSpacing: 2; color: accent }
+        }
+      }
+      Text { text: compact ? "[ полностью ]" : "[ компактно ]"; color: accent; onTap: compact = !compact }
       // The drawer's settings button: settings › system updates lists what the dot counts.
       Box {
         size: 44
@@ -128,165 +159,234 @@ panel "controls" {
       }
     }
 
-    Column {
-      fill: width
-      gap: 8
-      padding: [14, 12]
-      background: surface
-      radius: 8 * corners
-      Text { text: "toggles"; style: label }
-      // Under the toggles, as wide as the card's content.
-      Popup {
-        visible: menu == "torch"
-        onDismiss: menu = ""
-        width: wide - 56
-        gap: 8
-        padding: [12, 10]
-        Text { text: "torch brightness"; style: label }
-        if m.torchLevel != null {
-          // Dragging turns it on at that brightness; a tap on torch then switches it on and off at it.
-          Row {
-            fill: width
-            align: center
-            gap: 4
-            Text { text: "["; color: accent }
-            Slider { value: m.torchLevel; min: 5; max: 100; step: 5; live: true; color: accent; track: background; weight: 1; onChange: torch(value) }
-            Text { text: "]"; color: accent }
-            Text { text: "${m.torchLevel}%"; color: orange; width: 48; align: end }
-          }
-          Text { text: "tap torch to switch it on and off at this brightness"; style: small; color: muted }
-        } else {
-          Text { text: "this phone's torch has one brightness"; style: small; color: muted }
-        }
-      }
-      Popup {
-        visible: menu == "dnd"
-        onDismiss: menu = ""
-        width: wide - 56
-        gap: 0
-        padding: [0, 2]
-        Text { text: "do not disturb"; style: label; padding: [12, 8, 12, 4] }
-        for l in dndLevels {
-          Row {
-            fill: width
-            gap: 10
-            align: top
-            padding: [12, 8]
-            onTap: { haptic(); menu = ""; dnd(l.level) }
-            Text { text: m.dndAllows == l.level ? "●" : "○"; color: m.dndAllows == l.level ? green : muted }
-            Column {
-              gap: 2
-              weight: 1
-              Text { text: l.name; color: m.dndAllows == l.level ? green : foreground }
-              Text { text: l.about; style: small; color: muted }
-            }
-          }
-        }
-      }
-      Row {
+    if compact {
+      Column {
         fill: width
-        gap: 0
-        for t in toggles {
+        gap: 8
+        padding: 12
+        background: surface
+        radius: 8 * corners
+        for line in chunk(take(unique(compactOrder), 6), 2) {
           Row {
-            weight: 1
+            fill: width
             gap: 8
-            align: top
-            padding: [0, 4]
-            onTap: {
-              haptic()
-              if t.act == "torch" {
-                torch("toggle")
-              } else if t.act == "dnd" {
-                dnd("toggle")
-              } else if t.act == "sound" {
-                volume("toggle")
+            for t in line key t {
+              let enabled = t == "wifi" ? m.wifi : (t == "bluetooth" ? m.bluetooth : (t == "dnd" ? m.dnd : (t == "torch" ? m.torch : (t == "sound" ? !v.muted : m.airplane))))
+              Text {
+                text: (enabled ? "● " : "○ ") + (t == "dnd" ? "Не беспокоить" : (t == "torch" ? "Фонарик" : (t == "sound" ? "Звук" : (t == "airplane" ? "Авиарежим" : (t == "wifi" ? "Wi-Fi" : "Bluetooth")))))
+                weight: 1
+                padding: 10
+                background: background
+                color: enabled ? accent : foreground
+                onTap: {
+                  haptic()
+                  if t == "dnd" { dnd("toggle") }
+                  else if t == "torch" { torch("toggle") }
+                  else if t == "sound" { volume("toggle") }
+                  else { settings(t) }
+                }
               }
-            }
-            onLongPress: {
-              if t.act == "torch" || t.act == "dnd" {
-                haptic()
-                menu = t.act
-              }
-            }
-            Text { text: t.on ? "●" : "○"; color: t.on ? green : muted }
-            Column {
-              gap: 0
-              weight: 1
-              Text { text: t.name; color: t.on ? green : foreground; maxLines: 1 }
-              Text { text: t.sub; style: small; color: muted; maxLines: 1 }
             }
           }
         }
-      }
-    }
-
-    Column {
-      fill: width
-      gap: 8
-      padding: [14, 12]
-      background: surface
-      radius: 8 * corners
-      Text { text: "levels"; style: label }
-      Row {
-        fill: width
-        align: center
-        gap: 4
-        Text { text: "volume"; width: 72 }
-        Text { text: "["; color: accent }
-        Slider { value: v.muted ? 0 : v.level; step: 100 / (v.steps ?? 15); live: true; color: accent; track: background; weight: 1; onChange: volume(value) }
-        Text { text: "]"; color: accent }
-        Text { text: v.muted ? "♪ off" : "♪ on"; color: orange; width: 56; align: end; onTap: volume("toggle") }
-      }
-    }
-
-    // Only while something plays or is paused in an app; without notification access there's nothing to show either.
-    Column {
-      visible: md.available == true && (md.title ?? "") != ""
-      fill: width
-      gap: 8
-      padding: [14, 12]
-      background: surface
-      radius: 8 * corners
-      Text { text: "media"; style: label }
-      Row {
-        fill: width
-        align: center
-        gap: 8
-        Art { src: md.art; d: 56 }
-        Column {
-          gap: 2
-          weight: 1
-          onTap: media("open")
+        Row {
+          fill: width
+          align: center
+          gap: 8
+          Text { text: "Яркость" }
+          if m.brightness != null {
+            Slider { value: m.brightness; min: 1; max: 100; weight: 1; onChange: brightness(value) }
+            Text { text: "${m.brightness}%" }
+          }
+          Text { text: "[ настройки ]"; color: accent; onTap: brightness("request") }
+        }
+        if compactVolume {
           Row {
+            fill: width
             align: center
-            gap: 6
-            if md.playing == true {
-              Bars { }
-            }
-            Text { text: lower(md.app ?? ""); style: label; color: md.playing == true ? accent : muted; maxLines: 1; weight: 1 }
+            gap: 8
+            Text { text: "Громкость" }
+            Slider { value: v.muted ? 0 : v.level; live: true; weight: 1; onChange: volume(value) }
           }
-          Text { text: md.title; bold: true; maxLines: 1 }
-          Text { text: md.artist ?? ""; style: small; color: muted; maxLines: 1 }
         }
-        Control { kind: "previous" }
-        Control { kind: "toggle"; big: true }
-        Control { kind: "next" }
       }
     }
-
-    Column {
-      visible: al.set == true
-      fill: width
-      gap: 8
-      padding: [14, 12]
-      background: surface
-      radius: 8 * corners
-      Text { text: "next alarm"; style: label }
-      Row {
+    if !compact {
+      Column {
         fill: width
-        onTap: { if al.app != null { androidApp(al.app) } }
-        Text { text: fmtTime(al.time, "EEE HH:mm"); weight: 1 }
-        Text { text: "in " + fmtDuration(al.time - now); color: muted }
+        gap: 8
+        padding: 0
+        radius: 0
+        // Under the toggles, as wide as the card's content.
+        Popup {
+          visible: menu == "torch"
+          onDismiss: menu = ""
+          width: wide - 56
+          gap: 8
+          padding: [12, 10]
+          Text { text: "torch brightness"; style: label }
+          if m.torchLevel != null {
+            // Dragging turns it on at that brightness; a tap on torch then switches it on and off at it.
+            Row {
+              fill: width
+              align: center
+              gap: 4
+              Text { text: "["; color: accent }
+              Slider { value: m.torchLevel; min: 5; max: 100; step: 5; live: true; color: accent; track: background; weight: 1; onChange: torch(value) }
+              Text { text: "]"; color: accent }
+              Text { text: "${m.torchLevel}%"; color: orange; width: 48; align: end }
+            }
+            Text { text: "tap torch to switch it on and off at this brightness"; style: small; color: muted }
+          } else {
+            Text { text: "this phone's torch has one brightness"; style: small; color: muted }
+          }
+        }
+        Popup {
+          visible: menu == "dnd"
+          onDismiss: menu = ""
+          width: wide - 56
+          gap: 0
+          padding: [0, 2]
+          Text { text: "do not disturb"; style: label; padding: [12, 8, 12, 4] }
+          for l in dndLevels {
+            Row {
+              fill: width
+              gap: 10
+              align: top
+              padding: [12, 8]
+              onTap: { haptic(); menu = ""; dnd(l.level) }
+              Text { text: m.dndAllows == l.level ? "●" : "○"; color: m.dndAllows == l.level ? green : muted }
+              Column {
+                gap: 2
+                weight: 1
+                Text { text: l.name; color: m.dndAllows == l.level ? green : foreground }
+                Text { text: l.about; style: small; color: muted }
+              }
+            }
+          }
+        }
+        Grid {
+          columns: 3
+          gap: 6
+          fill: width
+          for t in toggles {
+            Column {
+              fill: width
+              height: 86
+              gap: 2
+              padding: 9
+              radius: 0
+              background: t.on == true ? accent : surface
+              border: 1
+              borderColor: t.on == true ? accent : mix(border, accent, 0.25)
+              onTap: {
+                haptic()
+                if t.act == "torch" { if m.torch != null { torch("toggle") } }
+                else if t.act == "dnd" { dnd("toggle") }
+                else if t.act == "sound" { volume("toggle") }
+                else if t.act == "widgets" { notify("Виджеты", "Скрытие отключено: нужен режим видимости с сохранением обеих ориентаций в самом лаунчере.") }
+                else { settings(t.act) }
+              }
+              onLongPress: {
+                if t.act == "torch" || t.act == "dnd" { menu = t.act }
+                else if t.act == "sound" { settings("sound") }
+              }
+              if t.act == "wifi" || t.act == "bluetooth" {
+                Image { src: t.act == "wifi" ? wifiIcon : btIcon; size: 25; tint: t.on == true ? background : accent; label: t.name }
+              } else {
+                Text { text: t.icon; fontSize: 22; bold: true; color: t.on == true ? background : accent }
+              }
+              Spacer { weight: 1 }
+              Text { text: t.name; fontSize: 10; bold: true; letterSpacing: 0.4; maxLines: 1; color: t.on == true ? background : foreground }
+              Text { text: t.sub; fontSize: 9; maxLines: 1; color: t.on == true ? alpha(background, 0.75) : muted }
+            }
+          }
+        }
+        Text { text: "↗ Системные режимы открывают настройки Android"; fontSize: 10; color: muted }
+      }
+
+      Row {
+        fill: width; align: center; gap: 8; padding: [2, 0]
+        Text { text: "ЗВУК"; width: 66; fontSize: 11; letterSpacing: 1; color: muted }
+        Slider { value: v.muted ? 0 : v.level; step: 100 / (v.steps ?? 15); live: true; color: accent; track: surface; weight: 1; onChange: volume(value) }
+        Text { text: "${round(v.muted ? 0 : v.level)}%"; width: 44; fontSize: 12; color: accent; align: end }
+      }
+      Row {
+        fill: width; align: center; gap: 8; padding: [2, 4]
+        onTap: settings("display")
+        Text { text: "СВЕТ ↗"; width: 66; fontSize: 11; letterSpacing: 1; color: muted }
+        Progress { value: m.brightness; weight: 1; height: 6; color: accent; track: surface }
+        Text { text: "${round(m.brightness)}%"; width: 44; fontSize: 12; color: accent; align: end }
+      }
+      Row {
+        fill: width; gap: 6
+        Box {
+          weight: 1; padding: [10, 14]; radius: 0; border: 1; borderColor: border; background: surface
+          onTap: launcher("style")
+          Text { text: "◐  ОФОРМЛЕНИЕ"; fontSize: 11; align: center; color: accent }
+        }
+        Box {
+          weight: 1; padding: [10, 14]; radius: 0; border: 1; borderColor: border; background: surface
+          onTap: launcher("settings")
+          Text { text: "⚙  НАСТРОЙКИ"; fontSize: 11; align: center; color: accent }
+        }
+      }
+      Row {
+        fill: width; align: center; padding: [2, 8]
+        onTap: settings("battery")
+        Text { text: "● ${bat.level}%  ${bat.charging ? 'заряжается' : 'от батареи'}"; weight: 1; fontSize: 11; color: accent }
+        Text { text: power.watts != null ? "${fixed(abs(power.watts), 1)} Вт" : "${bat.temp}°"; fontSize: 11; color: muted }
+      }
+
+      // Only while something plays or is paused in an app; without notification access there's nothing to show either.
+      Column {
+        visible: md.available == true && (md.title ?? "") != ""
+        fill: width
+        gap: 8
+        padding: [14, 12]
+        background: surface
+        radius: 8 * corners
+        Text { text: "МУЗЫКА"; style: label }
+        Row {
+          fill: width
+          align: center
+          gap: 8
+          Art { src: md.art; d: 56 }
+          Column {
+            gap: 2
+            weight: 1
+            onTap: media("open")
+            Row {
+              align: center
+              gap: 6
+              if md.playing == true {
+                Bars { }
+              }
+              Text { text: lower(md.app ?? ""); style: label; color: md.playing == true ? accent : muted; maxLines: 1; weight: 1 }
+            }
+            Text { text: md.title; bold: true; maxLines: 1 }
+            Text { text: md.artist ?? ""; style: small; color: muted; maxLines: 1 }
+          }
+          Control { kind: "previous" }
+          Control { kind: "toggle"; big: true }
+          Control { kind: "next" }
+        }
+      }
+
+      Column {
+        visible: al.set == true
+        fill: width
+        gap: 8
+        padding: [14, 12]
+        background: surface
+        radius: 8 * corners
+        Text { text: "БУДИЛЬНИК"; style: label }
+        Row {
+          fill: width
+          onTap: { if al.app != null { androidApp(al.app) } }
+          Text { text: fmtTime(al.time, "EEE HH:mm"); weight: 1 }
+          Text { text: "через " + fmtDuration(al.time - now); color: muted }
+        }
       }
     }
 
@@ -299,7 +399,7 @@ panel "controls" {
       Row {
         fill: width
         align: center
-        Text { text: "notifications"; fontSize: 22; color: accent; weight: 1 }
+        Text { text: "УВЕДОМЛЕНИЯ"; fontSize: 22; color: accent; weight: 1 }
         // Hidden for an hour, then back: Android shows each again when its time is up. One that comes in meanwhile shows.
         if snoozedUntil > now {
           Text { text: "back in " + (snoozeLeft >= 60 ? "1h" : "${snoozeLeft}m") + " "; color: muted }
@@ -319,7 +419,7 @@ panel "controls" {
       }
     }
 
-    for item in n.items ?? [] key item.key {
+    for item in orderedNotices key item.key {
       // Swiped sideways it follows the finger and fades; let go past a third of the screen, or flicked, it's dismissed,
       // else it springs back. Sideways only, so the panel still scrolls under a finger that lands on a notification.
       Column {
@@ -356,16 +456,27 @@ panel "controls" {
               notification("dismiss", item.key)
             }
           }
+          if compact { Image { src: item.icon; size: 22; label: item.app } }
           Text { text: lower(item.app); color: muted; width: 84; maxLines: 1 }
           Text {
             spans: [{text: item.title, color: foreground}, item.text != "" ? "  " : "", {text: item.text, color: muted}]
-            maxLines: 2
+            maxLines: expanding == item.key ? 12 : 2
             weight: 1
           }
           Text { text: fmtAgo(item.time, now); style: small; color: muted; width: 36; align: end }
         }
         // Its buttons, as the shade shows them: one that takes text opens a field for the answer.
-        if len(item.actions) > 0 {
+        if compact {
+          Row {
+            fill: width
+            gap: 12
+            Text { text: expanding == item.key ? "[ свернуть ]" : "[ подробнее ]"; color: accent; onTap: expanding = expanding == item.key ? "" : item.key }
+            if item.clearable {
+              Text { text: "[ убрать ]"; color: muted; onTap: notification("dismiss", item.key) }
+            }
+          }
+        }
+        if (!compact || expanding == item.key) && len(item.actions) > 0 {
           Row {
             fill: width
             gap: 4

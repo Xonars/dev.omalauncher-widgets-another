@@ -2,7 +2,9 @@ widget "now-playing" {
   size: 6x2
   minSize: 3x2
   requires { pacman: [] }
-  meta { description: "What's playing on your phone, from any music or podcast app: album art, track, progress and play, pause and skip. Tap the tile to open the app"; version: "1.5.1"; license: "MIT"; category: "media"; owl: 16 }
+  meta { description: "What's playing on your phone, from any music or podcast app: album art, track, progress and play, pause and skip. Tap the tile to open the app"; version: "1.13.1"; license: "MIT"; category: "media"; owl: 23 }
+  fps: modes.saver ? 15 : 30
+  source modes = android.modes
 
   // What it says, in the phone's language where it has a set. Tracks, artists and apps come as they are.
   strings {
@@ -30,9 +32,33 @@ widget "now-playing" {
       title: "正在播放"; nothing: "没有在播放"; start: "在任意应用里播放音乐"
       allow: "允许访问通知，启动器才能看到正在播放什么。点按打开设置。"
     }
+    ru {
+      title: "сейчас играет"; nothing: "ничего не играет"; start: "включите музыку в любом приложении"
+      allow: "Разрешите доступ к уведомлениям, чтобы лаунчер видел, что играет. Нажмите, чтобы открыть настройки."
+    }
+    ja {
+      title: "再生中"; nothing: "再生していません"; start: "好きなアプリで音楽を再生してください"
+      allow: "再生中の曲をランチャーが表示できるよう、通知へのアクセスを許可してください。タップすると設定が開きます。"
+    }
+    uk {
+      title: "зараз грає"; nothing: "нічого не грає"; start: "увімкніть музику в будь-якому додатку"
+      allow: "Надайте доступ до сповіщень, щоб лаунчер бачив, що грає. Торкніться, щоб відкрити налаштування."
+    }
+    fr {
+      title: "en lecture"; nothing: "rien en lecture"; start: "mets de la musique dans une appli"
+      allow: "Autorise l’accès aux notifications pour que le launcher voie ce qui passe. Touche pour ouvrir le réglage."
+    }
+    tr {
+      title: "şimdi çalıyor"; nothing: "çalan bir şey yok"; start: "herhangi bir uygulamada müzik başlat"
+      allow: "Neyin çaldığını görmek için bildirim erişimine izin ver. Ayarı açmak için dokun."
+    }
+    it {
+      title: "in riproduzione"; nothing: "niente in riproduzione"; start: "avvia la musica in un’app"
+      allow: "Consenti l’accesso alle notifiche perché il launcher veda cosa suona. Tocca per aprire l’impostazione."
+    }
   }
 
-  // {available, playing, title, artist, album, app, package, position, duration, art}.
+  // {available, playing, title, artist, album, app, package, position, duration, art, canSeek, speed, actions}.
   // Android only shares other apps' sessions with notification access; without it, available is false.
   source m = android.media
 
@@ -48,6 +74,16 @@ widget "now-playing" {
   let tallArt = tall ? clamp(min(tileWidth - 26, tileHeight * 0.45), 40, 240) : 0
 
   onTap: media("open")
+
+  // The track's progress. Where the player can seek, a slider: tap it, or drag it and the track jumps there as the
+  // finger lifts (one seek, not one per move). No height: a sized Slider no longer fills the width.
+  component Bar() {
+    if m.canSeek == true {
+      Slider { value: pos; max: dur; color: accent; track: alpha(muted, 0.2); onChange: media("seek", value) }
+    } else {
+      Progress { value: pos; max: dur; color: accent; track: alpha(muted, 0.2); animate value: tween(900ms, "linear") }
+    }
+  }
 
   component Clock(s) {
     Text { text: s == null ? "" : "${floor(s / 60)}:${pad(floor(s % 60), 2, "0")}"; style: label; color: muted; font: mono; maxLines: 1; width: len("${floor(s / 60)}") * 7 + 22 }
@@ -167,7 +203,7 @@ widget "now-playing" {
           }
           Spacer { weight: 1 }
           if dur > 0 {
-            Progress { value: pos; max: dur; color: accent; track: alpha(muted, 0.2); animate value: tween(900ms, "linear") }
+            Bar { }
             Row {
               align: center
               gap: 4
@@ -201,7 +237,7 @@ widget "now-playing" {
             Text { text: [m.artist, narrow ? null : m.album].filter(x => x != null).join(" · "); style: small; color: muted; maxLines: 1 }
             Spacer { weight: 1 }
             if dur > 0 {
-              Progress { value: pos; max: dur; color: accent; track: alpha(muted, 0.2); animate value: tween(900ms, "linear") }
+              Bar { }
             }
             Row {
               align: center

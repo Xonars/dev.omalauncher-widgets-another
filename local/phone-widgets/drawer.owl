@@ -3,75 +3,87 @@ panel "app drawer" {
   // change: ask your agent to edit it, or pick another panel in settings › gestures. .stock-drawer.owl next to it is
   // this file as the launcher ships it, kept up to date: compare the two to see what changed in a newer launcher.
   meta { description: "The launcher's app drawer, written in owl: your apps by kind, search as you type in the prompt bar, and each app's long-press menu"; version: "1.0"; license: "MIT"; category: "system"; owl: 15 }
-  // The launcher's gear, as its settings buttons draw it; currentColor takes the accent.
-  asset gear = base64"PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0iY3VycmVudENvbG9yIiBkPSJNMTkuMTQsMTIuOTRjMC4wNCwtMC4zIDAuMDYsLTAuNjEgMC4wNiwtMC45NGMwLC0wLjMyIC0wLjAyLC0wLjY0IC0wLjA3LC0wLjk0bDIuMDMsLTEuNThjMC4xOCwtMC4xNCAwLjIzLC0wLjQxIDAuMTIsLTAuNjFsLTEuOTIsLTMuMzJjLTAuMTIsLTAuMjIgLTAuMzcsLTAuMjkgLTAuNTksLTAuMjJsLTIuMzksMC45NmMtMC41LC0wLjM4IC0xLjAzLC0wLjcgLTEuNjIsLTAuOTRMMTQuNCwyLjgxYy0wLjA0LC0wLjI0IC0wLjI0LC0wLjQxIC0wLjQ4LC0wLjQxaC0zLjg0Yy0wLjI0LDAgLTAuNDMsMC4xNyAtMC40NywwLjQxTDkuMjUsNS4zNUM4LjY2LDUuNTkgOC4xMiw1LjkyIDcuNjMsNi4yOUw1LjI0LDUuMzNjLTAuMjIsLTAuMDggLTAuNDcsMCAtMC41OSwwLjIyTDIuNzQsOC44N0MyLjYyLDkuMDggMi42Niw5LjM0IDIuODYsOS40OGwyLjAzLDEuNThDNC44NCwxMS4zNiA0LjgsMTEuNjkgNC44LDEyczAuMDIsMC42NCAwLjA3LDAuOTRsLTIuMDMsMS41OGMtMC4xOCwwLjE0IC0wLjIzLDAuNDEgLTAuMTIsMC42MWwxLjkyLDMuMzJjMC4xMiwwLjIyIDAuMzcsMC4yOSAwLjU5LDAuMjJsMi4zOSwtMC45NmMwLjUsMC4zOCAxLjAzLDAuNyAxLjYyLDAuOTRsMC4zNiwyLjU0YzAuMDUsMC4yNCAwLjI0LDAuNDEgMC40OCwwLjQxaDMuODRjMC4yNCwwIDAuNDQsLTAuMTcgMC40NywtMC40MWwwLjM2LC0yLjU0YzAuNTksLTAuMjQgMS4xMywtMC41NiAxLjYyLC0wLjk0bDIuMzksMC45NmMwLjIyLDAuMDggMC40NywwIDAuNTksLTAuMjJsMS45MiwtMy4zMmMwLjEyLC0wLjIyIDAuMDcsLTAuNDcgLTAuMTIsLTAuNjFMMTkuMTQsMTIuOTR6TTEyLDE1LjZjLTEuOTgsMCAtMy42LC0xLjYyIC0zLjYsLTMuNnMxLjYyLC0zLjYgMy42LC0zLjZzMy42LDEuNjIgMy42LDMuNlMxMy45OCwxNS42IDEyLDE1LjZ6Ii8+PC9zdmc+"
   source d = android.drawer
-  source ag = android.agents
   // The app whose long-press menu is open, by key, and the shortcuts it offers: null while they load, and the menu
   // waits for them, so it opens whole rather than growing.
   state menu = ""
   state menuShortcuts = null
   state tab = "personal"
-  state category = "all"
+  state section = ""
+  state hiddenCategories = {} persist
+  state categoryMenu = ""
+  state categorySettings = false
   state categoryDrag = 0
   // The result picked with the arrow or Tab keys, -1 for the ask row; null follows the ranking.
   state pick = null
 
-  // As the launcher's drawer fits them: a column for every 76 dp.
-  let cols = max(1, floor(((screenWidth ?? 400) - 24) / 76))
+  // Fit readable cells to the current panel width, including after rotation.
+  let cols = max(1, floor(((screenWidth ?? 400) - 24) / 96))
   let typed = trim(query)
   let searching = typed != ""
-  let mine = d.apps.filter(a => (tab == "work") == (a.profile == "work"))
-  let categories = [{key: "all", title: "Все"}, {key: "android", title: "Android"}, {key: "owl", title: "OWL"}, {key: "linux", title: "Linux"}]
-  let categoryIndex = category == "all" ? 0 : category == "android" ? 1 : category == "owl" ? 2 : 3
-  let categoryApps = d.apps.filter(a => category == "all" || a.kind == category || (category == "android" && a.kind == "shortcut"))
+  let linuxApps = [
+    "l:foot", "l:omarchy-files", "l:micro", "l:firefox",
+    "l:agent-codex", "l:agent-hermes", "l:agent-opencode",
+    "l:omawrite", "l:omarchy-voice", "l:space.rirusha.Cassette", "l:flowtunes",
+    "l:org.qt-project.qtcreator", "l:loki",
+    "l:chromium", "l:org.telegram.desktop", "l:streamtube", "l:codium", "l:btop",
+    "l:org.gnome.Loupe", "l:org.gnome.Papers", "l:org.gnome.Calculator", "l:org.gnome.Calendar",
+    "l:com.github.johnfactotum.Foliate", "l:mpv", "l:yazi", "l:lazygit", "l:org.kde.klevernotes",
+    "l:org.kde.koko", "l:org.kde.audiotube", "l:io.github.alainm23.planify", "l:ncdu", "l:org.gnome.World.Secrets"
+  ]
+  let apps = d.apps.filter(a =>
+    a.key != "a:com.TeamCherry.HollowKnight/com.unity3d.player.IconClassic" &&
+    (a.kind != "linux" || contains(linuxApps, a.key))
+  )
+  let mine = apps.filter(a => (tab == "work") == (a.profile == "work"))
+  let categories = [{key: "android", title: "Android"}, {key: "owl", title: "OWL"}, {key: "linux", title: "Linux"}]
+  let shownCategories = categories.filter(c => !get(hiddenCategories, c.key, false))
+  let tabs = shownCategories.filter(c => tab != "work" || c.key == "android")
+  let tabKeys = tabs.map(c => c.key)
+  let activeSection = contains(tabKeys, section) ? section : tabKeys[0]
+  let categoryIndex = indexOf(tabKeys, activeSection)
   let sections = tab == "work" ? [
-      {kind: "android", title: "shortcuts", apps: mine.filter(a => a.kind == "shortcut")},
-      {kind: "android", title: d.work.paused ? "work apps paused" : "work apps", apps: mine.filter(a => a.kind == "android"), work: true}
-    ] : [
-      {kind: "owl", title: "OWL", apps: mine.filter(a => a.kind == "owl")},
-      {kind: "linux", title: "Linux", apps: mine.filter(a => a.kind == "linux"), linux: true},
-      {kind: "android", title: "shortcuts", apps: mine.filter(a => a.kind == "shortcut")},
-      {kind: "android", title: "Android", apps: mine.filter(a => a.kind == "android")}
-    ]
+    {kind: "android", title: "Ярлыки", apps: mine.filter(a => a.kind == "shortcut")},
+    {kind: "android", title: d.work.paused ? "Рабочие · пауза" : "Рабочие приложения", apps: mine.filter(a => a.kind == "android"), work: true}
+  ] : [
+    {kind: "owl", title: "OWL", apps: mine.filter(a => a.kind == "owl")},
+    {kind: "linux", title: "Linux", apps: mine.filter(a => a.kind == "linux"), linux: true},
+    {kind: "android", title: "Ярлыки", apps: mine.filter(a => a.kind == "shortcut")},
+    {kind: "android", title: "Android", apps: mine.filter(a => a.kind == "android")}
+  ]
   // A title, then rows of cols apps. Without Linux, its section is an offer to install it.
-  let rows = flatten(sections.filter(s => (category == "all" || s.kind == category) && (len(s.apps) > 0 || s.work || (s.linux && !linux))).map(s => flatten([
-      [{key: "h:" + s.title, title: s.linux && !linux ? "linux apps" : s.title, work: s.work, offer: s.linux && !linux}],
+  let rows = flatten(sections.filter(s => s.kind == activeSection && (len(s.apps) > 0 || s.work || (s.linux && !linux))).map(s => flatten([
+      (s.work || (s.linux && !linux)) ? [{key: "h:" + s.title, title: s.work ? s.title : "Linux", work: s.work, offer: s.linux && !linux}] : [],
       chunk(s.apps, cols).map((cells, r) => {key: s.title + ":" + r, cells: cells})
     ])))
   // Every profile's apps match while typing, best first; the list runs up from the bar, so the best sits right above it.
-  let hits = searching ? rank(categoryApps, typed) : []
+  let hits = searching ? rank(apps, typed) : []
   let hitRows = chunk(hits, cols).map((cells, r) => {key: "q:" + r, start: r * cols, cells: cells})
   // Enter opens the best match when it names an app well, as the bar does; anything else, a prompt of more lines among it, goes to the agent.
-  let opens = len(hits) > 0 && strongMatch(hits[0], typed)
+  let opens = len(hits) > 0
   // What Enter acts on: a result by its place in hits, or -1 for the ask row.
   let chosen = pick ?? (opens ? 0 : -1)
-  let agent = ag.default
   // With a keyboard: Up and Tab move the pick away from the bar, Down and Shift+Tab back; the ask row sits lowest.
   onKey: {
     if searching {
-      pick = clamp(chosen + (value == "up" || value == "tab" ? 1 : -1), -1, len(hits) - 1)
+      pick = clamp(chosen + (value == "up" || value == "tab" ? 1 : -1), 0, len(hits) - 1)
     }
   }
-  let labels = {pin: "add to home", info: "app info", uninstall: "uninstall", remove: "remove", edit: "edit", share: "share"}
+  let labels = {pin: "На главный экран", info: "О приложении", uninstall: "Удалить приложение", remove: "Убрать", edit: "Изменить", share: "Поделиться"}
 
   // Typing starts the pick over, at the best match.
-  on typed { pick = null }
+  on typed { pick = null; if typed == "" { section = ""; tab = "personal" } }
 
   // How much the drawer covers home: near-opaque, as home's widgets showing through make the icons hard to read.
-  opacity: 0.97
+  opacity: 1
   keyboard: false
-  enter: searching ? (chosen >= 0 ? "▸ open" : "⏎ ask") : ""
+  enter: searching && opens ? "▸ Открыть" : ""
   // An empty bar's Enter does nothing, as on home.
   onSubmit: {
-    if searching {
-      if chosen >= 0 {
-        open(hits[chosen].key)
-      } else if !linux {
-        launcher("linux")
-      } else {
-        ask(value)
-      }
+    if searching && len(hits) > 0 && chosen >= 0 {
+      section = ""
+      tab = "personal"
+      open(hits[chosen].key)
     }
   }
 
@@ -94,14 +106,14 @@ panel "app drawer" {
     Column {
       weight: 1
       align: center
-      gap: 6
-      padding: [4, 10]
+      gap: 3
+      padding: [2, 3]
       radius: 16 * corners
       border: picked ? 2 : 0
       borderColor: accent
       // Paused work apps show dimmed; opening one turns work apps back on.
       opacity: a.paused ? 0.4 : 1
-      onTap: open(a.key)
+      onTap: { section = ""; tab = "personal"; open(a.key) }
       onLongPress: {
         haptic()
         menuShortcuts = null
@@ -109,10 +121,11 @@ panel "app drawer" {
         menuShortcuts = shortcuts(a.key)
       }
       AppIcon { a: a }
-      // Always two lines tall, so a row keeps its height whichever apps fill it.
-      Text { text: a.name; fontSize: 12; align: center; maxLines: 2; minLines: 2; fill: width }
+      // Two lines keep names readable and rows equally tall.
+      Text { text: a.name; fontSize: 13; align: center; maxLines: 2; minLines: 2; fill: width }
+      if menu == a.key && menuShortcuts != null {
       Popup {
-        visible: menu == a.key && menuShortcuts != null
+        visible: true
         position: above
         onDismiss: menu = ""
         width: 200
@@ -135,58 +148,24 @@ panel "app drawer" {
           Text { text: get(labels, w, w); fontSize: 15; fill: width; padding: [12, 12]; onTap: { menu = ""; appAction(w, a.key) } }
         }
       }
+      }
     }
   }
 
   Column {
+    fill: true
     gap: 0
     padding: [12, 0]
     Row {
+      visible: d.work != null && !searching
       align: center
       padding: [0, 12, 0, 8]
       gap: 0
       // Typing searches every profile, so the tabs step aside.
       for t in d.work != null && !searching ? ["personal", "work"] : [] {
-        Text { text: t; color: tab == t ? accent : muted; background: tab == t ? surface : transparent; radius: 18 * corners; padding: [14, 10]; onTap: tab = t }
+        Text { text: t == "work" ? "Рабочие" : "Личные"; color: tab == t ? accent : muted; background: tab == t ? surface : transparent; radius: 18 * corners; padding: [14, 10]; onTap: tab = t }
       }
-      Spacer { weight: 1 }
-      Box {
-        size: 44
-        radius: 22 * corners
-        background: surface
-        align: center
-        onTap: launcher("settings")
-        Image { src: gear; size: 22; tint: accent; label: "settings" }
-        // System updates are waiting: settings › system updates lists them.
-        Box { visible: d.updates > 0; align: topEnd; size: 44; padding: 8; Box { size: 8; radius: 4; background: red } }
-      }
-    }
-    Row {
-      fill: width
-      gap: 4
-      padding: [0, 0, 0, 8]
-    drag: horizontal
-    onDrag: { categoryDrag = categoryDrag + dx }
-    onDragEnd: {
-      if menu == "" && (abs(categoryDrag) > 56 || abs(vx) > 700 && sign(vx) == sign(categoryDrag)) {
-        category = categories[clamp(categoryIndex + (categoryDrag < 0 ? 1 : -1), 0, len(categories) - 1)].key
-        pick = null
-      }
-      categoryDrag = 0
-    }
-      for c in categories {
-        Text {
-          text: c.title
-          weight: 1
-          align: center
-          fontSize: 14
-          color: category == c.key ? accent : muted
-          background: category == c.key ? surface : transparent
-          radius: 18 * corners
-          padding: [4, 12]
-          onTap: { category = c.key; pick = null }
-        }
-      }
+
     }
     Column {
       visible: !searching
@@ -203,14 +182,14 @@ panel "app drawer" {
             align: center
             padding: [8, 12, 0, 4]
             Text { text: row.title; color: muted; weight: 1 }
-            Text { text: d.work.paused ? "[turn on]" : "[pause]"; visible: row.work == true; color: accent; onTap: workApps("toggle") }
+            Text { text: d.work.paused ? "Включить" : "Пауза"; visible: row.work == true; color: accent; onTap: workApps("toggle") }
             Text { text: d.linux == "installing" ? "[installing…]" : "[install linux]"; visible: row.offer == true; color: accent; onTap: launcher("linux") }
           }
         } else {
           Row {
             fill: width
             gap: 0
-            for a in row.cells { Cell { a: a; picked: false } }
+            for a in row.cells key a.key { Cell { a: a; picked: false } }
             // A short last row keeps its cells the width of the others'.
             for s in range(0, cols - len(row.cells)) { Spacer { weight: 1 } }
           }
@@ -228,35 +207,113 @@ panel "app drawer" {
         Row {
           fill: width
           gap: 0
-          for a, i in row.cells { Cell { a: a; picked: row.start + i == chosen } }
+          for a, i in row.cells key a.key { Cell { a: a; picked: row.start + i == chosen } }
           for s in range(0, cols - len(row.cells)) { Spacer { weight: 1 } }
         }
       }
     }
-    // The one line above the bar that sends what's typed to the agent; outlined when that's what Enter does.
-    Row {
-      visible: searching
+    Text {
+      visible: searching && len(hits) == 0
+      text: "Ничего не найдено"
+      align: center
+      color: muted
+      padding: [12, 20]
+    }
+    Text {
+      visible: !searching && len(tabs) == 0
+      text: len(shownCategories) == 0 ? "Все категории скрыты" : "Категория Android скрыта"
       fill: width
+      align: center
+      color: muted
+      padding: [12, 20]
+    }
+    Row {
+      fill: width
+      align: center
       gap: 4
-      padding: [12, 10]
-      border: chosen == -1 ? 2 : 0
-      borderColor: accent
-      radius: 16 * corners
-      onTap: {
-        if !linux {
-          launcher("linux")
-        } else if agent == null {
-          launcher("agents")
-        } else {
-          ask(typed)
+      padding: [0, 8, 0, 0]
+      drag: horizontal
+      onDrag: { categoryDrag = categoryDrag + dx }
+      onDragEnd: {
+        if len(tabs) > 1 && menu == "" && categoryMenu == "" && !categorySettings &&
+            (abs(categoryDrag) > 56 || abs(vx) > 700 && sign(vx) == sign(categoryDrag)) {
+          section = tabKeys[clamp(categoryIndex + (categoryDrag < 0 ? 1 : -1), 0, len(tabs) - 1)]
+          pick = null
+        }
+        categoryDrag = 0
+      }
+      for c in len(tabs) > 1 ? tabs : [] key c.key {
+        Box {
+          weight: 1
+          Text {
+            text: c.title
+            fill: width
+            align: center
+            fontSize: 14
+            color: activeSection == c.key ? accent : muted
+            background: activeSection == c.key ? surface : transparent
+            radius: 18 * corners
+            padding: [4, 12]
+            onTap: { section = c.key; pick = null }
+            onLongPress: categoryMenu = c.key
+          }
+          if categoryMenu == c.key {
+            Popup {
+              visible: true
+              position: above
+              width: 160
+              onDismiss: categoryMenu = ""
+              Text {
+                text: "Скрыть " + c.title
+                fill: width
+                padding: [14, 14]
+                onTap: {
+                  categoryMenu = ""
+                  if section == c.key { section = "" }
+                  hiddenCategories = set(hiddenCategories, c.key, true)
+                }
+              }
+            }
+          }
         }
       }
-      Text { text: "⏎"; color: chosen == -1 ? accent : muted }
-      Text {
-        text: !linux ? "ask an agent · install linux" : agent == null ? "ask an agent · install one" : "ask " + agent.bin + ": " + typed
-        color: chosen == -1 ? foreground : muted
-        maxLines: 1
-        weight: 1
+      if len(tabs) <= 1 { Spacer { weight: 1 } }
+      Box {
+        Text {
+          text: "⚙"
+          font: sans
+          fontSize: 21
+          color: accent
+          align: center
+          width: 44
+          padding: [0, 10]
+          onTap: categorySettings = true
+        }
+        if categorySettings {
+          Popup {
+            visible: true
+            position: above
+            onDismiss: categorySettings = false
+            width: 200
+            gap: 0
+            Text { text: "Показывать категории"; fontWeight: 600; padding: [12, 10] }
+            for c in categories key c.key {
+              let hidden = get(hiddenCategories, c.key, false)
+              Row {
+                fill: width
+                align: center
+                gap: 8
+                padding: [12, 12]
+                onTap: {
+                  if !hidden && section == c.key { section = "" }
+                  hiddenCategories = set(hiddenCategories, c.key, !hidden)
+                }
+                Text { text: hidden ? "☐" : "☑"; font: sans; fontSize: 18; color: hidden ? muted : accent }
+                Text { text: c.title; fontSize: 15 }
+              }
+            }
+          }
+        }
       }
     }
   }

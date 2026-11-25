@@ -1,0 +1,340 @@
+app "GitWorld" {
+ meta { owl: 19; description: "Мир в файлах. Ветки как параллельные реальности. Настоящий Git."; version: "0.3"; category: "games" }
+ title: ""
+ statusBar: false
+ fps: 15
+ icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect x=".5" y=".5" width="47" height="47" rx="9" fill="#19191d"/><rect x=".5" y=".5" width="47" height="47" rx="9" fill="currentColor" fill-opacity=".30" stroke="currentColor" stroke-opacity=".78"/><defs><g id="symbol"><circle cx="24" cy="24" r="19"/><path d="M7 17h11l5 8-5 6v10M27 6l-3 9 9 6 9-3M28 31l7-4 7 7"/></g></defs><g transform="translate(4.38 4.38) scale(0.817)" fill="none" stroke="#faf8f3" stroke-linecap="round" stroke-linejoin="round" stroke-width="3.06"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g><g transform="translate(4.38 4.38) scale(0.817)" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="3.06" opacity=".16"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g></svg>"""
+ requires { pacman: ["nodejs", "git", "util-linux"] }
+ state world = null
+ state response = ""
+ state request = null
+ state busy = false
+ state px = 4
+ state py = 9
+ state movement = null
+ state modal = ""
+ state entry = ""
+ state notice = "Стрелки — движение · E — взаимодействие"
+ state target = ""
+ state difference = ""
+ state capture = true
+ state touchControls = false
+ state deletion = null
+ source snapshot = cmd('flock -w 15 /root/GitWorld/.native.lock node /root/GitWorld/native/cli.js') every 60s json
+ on snapshot first { if value.ok && !busy { world = value.state } }
+ on response first {
+  if response != "" {
+   let result = parseJson(response)
+   busy = false
+   if result.ok {
+    world = result.state
+    if request.type == "diff" { difference = result.diff; modal = "merge" }
+    else if request.type == "delete-info" { deletion = result.deletion; modal = "delete" }
+    else if request.type == "delete" { modal = "worlds"; notice = "Ветка удалена. Текущий мир сохранён." }
+    else { modal = ""; notice = request.type == "start" ? "Мир открыт. Вы — его первый автор." : "${request.type}: готово. Мир записан в файлы." }
+   } else { notice = result.error ?? "Команда не выполнена. Проверьте Linux." }
+  }
+ }
+ on request first {
+  if request != null && !busy {
+   busy = true
+   notice = "Git работает…"
+   response = ""
+   response = run("flock -w 15 /root/GitWorld/.native.lock node /root/GitWorld/native/cli.js ${sh(toJson(request))}")
+  }
+ }
+ let objects = world.objects ?? []
+ let trees = world.config.trees ?? []
+ let river = world.config.river ?? {x:12, crossingY:7}
+ let limits = world.config.bounds ?? {minX:2, maxX:19, minY:2, maxY:11}
+ let bridge = find(objects, o => o.id == "bridge")
+ let nearby = find(objects, o => abs(px - o.x) + abs(py - o.y) <= 1)
+ let conflicts = world.conflicts ?? []
+ let active = world != null && modal == "" && len(conflicts) == 0
+ let compact = screenWidth < 600
+ let short = screenHeight < 540
+ let wide = screenWidth >= 1000 && !short
+ let showTouch = !wide || touchControls
+ let margin = compact || short ? 10 : 20
+ let padSize = short ? 40 : 44
+ let dialogWidth = min(600,screenWidth - 2*margin)
+ let dialogHeight = max(140,min(650,screenHeight - screenTop - 2*margin))
+ captureKeys: capture && modal == "" && len(conflicts) == 0
+ back: modal != ""
+ onBack: modal = ""
+ on movement first {
+  if active && movement != null {
+   let nx = px + movement.dx
+   let ny = py + movement.dy
+   if nx >= limits.minX && nx <= limits.maxX && ny >= limits.minY && ny <= limits.maxY && !any(trees, t => t.x == nx && t.y == ny) {
+    if nx == river.x && !(ny == river.crossingY && bridge.state > 0) { notice = "Реку можно перейти по восстановленному мосту." }
+    else { px = nx; py = ny }
+   }
+  }
+ }
+ onKeyDown: {
+  if capture && modal == "" && len(conflicts) == 0 {
+  if value.key == "ESC" { capture = false; notice = "Захват клавиатуры выключен. Кнопка «Клавиши» включает его." }
+  else if value.key == "ENTER" && world == null && !busy { request = {type:"start", nonce:value.time} }
+  else if active {
+   if contains(["UP","DOWN","LEFT","RIGHT"], value.key) {
+    movement = {dx:value.key == "LEFT" ? -1 : value.key == "RIGHT" ? 1 : 0, dy:value.key == "UP" ? -1 : value.key == "DOWN" ? 1 : 0, nonce:value.time}
+   } else if value.repeat == 0 && !busy {
+    if value.key == "E" { if nearby != null { request = {type:"interact", id:nearby.id, nonce:value.time} } else { notice = "Подойдите к саду, маяку или мосту и нажмите E." } }
+    else if value.key == "C" { modal = "commit"; entry = "" }
+    else if value.key == "B" { modal = "branch"; entry = "" }
+    else if value.key == "TAB" { modal = "worlds" }
+   }
+  }
+  }
+ }
+ component Direction(label, stepX, stepY) {
+  Box {
+   width:padSize; height:padSize; radius:8; background:#304934
+   repeats:true
+   onPress: { if active { movement = {dx:stepX,dy:stepY,nonce:random()} } }
+   Text { text:label; width:padSize; height:padSize; align:center; fontSize:24; color:#d5eab9; padding:[0,6] }
+  }
+ }
+ component Chip(label, hot = false) {
+  Text { width:min(screenWidth-60,max(55,len(label)*7+24)); text:label; font:mono; fontSize:11; padding:[12,12]; maxLines:1; radius:5; background:hot ? #c8e599 : #26382c; color:hot ? #23321c : #c4d4b5 }
+ }
+ Box {
+  fill:true
+  background:#111d18
+  Column {
+   fill:true
+   padding:[margin,screenTop + (short ? 4 : 10),margin,short ? 4 : 10]
+   gap:short ? 5 : 10
+   Row {
+    align:center; gap:compact ? 6 : 12
+    Text { weight:1; text:"⑂ GitWorld"; font:mono; fontSize:compact ? 20 : 24; bold:true; color:#d6e9b4 }
+    if wide { Text { width:90; text:"OWL / 0.3"; font:mono; fontSize:10; color:#7e977a } }
+    if wide { Box { width:100; onTap:touchControls = !touchControls; Chip { label:touchControls ? "Сенсор: ON" : "Сенсор" } } }
+    Box { width:compact ? 78 : 132; onTap:capture = !capture; Chip { label:compact ? (capture ? "⌨ ON" : "⌨ OFF") : (capture ? "Клавиши: ON" : "Клавиши: OFF") } }
+    Box { width:compact ? 55 : 65; onTap:close(); Chip { label:compact ? "×" : "Выход" } }
+   }
+   if world == null {
+    Column {
+     weight:1; fill:width; align:center; justify:center; gap:short ? 8 : 22; scroll:true
+     Text { text:"У каждой истории\nесть другая ветка."; font:mono; fontSize:short ? 22 : wide ? 46 : 27; color:#d6e9b4; align:center }
+     Text { text:"Один остров. Первый автор. Несколько возможных будущих."; color:#a0b094; fontSize:13; align:center }
+     Canvas {
+      width:280; height:short ? 100 : 150
+      translate(short ? 46 : 0,0) {
+      scale(short ? 0.66 : 1,short ? 0.66 : 1,0,0) {
+      rect(0,0,280,150,radius:18,fill:#203c38)
+      path([[24,85],[65,36],[174,23],[254,66],[223,120],[78,133]],closed:true,fill:#587344)
+      rect(171,30,12,95,fill:#345651)
+      rect(157,75,40,14,fill:#bca57c)
+      sprite(["..hhh..","..sss..","..sks..",".ggggg.",".ggggg.","..b.b.."],107,67,5,palette:{h:#493d30,s:#e5c7a0,k:#293c2c,g:#d3e9a4,b:#293c2c})
+      circle(225,39,5,fill:#ecd290)
+      }
+      }
+     }
+     Box { width:min(380,screenWidth-60); onTap: { if !busy { request = {type:"start", nonce:random()} } }; Chip { label:busy ? "Создаём мир…" : "ENTER · Создать / продолжить мир"; hot:true } }
+     Text { text:"git init → JSON → commit → branch → merge"; font:mono; fontSize:11; color:#789372 }
+    }
+   } else {
+    Row {
+     align:center
+     Column { weight:1; gap:3
+      Text { text:world.config.name; fontSize:compact || short ? 17 : 22; color:#e0e9d2; bold:true }
+      Text { text:compact ? "ПЕРВЫЙ АВТОР" : "ПЕРВЫЙ АВТОР / МИР ЖИВЁТ В ФАЙЛАХ"; font:mono; fontSize:9; color:#809777 }
+     }
+     Chip { label:"⑂ ${world.branch}${world.dirty ? " •" : ""}"; hot:true }
+    }
+    Row {
+     weight:1; fill:width; gap:16
+     Canvas {
+      weight:1; fill:height
+      let cell = max(compact ? 26 : 22,min(width / 24,height / 16))
+      let ox = width >= 22*cell ? (width-22*cell)/2 : clamp(width/2-(px+0.5)*cell,width-22*cell,0)
+      let oy = height >= 14*cell ? (height-14*cell)/2 : clamp(height/2-(py+0.5)*cell,height-14*cell,0)
+      rect(0,0,width,height,radius:10,fill:#203c38)
+      clip(0,0,width,height) {
+       for w in range(18) {
+        let wy = (w * 49 + time * 3) % (height + 30)
+        line(0,wy,width,wy - 12,stroke:alpha(#89aea1,0.07),width:1)
+       }
+       translate(ox,oy) {
+        rect(1.5*cell,1.5*cell,19*cell,11*cell,radius:cell,fill:#354e38)
+        rect(1.5*cell,1.3*cell,19*cell,11*cell,radius:cell,fill:#577044)
+        for gy in range(2,12) {
+         for gx in range(2,20) {
+          let shade = hash(gx,gy)
+          rect(gx*cell,gy*cell,cell-1,cell-1,fill:alpha(shade > 0.5 ? #8da66b : #314f34,0.12))
+          if shade > 0.6 { line((gx+0.3)*cell,(gy+0.4)*cell,(gx+0.4)*cell,(gy+0.3)*cell,stroke:#80935e,width:1) }
+         }
+        }
+        rect(3*cell,7*cell,15*cell,cell,fill:#929167)
+        rect(5*cell,5*cell,cell,5*cell,fill:#929167)
+        rect(river.x*cell,1.3*cell,cell,11*cell,fill:#2c5149)
+        line(river.x*cell,1.3*cell,river.x*cell,12.3*cell,stroke:#9aa075,width:2)
+        for t in trees {
+         circle((t.x+0.5)*cell,(t.y+0.8)*cell,cell*0.4,fill:alpha(#182e22,0.4))
+         rect((t.x+0.43)*cell,(t.y+0.2)*cell,cell*0.14,cell*0.7,fill:#665338)
+         path([[(t.x+0.5)*cell,(t.y-0.5)*cell],[(t.x+0.05)*cell,(t.y+0.55)*cell],[(t.x+0.95)*cell,(t.y+0.55)*cell]],closed:true,fill:#304f32)
+         path([[(t.x+0.5)*cell,(t.y-0.5)*cell],[(t.x+0.5)*cell,(t.y+0.55)*cell],[(t.x+0.95)*cell,(t.y+0.55)*cell]],closed:true,fill:#3f6039)
+        }
+        for o in objects {
+         if o.id == "bridge" {
+          if o.state > 0 {
+           rect((o.x-0.25)*cell,(o.y+0.1)*cell,cell*1.5,cell*0.8,fill:o.state == 2 ? #d0c4a0 : #b9a079)
+           for plank in range(7) { line((o.x-0.2+plank*0.23)*cell,(o.y+0.1)*cell,(o.x-0.2+plank*0.23)*cell,(o.y+0.9)*cell,stroke:#706349,width:1) }
+          } else {
+           rect((o.x-0.2)*cell,(o.y+0.15)*cell,cell*0.4,cell*0.65,fill:#978362)
+           rect((o.x+0.8)*cell,(o.y+0.15)*cell,cell*0.4,cell*0.65,fill:#978362)
+          }
+         } else if o.id == "garden" {
+          rect(o.x*cell,o.y*cell,cell,cell,radius:4,fill:#455638)
+          for seed in range(4) {
+           let sx = (o.x+0.25+(seed%2)*0.5)*cell
+           let sy = (o.y+0.25+floor(seed/2)*0.5)*cell
+           circle(sx,sy,cell*0.14,fill:o.state == 0 ? #74835b : o.state == 1 ? #e6caa0 : #83af77)
+           if o.state == 1 { circle(sx,sy,cell*0.06,fill:#f7e6b4) }
+          }
+         } else {
+          if o.state > 0 { circle((o.x+0.5)*cell,(o.y+0.2)*cell,cell*(1+0.1*sin(time*2)),fill:alpha(o.state == 2 ? #8bcefa : #ffe093,0.15)) }
+          rect((o.x+0.25)*cell,(o.y-0.2)*cell,cell*0.5,cell*1.1,fill:#c6c6a0)
+          rect((o.x+0.15)*cell,(o.y-0.3)*cell,cell*0.7,cell*0.2,fill:#e0d2a5)
+          rect((o.x+0.3)*cell,(o.y-0.15)*cell,cell*0.4,cell*0.3,fill:o.state == 0 ? #52614a : o.state == 1 ? #f9dc8b : #8bcefa)
+         }
+         text(o.name,(o.x+0.5)*cell,(o.y+1.35)*cell,size:clamp(cell*0.28,8,13),align:center,color:#e0e7c9)
+         text(o.states[o.state],(o.x+0.5)*cell,(o.y+1.75)*cell,size:clamp(cell*0.22,7,11),align:center,color:#bdcaa6)
+         if abs(px-o.x)+abs(py-o.y)<=1 { text(showTouch ? "●" : "[ E ]",(o.x+0.5)*cell,(o.y-0.65)*cell,size:11,align:center,color:#e2f8a6,bold:true) }
+        }
+        circle((px+0.5)*cell,(py+0.85)*cell,cell*0.32,fill:alpha(#13291d,0.5))
+        sprite(["..hhhh..","..ssss..","..sksk..","..ssss..",".gggggg.",".ggGggg.","..bbbb..","..b..b.."],(px+0.18)*cell,(py-0.1)*cell,cell*0.08,palette:{h:#453d31,s:#e6c59e,k:#29362b,g:#cbe59c,G:#e4f2bf,b:#2d392d})
+        text("ВЫ",(px+0.5)*cell,(py-0.35)*cell,size:9,align:center,color:#e3f3c3)
+       }
+      }
+      text("ОСТРОВ 001 / ${px}:${py}",16,height-18,size:10,color:#aac29d,font:mono)
+      text("N ↑",width-30,24,size:10,color:#aac29d,font:mono,align:center)
+     }
+     if wide {
+      Column {
+       width:280; fill:height; scroll:true; gap:12; padding:14; background:#1b2b20; radius:8
+       Text { text:"ПАРАЛЛЕЛЬНЫЕ МИРЫ"; font:mono; color:#9ab488; fontSize:11 }
+       for branch in world.branches {
+        Row { gap:6; align:center
+         Box { weight:1; onTap: { if !busy && branch != world.branch { request = {type:"switch",name:branch,nonce:random()} } }; Text { text:"⑂ ${branch}"; font:mono; fontSize:12; maxLines:1; padding:[10,12]; radius:5; background:branch == world.branch ? #c8e599 : #26382c; color:branch == world.branch ? #23321c : #c4d4b5 } }
+         if branch != world.branch { Box { width:48; onTap: { if !busy { target = branch; request = {type:"diff",name:branch,nonce:random()} } }; Chip { label:"⇄" } } }
+        }
+        if branch != world.branch && branch != "main" { Box { onTap: { if !busy { target = branch; request = {type:"delete-info",name:branch,nonce:random()} } }; Chip { label:"Удалить ${branch}" } } }
+       }
+       Box { onTap: { modal = "branch"; entry = "" }; Chip { label:"B · Создать мир" } }
+       Text { text:world.dirty ? "● Мир изменился" : "✓ Мир сохранён"; color:world.dirty ? #e4c38b : #a9c28c; fontSize:12 }
+       Box { onTap: { modal = "commit"; entry = "" }; Chip { label:"C · Создать коммит"; hot:world.dirty } }
+       Text { text:"ИСТОРИЯ"; font:mono; color:#9ab488; fontSize:11 }
+       for item in world.history {
+        Column { gap:4; padding:[0,6]
+         Text { text:"● ${item.message}"; color:#d4dfc6; fontSize:12 }
+         Text { text:"  ${item.hash} · ${item.time}"; color:#819779; font:mono; fontSize:9 }
+        }
+       }
+      }
+     }
+    }
+    if showTouch {
+     Row { gap:compact ? 12 : 20; align:center
+      if short {
+       Row { gap:6
+        Direction { label:"←"; stepX:-1; stepY:0 }
+        Direction { label:"↑"; stepX:0; stepY:-1 }
+        Direction { label:"↓"; stepX:0; stepY:1 }
+        Direction { label:"→"; stepX:1; stepY:0 }
+       }
+      } else {
+       Column { width:3*padSize+12; gap:6; align:center
+        Direction { label:"↑"; stepX:0; stepY:-1 }
+        Row { gap:6
+         Direction { label:"←"; stepX:-1; stepY:0 }
+         Spacer { width:padSize; height:padSize }
+         Direction { label:"→"; stepX:1; stepY:0 }
+        }
+        Direction { label:"↓"; stepX:0; stepY:1 }
+       }
+      }
+      Column { weight:1; gap:6
+       Box { fill:width; onTap: { if !busy && nearby != null { request = {type:"interact",id:nearby.id,nonce:random()} } else if nearby == null { notice = "Подойдите к саду, мосту или маяку." } }
+        Text { text:busy ? "Подождите…" : nearby == null ? "Взаимодействие" : nearby.name; padding:[12,14]; fontSize:13; maxLines:1; align:center; radius:7; color:nearby != null ? #23321c : #bdd0aa; background:nearby != null ? #c8e599 : #26382c }
+       }
+       Row { gap:6
+        Box { weight:1; onTap:modal = "worlds"; Text { text:"Миры"; padding:[8,12]; fontSize:12; align:center; background:#26382c; radius:6; color:#c5d9b1 } }
+        Box { weight:1; onTap: { modal = "commit"; entry = "" }; Text { text:"Коммит"; padding:[8,12]; fontSize:12; align:center; background:world.dirty ? #c8e599 : #26382c; radius:6; color:world.dirty ? #23321c : #c5d9b1 } }
+       }
+      }
+      if wide { Text { weight:1; text:"Удерживайте стрелку для движения.\nE — взаимодействие · B — ветка · C — коммит"; fontSize:11; color:#829a76 } }
+     }
+    } else {
+     Row { gap:8; align:center
+      Box { width:220; onTap: { if !busy && nearby != null { request = {type:"interact",id:nearby.id,nonce:random()} } }; Chip { label:nearby == null ? "E · Подойдите к объекту" : "E · ${nearby.name}"; hot:nearby != null } }
+      Box { width:120; onTap:modal = "worlds"; Chip { label:"TAB · Миры" } }
+      Text { weight:1; text:"↑ ↓ ← →  движение · ESC  отпустить клавиши"; font:mono; fontSize:10; color:#829a76; align:end }
+     }
+    }
+   }
+   Text { text:notice; color:#adc593; fontSize:compact || short ? 10 : 11; maxLines:short ? 1 : 2 }
+  }
+  if modal != "" || len(conflicts) > 0 {
+   Box { fill:true; background:alpha(#08120c,0.9)
+    Column {
+     width:dialogWidth; height:dialogHeight; offset:[(screenWidth-dialogWidth)/2,screenTop+margin]; padding:compact || short ? 14 : 24; gap:12; scroll:true; background:#1d3023; radius:12
+     if len(conflicts)>0 {
+      Text { text:"Миры спорят"; color:#e9d49d; fontSize:24; bold:true }
+      Text { text:"Git нашёл разные изменения одного объекта. Выберите, какое состояние останется."; fontSize:13; color:#b1c39e }
+      for conflict in conflicts {
+       Text { text:conflict.name; fontSize:16; color:#dbe8c6 }
+       Row { gap:10; wrap:true
+        Box { onTap: { if !busy { request = {type:"resolve",file:conflict.file,choice:"ours",nonce:random()} } }; Chip { label:"Текущее"; hot:true } }
+        Box { onTap: { if !busy { request = {type:"resolve",file:conflict.file,choice:"theirs",nonce:random()} } }; Chip { label:"Из другой ветки" } }
+       }
+      }
+      Box { onTap: { if !busy { request = {type:"abort",nonce:random()} } }; Chip { label:"Отменить слияние" } }
+     } else if modal == "worlds" {
+      Text { text:"Параллельные миры"; color:#dbe8c6; fontSize:24 }
+      for branch in world.branches {
+       Column { gap:6; padding:[0,8]
+        Box { fill:width; onTap: { if !busy && branch != world.branch { request = {type:"switch",name:branch,nonce:random()} } }
+         Text { text:"⑂ ${branch}${branch == world.branch ? " · вы здесь" : ""}"; padding:[12,14]; font:mono; fontSize:13; maxLines:2; background:branch == world.branch ? #c8e599 : #26382c; color:branch == world.branch ? #23321c : #c5d9b1; radius:6 }
+        }
+        if branch != world.branch {
+         Row { gap:8; wrap:true
+          Box { onTap: { if !busy { target = branch; request = {type:"diff",name:branch,nonce:random()} } }; Chip { label:"Сравнить / слить" } }
+          if branch != "main" { Box { onTap: { if !busy { target = branch; request = {type:"delete-info",name:branch,nonce:random()} } }; Chip { label:"Удалить" } } }
+         }
+        }
+       }
+      }
+      Box { onTap: { modal = "branch"; entry = "" }; Chip { label:"Новый мир" } }
+      for item in take(world.history,8) { Text { text:"${item.hash}  ${item.message}"; fontSize:11; color:#aac095 } }
+     } else if modal == "delete" {
+      Text { text:"Удалить ветку?"; color:#e9d49d; fontSize:24; bold:true }
+      Text { text:deletion.name; color:#dbe8c6; font:mono; fontSize:16 }
+      Text { text:deletion.unmerged ? "В этой ветке ${deletion.commits} коммит(ов), которых нет в текущем мире. Удаление уберёт ветку вместе с её отдельной историей." : "Все коммиты этой ветки уже есть в текущем мире. Будет удалено только имя ветки."; fontSize:13; color:deletion.unmerged ? #edbd8f : #b1c39e }
+      Text { text:"Текущая ветка: ${world.branch}. Основной мир main и активную ветку удалить нельзя."; fontSize:12; color:#91aa81 }
+      Box { onTap: { if !busy { request = {type:"delete",name:deletion.name,force:deletion.unmerged,nonce:random()} } }
+       Text { text:busy ? "Удаляем…" : deletion.unmerged ? "Удалить с отдельной историей" : "Удалить ветку"; padding:14; fontSize:13; align:center; background:#814b3a; color:#ffe0c3; radius:6 }
+      }
+      Box { onTap:modal = "worlds"; Chip { label:"Отмена" } }
+     } else if modal == "merge" {
+      Text { text:"${target} → ${world.branch}"; color:#dbe8c6; fontSize:24 }
+      Text { text:"Изменения будут объединены настоящим git merge."; color:#abc198; fontSize:12 }
+      Text { text:difference == "" ? "Состояния объектов совпадают." : difference; font:mono; fontSize:10; color:#bed7a3 }
+      Box { onTap: { if !busy { request = {type:"merge",name:target,nonce:random()} } }; Chip { label:"Объединить миры"; hot:true } }
+     } else {
+      Text { text:modal == "branch" ? "Новая ветка реальности" : "Момент в истории"; color:#dbe8c6; fontSize:24 }
+      Text { text:modal == "branch" ? "Сначала сохраните изменения. Имя — латиницей, без пробелов." : "Опишите, что изменилось на острове."; color:#abc198; fontSize:12 }
+      Input { text:entry; focus:true; placeholder:modal == "branch" ? "blooming-island" : "Зажёг маяк"; onChange:entry = value
+       onSubmit: { if !busy && trim(value) != "" { request = modal == "branch" ? {type:"branch",name:value,nonce:random()} : {type:"commit",message:value,nonce:random()} } }
+      }
+      Box { onTap: { if !busy && trim(entry) != "" { request = modal == "branch" ? {type:"branch",name:entry,nonce:random()} : {type:"commit",message:entry,nonce:random()} } }; Chip { label:busy ? "Сохраняем…" : "Сохранить"; hot:true } }
+     }
+     Text { text:notice; fontSize:12; color:#dfc388 }
+     if len(conflicts)==0 { Box { onTap:modal = ""; Chip { label:"Вернуться к острову" } } }
+    }
+   }
+  }
+ }
+}

@@ -30,3 +30,13 @@
 
 # OMA Another background media lifetime and artwork extensions
 19 supported 0.18.0-another.35
+
+# Levels supported by OMA Another 1.10.0 build 66.
+20 supported 1.10.0-another.66
+21 supported 1.10.0-another.66
+22 supported 1.10.0-another.66
+23 supported 1.10.0-another.66
+24 supported 1.10.0-another.66
+25 supported 1.10.0-another.66
+26 supported 1.10.0-another.66
+27 supported 1.10.0-another.66

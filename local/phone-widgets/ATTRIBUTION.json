@@ -70,6 +70,36 @@
     "note": "Локальная разработка; сведения об исходных компонентах и лицензиях сохранены в файлах."
   },
   {
+    "file": "84-oma-another-features-app.owl",
+    "kind": "app",
+    "name": "Oma Another Features",
+    "original_author": "Xonars",
+    "source": "https://github.com/Xonars/dev.omalauncher-widgets-another",
+    "local_maintainer": "Xonars",
+    "license": "MIT",
+    "note": "Локальная разработка Xonars."
+  },
+  {
+    "file": "85-oma-another-features.owl",
+    "kind": "widget",
+    "name": "Oma Another Features",
+    "original_author": "Xonars",
+    "source": "https://github.com/Xonars/dev.omalauncher-widgets-another",
+    "local_maintainer": "Xonars",
+    "license": "MIT",
+    "note": "Локальная разработка Xonars."
+  },
+  {
+    "file": "adaptive-icon-qa-Nov18.owl",
+    "kind": "panel",
+    "name": "Adaptive icon preview",
+    "original_author": "Xonars",
+    "source": "https://github.com/Xonars/dev.omalauncher-widgets-another",
+    "local_maintainer": "Xonars",
+    "license": "MIT",
+    "note": "Локальная разработка Xonars."
+  },
+  {
     "file": "apk-maker-app.owl",
     "kind": "app",
     "name": "APK Maker",
@@ -80,6 +110,16 @@
     "note": "Приложение и адаптация Xonars на основе виджета kingdompaulo."
   },
   {
+    "file": "browser.owl",
+    "kind": "app",
+    "name": "Browser",
+    "original_author": "Xonars",
+    "source": "https://github.com/Xonars/dev.omalauncher-widgets-another",
+    "local_maintainer": "Xonars",
+    "license": "MIT",
+    "note": "Локальная разработка Xonars."
+  },
+  {
     "file": "cassette.owl",
     "kind": "app",
     "name": "Cassette",
@@ -88,6 +128,16 @@
     "local_maintainer": "Xonars",
     "license": "MIT",
     "note": "Локальная разработка; сведения об исходных компонентах и лицензиях сохранены в файлах."
+  },
+  {
+    "file": "chatgpt.owl",
+    "kind": "app",
+    "name": "ChatGPT",
+    "original_author": "Xonars",
+    "source": "https://github.com/Xonars/dev.omalauncher-widgets-another",
+    "local_maintainer": "Xonars",
+    "license": "MIT",
+    "note": "Локальная разработка Xonars."
   },
   {
     "file": "chess-app.owl",
@@ -120,6 +170,36 @@
     "note": "Локальная конфигурация; оригинальные комментарии сохранены."
   },
   {
+    "file": "fixation.owl",
+    "kind": "app",
+    "name": "Фиксация",
+    "original_author": "Xonars",
+    "source": "https://github.com/Xonars/dev.omalauncher-widgets-another",
+    "local_maintainer": "Xonars",
+    "license": "MIT",
+    "note": "Локальная разработка Xonars."
+  },
+  {
+    "file": "ghost-letters.owl",
+    "kind": "app",
+    "name": "Письма призрака",
+    "original_author": "Xonars",
+    "source": "https://github.com/Xonars/dev.omalauncher-widgets-another",
+    "local_maintainer": "Xonars",
+    "license": "MIT",
+    "note": "Локальная разработка Xonars."
+  },
+  {
+    "file": "gitworld.owl",
+    "kind": "app",
+    "name": "GitWorld",
+    "original_author": "Xonars",
+    "source": "https://github.com/Xonars/dev.omalauncher-widgets-another",
+    "local_maintainer": "Xonars",
+    "license": "MIT",
+    "note": "Локальная разработка Xonars."
+  },
+  {
     "file": "keybar.owl",
     "kind": "keybar",
     "name": "terminal key bar",
@@ -128,6 +208,46 @@
     "local_maintainer": "Xonars",
     "license": "MIT",
     "note": "Локальная конфигурация; оригинальные комментарии сохранены."
+  },
+  {
+    "file": "keypunch.owl",
+    "kind": "app",
+    "name": "Keypunch",
+    "original_author": "Xonars",
+    "source": "https://github.com/Xonars/dev.omalauncher-widgets-another",
+    "local_maintainer": "Xonars",
+    "license": "MIT",
+    "note": "Локальная разработка Xonars."
+  },
+  {
+    "file": "lofi-radio-widget.owl",
+    "kind": "widget",
+    "name": "Lofi Radio",
+    "original_author": "Xonars",
+    "source": "https://github.com/Xonars/dev.omalauncher-widgets-another",
+    "local_maintainer": "Xonars",
+    "license": "MIT",
+    "note": "Локальная разработка Xonars."
+  },
+  {
+    "file": "lofi-radio.owl",
+    "kind": "app",
+    "name": "Lofi Radio",
+    "original_author": "Xonars",
+    "source": "https://github.com/Xonars/dev.omalauncher-widgets-another",
+    "local_maintainer": "Xonars",
+    "license": "MIT",
+    "note": "Локальная разработка Xonars."
+  },
+  {
+    "file": "market-allapknoafk-fortune.owl",
+    "kind": "widget",
+    "name": "fortune",
+    "original_author": "allapknoafk",
+    "source": "https://github.com/SimonSchubert/omarchy-widgets/tree/main/widgets/allapknoafk/fortune",
+    "local_maintainer": "Xonars",
+    "license": "MIT",
+    "note": "Версия с телефона. Исходное авторство сохранено."
   },
   {
     "file": "market-app-perminder-klair-solitaire.owl",
@@ -210,6 +330,16 @@
     "note": "Оригинал simonschubert; локальная версия Xonars. Наличие отличий само по себе не подтверждает авторство каждого изменения."
   },
   {
+    "file": "market-app-simonschubert-pixel-pinball.owl",
+    "kind": "app",
+    "name": "pixel pinball",
+    "original_author": "simonschubert",
+    "source": "https://github.com/SimonSchubert/omarchy-widgets/tree/main/apps/simonschubert/pixel-pinball",
+    "local_maintainer": "Xonars",
+    "license": "MIT",
+    "note": "Версия с телефона. Исходное авторство сохранено."
+  },
+  {
     "file": "market-app-simonschubert-power-atlas.owl",
     "kind": "app",
     "name": "Атлас энергии",
@@ -218,6 +348,36 @@
     "local_maintainer": "Xonars",
     "license": "MIT",
     "note": "Оригинал simonschubert; локальная версия Xonars. Наличие отличий само по себе не подтверждает авторство каждого изменения."
+  },
+  {
+    "file": "market-app-simonschubert-space-bounce.owl",
+    "kind": "app",
+    "name": "space bounce",
+    "original_author": "simonschubert",
+    "source": "https://github.com/SimonSchubert/omarchy-widgets/tree/main/apps/simonschubert/space-bounce",
+    "local_maintainer": "Xonars",
+    "license": "MIT",
+    "note": "Версия с телефона. Исходное авторство сохранено."
+  },
+  {
+    "file": "market-app-simonschubert-sunset-heist.owl",
+    "kind": "app",
+    "name": "sunset heist",
+    "original_author": "simonschubert",
+    "source": "https://github.com/SimonSchubert/omarchy-widgets/tree/main/apps/simonschubert/sunset-heist",
+    "local_maintainer": "Xonars",
+    "license": "MIT",
+    "note": "Версия с телефона. Исходное авторство сохранено."
+  },
+  {
+    "file": "market-app-simonschubert-warp-tube.owl",
+    "kind": "app",
+    "name": "warp tube",
+    "original_author": "simonschubert",
+    "source": "https://github.com/SimonSchubert/omarchy-widgets/tree/main/apps/simonschubert/warp-tube",
+    "local_maintainer": "Xonars",
+    "license": "MIT",
+    "note": "Версия с телефона. Исходное авторство сохранено."
   },
   {
     "file": "market-app-vanyapoker-corsair.owl",
@@ -248,6 +408,26 @@
     "local_maintainer": "Xonars",
     "license": "MIT",
     "note": "Оригинал cbarland; локальная версия Xonars. Наличие отличий само по себе не подтверждает авторство каждого изменения."
+  },
+  {
+    "file": "market-jonasallencodes-digital-clock-copy-fb01f1c2-da15-466e-91fa-598dfb50097f.owl",
+    "kind": "widget",
+    "name": "digital clock",
+    "original_author": "jonasallencodes",
+    "source": "https://github.com/SimonSchubert/omarchy-widgets/tree/main/widgets/jonasallencodes/digital-clock",
+    "local_maintainer": "Xonars",
+    "license": "MIT",
+    "note": "Версия с телефона. Исходное авторство сохранено."
+  },
+  {
+    "file": "market-jonasallencodes-digital-clock.owl",
+    "kind": "widget",
+    "name": "digital clock",
+    "original_author": "jonasallencodes",
+    "source": "https://github.com/SimonSchubert/omarchy-widgets/tree/main/widgets/jonasallencodes/digital-clock",
+    "local_maintainer": "Xonars",
+    "license": "MIT",
+    "note": "Версия с телефона. Исходное авторство сохранено."
   },
   {
     "file": "market-justqrius-matrix-terminal.owl",
@@ -320,6 +500,16 @@
     "note": "Оригинал rystedtcreative; локальная версия Xonars. Наличие отличий само по себе не подтверждает авторство каждого изменения."
   },
   {
+    "file": "market-satwikgawand-github-contributions.owl",
+    "kind": "widget",
+    "name": "github contributions",
+    "original_author": "satwikgawand",
+    "source": "https://github.com/SimonSchubert/omarchy-widgets/tree/main/widgets/satwikgawand/github-contributions",
+    "local_maintainer": "Xonars",
+    "license": "MIT",
+    "note": "Версия с телефона. Исходное авторство сохранено."
+  },
+  {
     "file": "market-simonschubert-fetch.owl",
     "kind": "widget",
     "name": "fetch",
@@ -328,6 +518,16 @@
     "local_maintainer": "Xonars",
     "license": "MIT",
     "note": "Оригинал simonschubert; локальная версия Xonars. Наличие отличий само по себе не подтверждает авторство каждого изменения."
+  },
+  {
+    "file": "market-simonschubert-focus.owl",
+    "kind": "widget",
+    "name": "focus",
+    "original_author": "simonschubert",
+    "source": "https://github.com/SimonSchubert/omarchy-widgets/tree/main/widgets/simonschubert/focus",
+    "local_maintainer": "Xonars",
+    "license": "MIT",
+    "note": "Версия с телефона. Исходное авторство сохранено."
   },
   {
     "file": "market-simonschubert-koi-pond.owl",
@@ -380,6 +580,16 @@
     "note": "Оригинал w-m-hill; локальная версия Xonars. Наличие отличий само по себе не подтверждает авторство каждого изменения."
   },
   {
+    "file": "market-zshadow168-hub-netz7.owl",
+    "kind": "widget",
+    "name": "netz7 by z7shadow",
+    "original_author": "zshadow168",
+    "source": "https://github.com/SimonSchubert/omarchy-widgets/tree/main/widgets/zshadow168/hub-netz7",
+    "local_maintainer": "Xonars",
+    "license": "MIT",
+    "note": "Версия с телефона. Исходное авторство сохранено."
+  },
+  {
     "file": "noboru.owl",
     "kind": "app",
     "name": "Noboru · Манга",
@@ -388,6 +598,26 @@
     "local_maintainer": "Xonars",
     "license": "MIT",
     "note": "Локальная разработка; сведения об исходных компонентах и лицензиях сохранены в файлах."
+  },
+  {
+    "file": "owl-studio-example.owl",
+    "kind": "app",
+    "name": "Новый проект",
+    "original_author": "Xonars",
+    "source": "https://github.com/Xonars/dev.omalauncher-widgets-another",
+    "local_maintainer": "Xonars",
+    "license": "MIT",
+    "note": "Пустой шаблон проекта OWL Studio с примером счётчика."
+  },
+  {
+    "file": "owl-studio-v01.owl",
+    "kind": "app",
+    "name": "OWL Studio",
+    "original_author": "Xonars",
+    "source": "https://github.com/Xonars/dev.omalauncher-widgets-another",
+    "local_maintainer": "Xonars",
+    "license": "MIT",
+    "note": "Локальная разработка Xonars."
   },
   {
     "file": "pinterest-wallswap.owl",
@@ -400,6 +630,16 @@
     "note": "Локальная разработка; сведения об исходных компонентах и лицензиях сохранены в файлах."
   },
   {
+    "file": "quattro-system.owl",
+    "kind": "widget",
+    "name": "System monitor",
+    "original_author": "Xonars",
+    "source": "https://github.com/Xonars/dev.omalauncher-widgets-another",
+    "local_maintainer": "Xonars",
+    "license": "MIT",
+    "note": "Локальная разработка Xonars."
+  },
+  {
     "file": "quiet-reader.owl",
     "kind": "app",
     "name": "Тихая читалка",
@@ -408,5 +648,25 @@
     "local_maintainer": "Xonars",
     "license": "MIT AND GPL-3.0-only",
     "note": "Локальная разработка; сведения об исходных компонентах и лицензиях сохранены в файлах."
+  },
+  {
+    "file": "strip.owl",
+    "kind": "strip",
+    "name": "Приложения",
+    "original_author": "Xonars",
+    "source": "https://github.com/Xonars/dev.omalauncher-widgets-another",
+    "local_maintainer": "Xonars",
+    "license": "MIT",
+    "note": "Локальная разработка Xonars."
+  },
+  {
+    "file": "telegram.owl",
+    "kind": "app",
+    "name": "Telegram",
+    "original_author": "Xonars",
+    "source": "https://github.com/Xonars/dev.omalauncher-widgets-another",
+    "local_maintainer": "Xonars",
+    "license": "MIT",
+    "note": "Локальная разработка Xonars."
   }
 ]

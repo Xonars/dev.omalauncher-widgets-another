@@ -1,0 +1,574 @@
+app "Lofi Radio" {
+  // Fixed SHA-256 resource package; installed only inside this entry's private directory.
+  let storeBootstrap = """
+# Template embedded in store OWL. Packages are fixed and SHA-256 verified.
+import fcntl
+import hashlib
+import io
+import os
+from pathlib import Path, PurePosixPath
+import tempfile
+import urllib.request
+import zipfile
+
+
+def install(url, digest, entry):
+    if not entry or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789-" for c in entry):
+        raise ValueError("Invalid store entry")
+    root = Path.home() / '.local/share/omalauncher-store' / entry
+    if any(p.is_symlink() for p in [root, *root.parents]):
+        raise ValueError('Symlink in resource destination')
+    root.mkdir(parents=True, exist_ok=True)
+    with (root / '.install.lock').open('w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        marker = root / '.installed'
+        if marker.exists() and marker.read_text() == digest:
+            return
+        with urllib.request.urlopen(url, timeout=60) as response:
+            payload = response.read(32 * 1024 * 1024 + 1)
+        if len(payload) > 32 * 1024 * 1024 or hashlib.sha256(payload).hexdigest() != digest:
+            raise ValueError('Store resource SHA-256 mismatch')
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            members = archive.infolist()
+            if sum(x.file_size for x in members) > 128 * 1024 * 1024:
+                raise ValueError('Store resource package too large')
+            for info in members:
+                path = PurePosixPath(info.filename)
+                if path.is_absolute() or '..' in path.parts or not path.parts or path.parts[0] not in ('widgets', 'support'):
+                    raise ValueError('Invalid store resource path')
+                target = root.joinpath(*path.parts)
+                # No symlinks in the destination chain or package extraction.
+                if any(p.is_symlink() for p in [target, *target.parents]):
+                    raise ValueError('Symlink in resource destination')
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as output:
+                    output.write(archive.read(info))
+                    temporary = Path(output.name)
+                os.replace(temporary, target)
+        marker.write_text(digest)
+
+install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/adc7db29c9034fd93f7aa7b6b6dabf48cdca4e928de2b1b7de850eeeb48a2bce.zip', 'adc7db29c9034fd93f7aa7b6b6dabf48cdca4e928de2b1b7de850eeeb48a2bce', 'xonars-lofi-radio')
+"""
+  let storeInstall = "python -c ${sh(storeBootstrap)}"
+
+  meta { owl: 19; description: "Лоуфай для учёбы с эфиром и офлайн-режимом · ресурсы при первом запуске"; category: "media" ; version: "1.0.1"; license: "MIT" }
+  requires { pacman: ["mpv", "python", "yt-dlp"] }
+  title: ""
+  back: sceneMenu || playlistMenu
+  onBack: {
+    if albumDetail != "" { albumDetail = "" }
+    else { sceneMenu = false; playlistMenu = false }
+  }
+  fps: sceneRate
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+    <rect width="256" height="256" rx="56" fill="#241D2B"/>
+    <circle cx="128" cy="126" r="83" fill="#3C2E36"/>
+    <path d="M59 136v-15a69 69 0 0 1 138 0v15" fill="none" stroke="#F6C596" stroke-width="15" stroke-linecap="round"/>
+    <rect x="50" y="124" width="39" height="58" rx="16" fill="#F6C596"/>
+    <rect x="167" y="124" width="39" height="58" rx="16" fill="#F6C596"/>
+    <path d="M108 140v12m20-22v32m20-22v12" fill="none" stroke="#F6C596" stroke-width="8" stroke-linecap="round"/>
+  </svg>"""
+
+  state selected = "radio" persist
+  state sceneChoice = "auto" persist
+  state sceneStarted = 0
+  state sceneMenu = false
+  state playlistMenu = false
+  state playlistChoice = "jazz" persist
+  state albumDetail = ""
+  source playback = cmd("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-lofi-radio/widgets/lofi-radio/player.py status") every 2s json
+  source localClock = clock every 1m
+  source scenes = cmd("python -c ${sh(storeBootstrap)} && cat ~/.local/share/omalauncher-store/xonars-lofi-radio/widgets/lofi-radio/scenes.json") timeout 60s json
+  source playlists = cmd("python -c ${sh(storeBootstrap)} && cat ~/.local/share/omalauncher-store/xonars-lofi-radio/widgets/lofi-radio/playlists.json") timeout 60s json
+
+  let activeMode = playback.mode ?? ""
+  let displayedMode = activeMode == "" ? selected : activeMode
+  let playing = playback.playing == true
+  let warmingUp = playing && playback.buffering == true
+  let clockParts = split(fmtTime(localClock, "D M d H m", null, "en"), " ")
+  let dayOfYear = num(clockParts[0], 1)
+  let month = num(clockParts[1], 1)
+  let monthDay = num(clockParts[2], 1)
+  let hour = num(clockParts[3], 0)
+  let halfHour = hour * 2 + floor(num(clockParts[4], 0) / 30)
+  let period = hour < 5 || hour >= 23 ? "night" : hour < 8 ? "dawn" : hour < 16 ? "day" : hour < 19 ? "sunset" : "evening"
+  let season = month < 3 || month == 12 ? "winter" : month < 6 ? "spring" : month < 9 ? "summer" : "autumn"
+  let occasion =
+    (month == 12 && monthDay == 31) || (month == 1 && monthDay == 1) ? "newyear" :
+    (month == 12 && monthDay >= 20) || (month == 1 && monthDay <= 7) ? "christmas" :
+    (month == 10 && monthDay >= 27) || (month == 11 && monthDay <= 2) ? "halloween" :
+    month == 2 && monthDay >= 13 && monthDay <= 15 ? "valentines" : ""
+  let eligibleScenes = filter(scenes ?? [], item => any(item.periods ?? [], part => part == period))
+  let regularScenes = filter(eligibleScenes, item => item.season == null && item.occasion == null)
+  let holidayScenes = filter(eligibleScenes, item => occasion != "" && item.occasion == occasion)
+  let seasonalScenes = filter(eligibleScenes, item => item.season == season)
+  let accentScenes = len(holidayScenes) > 0 ? holidayScenes : seasonalScenes
+  // Keep special scenes occasional and rotate through the rest in order.
+  let hasAccent = len(accentScenes) > 0
+  let showAccent = hasAccent && halfHour % 3 == 2
+  let autoPool = showAccent ? accentScenes : regularScenes
+  let autoStep = showAccent ? floor(halfHour / 3) : hasAccent ? halfHour - floor(halfHour / 3) : halfHour
+  let automaticScene = autoPool[(dayOfYear + autoStep) % max(1, len(autoPool))]
+  let currentScene = find(scenes ?? [], item => item.id == sceneChoice) ?? automaticScene
+  let sceneKey = currentScene.asset ?? "rainy-night"
+  let scenePath = "~/.config/omalauncher/widgets/lofi-radio/${sceneKey}"
+  let sceneFrames = currentScene.frames ?? 232
+  let sceneRate = currentScene.fps ?? 8
+  let sheetColumns = 8
+  let sheetRows = 5
+  let framesPerSheet = sheetColumns * sheetRows
+  let sheetCount = ceil(sceneFrames / framesPerSheet)
+  let highlight = #F6C596
+  let ink = #271C20
+  let cream = #F6E7DB
+  let dim = #C5B1B4
+  let panel = #251E29
+  let landscape = screenWidth > screenHeight && screenWidth >= 520
+  let compact = landscape && screenHeight < 370
+  let backgroundWash = linear(0, 0, 0, 1, [#241B2A, #181620, #14131A])
+  let portraitWidth = min(screenWidth - 36, 570)
+  let libraryWidth = min(screenWidth - 36, landscape ? 980 : 570)
+  let landscapeWidth = min(screenWidth - 36, 1080)
+  let paneGap = compact ? 16 : 24
+  let landscapeControls = clamp((landscapeWidth - paneGap) * 0.42, 224, 360)
+  let landscapeArt = min(landscapeWidth - paneGap - landscapeControls, max(128, screenHeight - 68) * 16 / 9)
+  let streamTitle = playback.streamTitle ?? ""
+  let offlineId = activeMode == "offline" ? (playback.playlistId ?? playlistChoice) : playlistChoice
+  let offlineAlbum = find(playlists ?? [], album => album.id == offlineId) ?? first(playlists ?? [])
+  let openedAlbum = find(playlists ?? [], album => album.id == albumDetail)
+  let canSkip = activeMode == "offline" && (playback.available ?? 0) > 1
+  let mediaInfo = {
+    active: playback.active == true,
+    title: displayedMode == "offline" ? (playback.title ?? "Офлайн") : displayedMode == "radio" ? (streamTitle == "" ? "ChillHop" : streamTitle) : "a rainy night",
+    artist: displayedMode == "offline" ? (playback.artist ?? offlineAlbum.artist ?? "") : displayedMode == "radio" ? "FluxFM" : "Lofi Girl",
+    album: displayedMode == "offline" ? (offlineAlbum.title ?? "Lofi Radio") : "Lofi Radio",
+    duration: playback.duration ?? 0,
+    playing: playing,
+    canSkip: canSkip
+  }
+
+  on sceneKey { sceneStarted = time }
+  on sceneChoice first {
+    run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-lofi-radio/widgets/lofi-radio/player.py scene ${sh(value)}")
+  }
+  on mediaInfo first {
+    if value.active {
+      mediaSession({
+        background: true,
+        title: value.title,
+        artist: value.artist,
+        album: value.album,
+        duration: value.duration,
+        position: playback.position ?? 0,
+        playing: value.playing,
+        commands: {
+          play: "python ~/.local/share/omalauncher-store/xonars-lofi-radio/widgets/lofi-radio/player.py resume",
+          pause: "python ~/.local/share/omalauncher-store/xonars-lofi-radio/widgets/lofi-radio/player.py pause",
+          stop: "python ~/.local/share/omalauncher-store/xonars-lofi-radio/widgets/lofi-radio/player.py stop",
+          previous: value.canSkip ? "python ~/.local/share/omalauncher-store/xonars-lofi-radio/widgets/lofi-radio/player.py previous" : "",
+          next: value.canSkip ? "python ~/.local/share/omalauncher-store/xonars-lofi-radio/widgets/lofi-radio/player.py next" : ""
+        }
+      })
+    } else { mediaSession(null) }
+  }
+
+  component ScenePanel(artWidth) {
+    Column {
+      width: artWidth
+      gap: 0
+      Box {
+        fill: width
+        height: artWidth * 9 / 16
+        radius: 20
+        clip: true
+        background: #21192C
+        onTap: sceneMenu = true
+        Image {
+          fill: true
+          fit: fill
+          label: "Открыть галерею сцен"
+          src: "${scenePath}-cover.webp"
+        }
+        Canvas {
+          let frame = floor(max(time - sceneStarted, 0) * sceneRate) % sceneFrames
+          let sheet = floor(frame / framesPerSheet)
+          let nextSheet = (sheet + 1) % sheetCount
+          let cell = frame % framesPerSheet
+          let cellWidth = ceil(width)
+          let cellHeight = ceil(height)
+
+          clip(0, 0, width, height) {
+            // Request the next sheet ahead of time, entirely outside the view.
+            if sheetCount > 1 { image("${scenePath}-${nextSheet}.webp", -1, -1, 1, 1) }
+            image(
+              "${scenePath}-${sheet}.webp",
+              -(cell % sheetColumns) * cellWidth,
+              -floor(cell / sheetColumns) * cellHeight,
+              sheetColumns * cellWidth,
+              sheetRows * cellHeight
+            )
+          }
+        }
+      }
+      Text {
+        fill: width
+        padding: [2, 8]
+        maxLines: 1
+        text: "Lofi Girl · ${currentScene.title ?? "a rainy night"} ↗"
+        fontSize: 12
+        font: sans
+        color: dim
+        onTap: {
+          if playing { run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-lofi-radio/widgets/lofi-radio/player.py stop") }
+          url("https://www.youtube.com/watch?v=${enc(currentScene.video ?? "nx32Ue0AAA0")}")
+        }
+      }
+    }
+  }
+
+  component TrackSkip(direction, spokenLabel) {
+    Box {
+      width: compact ? 48 : 56
+      fill: height
+      align: center
+      radius: 16
+      background: panel
+      onTap: run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-lofi-radio/widgets/lofi-radio/player.py ${sh(direction)}")
+      Image {
+        size: 24
+        src: "~/.local/share/omalauncher-store/xonars-lofi-radio/widgets/lofi-radio/icons/${direction}.svg"
+        tint: highlight
+        label: spokenLabel
+      }
+    }
+  }
+
+  component PlayerControls(controlWidth) {
+    Column {
+      width: controlWidth
+      gap: 0
+      Row {
+        fill: width
+        height: compact ? 48 : 54
+        gap: 2
+        padding: 4
+        background: panel
+        radius: 18
+
+        for item in [{id: "radio", title: "Эфир"}, {id: "video", title: "YouTube"}, {id: "offline", title: "Офлайн"}] {
+          Box {
+            weight: 1
+            fill: height
+            align: center
+            radius: 14
+            background: displayedMode == item.id ? #4C3642 : panel
+            onTap: {
+              selected = item.id
+              if activeMode != item.id && playback.active {
+                run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-lofi-radio/widgets/lofi-radio/player.py select ${sh(item.id)} ${sh(playlistChoice)}")
+              }
+            }
+            Image {
+              size: 24
+              src: "~/.local/share/omalauncher-store/xonars-lofi-radio/widgets/lofi-radio/icons/${item.id}.svg"
+              tint: displayedMode == item.id ? highlight : dim
+              label: item.title
+            }
+          }
+        }
+      }
+
+      Spacer { height: compact ? 9 : 16 }
+      Row {
+        fill: width
+        height: compact ? 52 : 60
+        align: center
+        gap: 8
+        if canSkip {
+          TrackSkip { direction: "previous"; spokenLabel: "Предыдущий трек" }
+        }
+        Box {
+          weight: 1
+          fill: height
+          align: center
+          radius: 19
+          background: highlight
+          onTap: run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-lofi-radio/widgets/lofi-radio/player.py toggle ${sh(selected)} ${sh(playlistChoice)}")
+          Image {
+            size: 28
+            src: "~/.local/share/omalauncher-store/xonars-lofi-radio/widgets/lofi-radio/icons/${playing ? "pause" : "play"}.svg"
+            tint: ink
+            label: playing ? "Пауза" : "Воспроизвести"
+          }
+        }
+        if canSkip {
+          TrackSkip { direction: "next"; spokenLabel: "Следующий трек" }
+        }
+      }
+
+      Spacer { height: compact ? 7 : 12 }
+      Text {
+        fill: width
+        align: center
+        fontSize: 13
+        font: sans
+        color: dim
+        text: warmingUp ? "Подключение…" : displayedMode == "radio" ? "ChillHop · FluxFM" : displayedMode == "video" ? "a rainy night · Lofi Girl" : (playback.title ?? offlineAlbum.title ?? "Офлайн")
+      }
+      if displayedMode == "offline" {
+        Row {
+          fill: width
+          align: center
+          justify: center
+          gap: 10
+          Text {
+            padding: [9, 9]
+            radius: 10
+            background: panel
+            text: "Плейлисты ›"
+            color: highlight
+            fontSize: 12
+            font: sans
+            onTap: playlistMenu = true
+          }
+        }
+        if offlineAlbum != null {
+          Text {
+            fill: width
+            align: center
+            padding: [0, 5]
+            text: "${offlineAlbum.artist} · CC BY 4.0 ↗"
+            font: sans
+            fontSize: 11
+            color: dim
+            onTap: url(offlineAlbum.url)
+          }
+        }
+        if playback.fallback == true {
+          Text { fill: width; align: center; text: "Переключено на офлайн"; font: sans; fontSize: 11; color: dim }
+        }
+      }
+    }
+  }
+
+  if playlistMenu {
+    Column {
+      fill: true
+      align: center
+      gap: compact ? 7 : 12
+      padding: [18, compact ? 8 : 16, 18, 12]
+      background: backgroundWash
+
+      Row {
+        width: libraryWidth
+        align: center
+        gap: 12
+        Text {
+          padding: [8, 10]
+          text: "‹ Назад"
+          font: sans
+          color: highlight
+          onTap: {
+            if albumDetail != "" { albumDetail = "" }
+            else { playlistMenu = false }
+          }
+        }
+        Text {
+          weight: 1
+          text: openedAlbum.title ?? "Офлайн-плейлисты"
+          font: serif
+          fontSize: 26
+          color: cream
+          maxLines: 2
+        }
+      }
+
+      if openedAlbum != null {
+        Text {
+          width: libraryWidth
+          padding: [14, 13]
+          radius: 12
+          background: highlight
+          text: "▶  Слушать плейлист"
+          color: ink
+          font: sans
+          fontWeight: 700
+          onTap: {
+            let id = openedAlbum.id
+            playlistChoice = id; selected = "offline"; albumDetail = ""; playlistMenu = false
+            run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-lofi-radio/widgets/lofi-radio/player.py album ${sh(id)}")
+          }
+        }
+        Grid {
+          width: libraryWidth
+          weight: 1
+          columns: landscape ? 2 : 1
+          lazy: true
+          gap: 5
+          for index in range(len(openedAlbum.tracks)) {
+            let track = openedAlbum.tracks[index]
+            Row {
+              fill: width
+              padding: [12, 12]
+              radius: 10
+              background: panel
+              align: center
+              onTap: {
+                let id = openedAlbum.id
+                playlistChoice = id; selected = "offline"; albumDetail = ""; playlistMenu = false
+                run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-lofi-radio/widgets/lofi-radio/player.py album ${sh(id)} ${sh(index)}")
+              }
+              Text { weight: 1; text: track.title; font: sans; color: cream; maxLines: 2 }
+              Text { text: fmtTime(track.seconds, "m:ss", "UTC"); font: sans; color: dim; fontSize: 12 }
+            }
+          }
+        }
+      } else {
+        Grid {
+          width: libraryWidth
+          weight: 1
+          columns: landscape ? 2 : 1
+          lazy: true
+          gap: 7
+          for album in playlists ?? [] {
+            Row {
+              fill: width
+              gap: 8
+              padding: [14, 12]
+              radius: 12
+              align: center
+              background: playlistChoice == album.id ? #4C3642 : panel
+              onTap: albumDetail = album.id
+              Column {
+                weight: 1
+                gap: 4
+                Text { text: album.title; font: sans; color: cream; fontWeight: 600 }
+                Text {
+                  text: "${album.artist} · ${len(album.tracks)} треков"
+                  font: sans
+                  fontSize: 12
+                  color: dim
+                }
+              }
+              Text { text: "›"; font: sans; fontSize: 24; color: highlight }
+            }
+          }
+        }
+      }
+    }
+  } else if sceneMenu {
+    Column {
+      fill: true
+      align: center
+      gap: compact ? 7 : 12
+      padding: [18, compact ? 8 : 16, 18, 12]
+      background: backgroundWash
+
+      Row {
+        width: libraryWidth
+        gap: 12
+        align: center
+        Text {
+          padding: [8, 10]
+          text: "‹ Назад"
+          font: sans
+          color: highlight
+          onTap: sceneMenu = false
+        }
+        Text { text: "Сцены"; font: serif; fontSize: 30; color: cream }
+      }
+
+      Text {
+        width: libraryWidth
+        padding: [14, 13]
+        radius: 12
+        background: sceneChoice == "auto" ? #4C3642 : panel
+        text: sceneChoice == "auto" ? "Авто · по времени суток  ✓" : "Авто · по времени суток"
+        color: cream
+        font: sans
+        onTap: { sceneChoice = "auto"; sceneMenu = false }
+      }
+
+      Grid {
+        width: libraryWidth
+        weight: 1
+        columns: landscape ? 2 : 1
+        gap: 6
+        lazy: true
+        for choice in scenes ?? [] {
+          Row {
+            fill: width
+            gap: 12
+            padding: 6
+            align: center
+            radius: 12
+            background: sceneChoice == choice.id ? #4C3642 : panel
+            onTap: { sceneChoice = choice.id; sceneMenu = false }
+
+            Image {
+              width: 96
+              height: 54
+              radius: 8
+              clip: true
+              fit: cover
+              src: "~/.config/omalauncher/widgets/lofi-radio/${choice.asset}-cover.webp"
+            }
+            Text {
+              weight: 1
+              text: choice.label
+              maxLines: 2
+              font: sans
+              color: cream
+            }
+            if sceneChoice == choice.id {
+              Text { padding: [4, 0]; text: "✓"; color: highlight }
+            }
+          }
+        }
+      }
+    }
+  } else if landscape {
+    Column {
+      fill: true
+      scroll: true
+      align: center
+      justify: center
+      padding: [18, 12]
+      background: backgroundWash
+
+      Row {
+        width: landscapeWidth
+        gap: paneGap
+        align: center
+        justify: center
+
+        ScenePanel { artWidth: landscapeArt }
+        Column {
+          width: landscapeControls
+          gap: compact ? 9 : 14
+          Text { text: "Lofi Radio"; color: cream; font: serif; fontSize: compact ? 30 : 35; letterSpacing: -0.7 }
+          PlayerControls { controlWidth: landscapeControls }
+        }
+      }
+    }
+  } else {
+    Column {
+      fill: true
+      scroll: true
+      align: center
+      padding: [18, 24, 18, 20]
+      background: backgroundWash
+
+      Column {
+        width: portraitWidth
+        gap: 0
+        Spacer { height: clamp((screenHeight - 550) * 0.32, 0, 108) }
+        Text { text: "Lofi Radio"; color: cream; font: serif; fontSize: 39; letterSpacing: -0.8 }
+        Spacer { height: 16 }
+        ScenePanel { artWidth: portraitWidth }
+        Spacer { height: 22 }
+        PlayerControls { controlWidth: portraitWidth }
+      }
+    }
+  }
+}

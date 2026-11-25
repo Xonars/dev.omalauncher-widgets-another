@@ -1,0 +1,81 @@
+widget "Lofi Radio" {
+  meta { owl: 19; description: "Показывает выбранную сцену Lofi Radio и открывает плеер по нажатию."; category: "media" }
+  page: 2
+  size: 6x3
+  padding: 0
+  background: #21192C
+  fps: sceneRate
+
+  source savedScene = file("~/.cache/omalauncher-lofi-radio/scene")
+  source localClock = clock every 1m
+  source scenes = file("~/.config/omalauncher/widgets/lofi-radio/scenes.json") json
+  let sceneChoice = trim(savedScene ?? "")
+  let clockParts = split(fmtTime(localClock, "D M d H m", null, "en"), " ")
+  let dayOfYear = num(clockParts[0], 1)
+  let month = num(clockParts[1], 1)
+  let monthDay = num(clockParts[2], 1)
+  let hour = num(clockParts[3], 0)
+  let halfHour = hour * 2 + floor(num(clockParts[4], 0) / 30)
+  let period = hour < 5 || hour >= 23 ? "night" : hour < 8 ? "dawn" : hour < 16 ? "day" : hour < 19 ? "sunset" : "evening"
+  let season = month < 3 || month == 12 ? "winter" : month < 6 ? "spring" : month < 9 ? "summer" : "autumn"
+  let occasion =
+    (month == 12 && monthDay == 31) || (month == 1 && monthDay == 1) ? "newyear" :
+    (month == 12 && monthDay >= 20) || (month == 1 && monthDay <= 7) ? "christmas" :
+    (month == 10 && monthDay >= 27) || (month == 11 && monthDay <= 2) ? "halloween" :
+    month == 2 && monthDay >= 13 && monthDay <= 15 ? "valentines" : ""
+  let eligibleScenes = filter(scenes ?? [], item => any(item.periods ?? [], part => part == period))
+  let regularScenes = filter(eligibleScenes, item => item.season == null && item.occasion == null)
+  let holidayScenes = filter(eligibleScenes, item => occasion != "" && item.occasion == occasion)
+  let seasonalScenes = filter(eligibleScenes, item => item.season == season)
+  let accentScenes = len(holidayScenes) > 0 ? holidayScenes : seasonalScenes
+  // Keep special scenes occasional and rotate through the rest in order.
+  let hasAccent = len(accentScenes) > 0
+  let showAccent = hasAccent && halfHour % 3 == 2
+  let autoPool = showAccent ? accentScenes : regularScenes
+  let autoStep = showAccent ? floor(halfHour / 3) : hasAccent ? halfHour - floor(halfHour / 3) : halfHour
+  let automaticScene = autoPool[(dayOfYear + autoStep) % max(1, len(autoPool))]
+  let currentScene = find(scenes ?? [], item => item.id == sceneChoice) ?? automaticScene
+  let sceneKey = currentScene.asset ?? "rainy-night"
+  let scenePath = "~/.config/omalauncher/widgets/lofi-radio/${sceneKey}"
+  let sceneFrames = currentScene.frames ?? 232
+  let sceneRate = currentScene.fps ?? 8
+  let sheetColumns = 8
+  let sheetRows = 5
+  let framesPerSheet = sheetColumns * sheetRows
+  let sheetCount = ceil(sceneFrames / framesPerSheet)
+
+  state sceneStarted = 0
+  on sceneKey { sceneStarted = time }
+  onTap: open("o:lofi-radio.owl")
+
+  Box {
+    fill: true
+    Image {
+      fill: true
+      fit: cover
+      label: "Открыть Lofi Radio"
+      src: "${scenePath}-cover.webp"
+    }
+    Canvas {
+      let frame = floor(max(time - sceneStarted, 0) * sceneRate) % sceneFrames
+      let sheet = floor(frame / framesPerSheet)
+      let nextSheet = (sheet + 1) % sheetCount
+      let cell = frame % framesPerSheet
+      let cellWidth = ceil(max(width, height * 16 / 9))
+      let cellHeight = ceil(max(height, width * 9 / 16))
+      let left = floor((width - cellWidth) / 2)
+      let top = floor((height - cellHeight) / 2)
+
+      clip(0, 0, width, height) {
+        if sheetCount > 1 { image("${scenePath}-${nextSheet}.webp", -1, -1, 1, 1) }
+        image(
+          "${scenePath}-${sheet}.webp",
+          left - (cell % sheetColumns) * cellWidth,
+          top - floor(cell / sheetColumns) * cellHeight,
+          sheetColumns * cellWidth,
+          sheetRows * cellHeight
+        )
+      }
+    }
+  }
+}

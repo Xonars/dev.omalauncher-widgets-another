@@ -1,0 +1,69 @@
+widget "fortune" {
+  meta { owl: 11; description: "A terminal one-liner of the day with a rotating text-art logo. Tap for another."; version: "1.1.1"; license: "MIT"; category: "fun" }
+  size: 3x2
+  minSize: 3x2
+
+  source now = clock every 10m
+  state skip = 0
+
+  let quotes = [
+    "there is no cloud, just someone else's computer.",
+    "premature optimization is the root of all evil.",
+    "it works on my machine.",
+    "rm -rf is forever. backups are not optional.",
+    "the best code is the code you didn't write.",
+    "in /dev/null we trust.",
+    "make it work, make it right, make it fast.",
+    "a watched process never exits.",
+    "small tools, loosely joined.",
+    "read the man page.",
+    "your terminal is a spaceship.",
+    "if it ain't broke, you haven't read the changelog.",
+    "free as in freedom, not as in free tracking.",
+    "there are 10 kinds of people: those who read binary and those who don't.",
+    "it's not a bug, it's an undocumented feature.",
+    "weeks of coding can save hours of planning.",
+    "keep calm and chmod +x.",
+    "never trust a program that asks for all permissions.",
+    "root is just a state of mind.",
+    "do one thing and do it well.",
+    "your phone is a pocket linux box. act like it.",
+    "every app wants notifications. you are allowed to say no.",
+    "compile errors are just the computer being honest.",
+    "keep it simple, stupid. then keep it simpler.",
+    "uninstall what you don't use.",
+    "less, but better."
+  ]
+  // each logo: lines of text art and a color
+  let logos = [
+    {c: mix(green, foreground, 0.2), l: ["  ^__^", "  (oo)\\_____", "  (__)\\       )\\/", "      ||--w |"]},
+    {c: mix(yellow, foreground, 0.1), l: ["   .--.", "  |o_o |", "  |:_/ |", " //   \\ \\", "(|     | )", "/'\\_   _/`\\"]},
+    {c: #3ddc84, l: ["  \\     /", "  .-----.", " ( o   o )", "  '-----'", "  |     |"]},
+    {c: mix(cyan, foreground, 0.15), l: ["     /\\", "    /  \\", "   / ,, \\", "  / |  | \\", " /_-''''-_\\"]},
+    {c: mix(magenta, foreground, 0.15), l: ["   .-.", "  (o o)", "  | O \\", "   \\   \\", "    `~~~'"]}
+  ]
+  let day = floor((now ?? 0) / 86400)
+  let pick = quotes[(day * 7 + skip * 3) % len(quotes)]
+  let logo = logos[(day + skip) % len(logos)]
+
+  onTap: skip = skip + 1
+
+  Column {
+    gap: 4
+    justify: spaceEvenly
+    Text { spans: [{text: "$ ", color: mix(green, foreground, 0.15)}, {text: "fortune | logo", color: accent}]; font: mono; fontSize: 11 }
+    Row {
+      gap: 10
+      align: center
+      weight: 1
+      Column {
+        gap: 0
+        for ln in logo.l {
+          Text { text: ln; font: mono; fontSize: 10; color: logo.c }
+        }
+      }
+      Text { text: pick; font: mono; fontSize: 12; color: foreground; weight: 1; maxLines: 7 }
+    }
+    Text { text: "tap for another"; font: mono; fontSize: 9; color: alpha(muted, 0.8) }
+  }
+}

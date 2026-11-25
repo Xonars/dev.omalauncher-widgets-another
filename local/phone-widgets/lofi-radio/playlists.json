@@ -1,0 +1,381 @@
+[
+  {
+    "id": "jazz",
+    "title": "Джаз и босанова",
+    "artist": "Kevin MacLeod",
+    "url": "https://incompetech.com/music/royalty-free/full_list.html",
+    "shuffle": true,
+    "tracks": [
+      {
+        "title": "Study And Relax",
+        "path": "study-and-relax.mp3",
+        "seconds": 223
+      },
+      {
+        "title": "Airport Lounge",
+        "path": "tracks/Airport Lounge.opus",
+        "seconds": 308
+      },
+      {
+        "title": "Bossa Antigua",
+        "path": "tracks/Bossa Antigua.opus",
+        "seconds": 283
+      },
+      {
+        "title": "Lobby Time",
+        "path": "tracks/Lobby Time.opus",
+        "seconds": 193
+      },
+      {
+        "title": "Night on the Docks - Sax",
+        "path": "tracks/Night on the Docks - Sax.opus",
+        "seconds": 174
+      },
+      {
+        "title": "On Hold for You",
+        "path": "tracks/On Hold for You.opus",
+        "seconds": 149
+      },
+      {
+        "title": "Space Jazz",
+        "path": "tracks/Space Jazz.opus",
+        "seconds": 370
+      }
+    ]
+  },
+  {
+    "id": "endless-forest",
+    "title": "Endless Forest",
+    "artist": "Purrple Cat",
+    "url": "https://freelofi.com/albums/endless-forest/",
+    "tracks": [
+      {
+        "title": "Endless Forest",
+        "path": "tracks/endless-forest/01-endless-forest.mp3",
+        "seconds": 158
+      },
+      {
+        "title": "Ancient Trees",
+        "path": "tracks/endless-forest/02-ancient-trees.mp3",
+        "seconds": 222
+      },
+      {
+        "title": "Tricks",
+        "path": "tracks/endless-forest/03-tricks.mp3",
+        "seconds": 165
+      },
+      {
+        "title": "Paranormal",
+        "path": "tracks/endless-forest/04-paranormal.mp3",
+        "seconds": 178
+      },
+      {
+        "title": "Turn Back",
+        "path": "tracks/endless-forest/05-turn-back.mp3",
+        "seconds": 176
+      },
+      {
+        "title": "Where Silence Grows",
+        "path": "tracks/endless-forest/06-where-silence-grows.mp3",
+        "seconds": 169
+      },
+      {
+        "title": "Going in Circles",
+        "path": "tracks/endless-forest/07-going-in-circles.mp3",
+        "seconds": 183
+      },
+      {
+        "title": "Middle of Nowhere",
+        "path": "tracks/endless-forest/08-middle-of-nowhere.mp3",
+        "seconds": 200
+      },
+      {
+        "title": "Who's There?",
+        "path": "tracks/endless-forest/09-whos-there.mp3",
+        "seconds": 188
+      },
+      {
+        "title": "Crow's Call",
+        "path": "tracks/endless-forest/10-crows-call.mp3",
+        "seconds": 174
+      },
+      {
+        "title": "Spirits",
+        "path": "tracks/endless-forest/11-spirits.mp3",
+        "seconds": 169
+      },
+      {
+        "title": "Whispering Wind",
+        "path": "tracks/endless-forest/12-whispering-wind.mp3",
+        "seconds": 148
+      },
+      {
+        "title": "Until Dawn",
+        "path": "tracks/endless-forest/13-until-dawn.mp3",
+        "seconds": 221
+      }
+    ]
+  },
+  {
+    "id": "city-nights",
+    "title": "City Nights",
+    "artist": "Purrple Cat",
+    "url": "https://freelofi.com/albums/city-nights/",
+    "tracks": [
+      {
+        "title": "Crescent Moon",
+        "path": "tracks/city-nights/01-crescent-moon.mp3",
+        "seconds": 143
+      },
+      {
+        "title": "Star Bright",
+        "path": "tracks/city-nights/02-star-bright.mp3",
+        "seconds": 150
+      },
+      {
+        "title": "Solitude",
+        "path": "tracks/city-nights/03-solitude.mp3",
+        "seconds": 150
+      },
+      {
+        "title": "Wish You Were Here",
+        "path": "tracks/city-nights/04-wish-you-were-here.mp3",
+        "seconds": 166
+      },
+      {
+        "title": "Visions",
+        "path": "tracks/city-nights/05-visions.mp3",
+        "seconds": 162
+      },
+      {
+        "title": "Can't Sleep",
+        "path": "tracks/city-nights/06-cant-sleep.mp3",
+        "seconds": 173
+      },
+      {
+        "title": "Dark Corners",
+        "path": "tracks/city-nights/07-dark-corners.mp3",
+        "seconds": 210
+      },
+      {
+        "title": "Streetlights",
+        "path": "tracks/city-nights/08-streetlights.mp3",
+        "seconds": 139
+      },
+      {
+        "title": "Time to Think",
+        "path": "tracks/city-nights/09-time-to-think.mp3",
+        "seconds": 179
+      },
+      {
+        "title": "Alley Cat",
+        "path": "tracks/city-nights/10-alley-cat.mp3",
+        "seconds": 176
+      },
+      {
+        "title": "Dancing Shadows",
+        "path": "tracks/city-nights/11-dancing-shadows.mp3",
+        "seconds": 140
+      }
+    ]
+  },
+  {
+    "id": "sea-of-stars",
+    "title": "Sea of Stars",
+    "artist": "Purrple Cat",
+    "url": "https://freelofi.com/albums/sea-of-stars/",
+    "tracks": [
+      {
+        "title": "Meteorites",
+        "path": "tracks/sea-of-stars/01-meteorites.mp3",
+        "seconds": 183
+      },
+      {
+        "title": "Wishes",
+        "path": "tracks/sea-of-stars/02-wishes.mp3",
+        "seconds": 196
+      },
+      {
+        "title": "Take Me With You",
+        "path": "tracks/sea-of-stars/03-take-me-with-you.mp3",
+        "seconds": 204
+      },
+      {
+        "title": "Sea of Stars",
+        "path": "tracks/sea-of-stars/04-sea-of-stars.mp3",
+        "seconds": 141
+      },
+      {
+        "title": "Aether",
+        "path": "tracks/sea-of-stars/05-aether.mp3",
+        "seconds": 140
+      },
+      {
+        "title": "Supernova",
+        "path": "tracks/sea-of-stars/06-supernova.mp3",
+        "seconds": 160
+      },
+      {
+        "title": "Stars Collide",
+        "path": "tracks/sea-of-stars/07-stars-collide.mp3",
+        "seconds": 148
+      },
+      {
+        "title": "Out of the Blue",
+        "path": "tracks/sea-of-stars/08-out-of-the-blue.mp3",
+        "seconds": 198
+      },
+      {
+        "title": "Timeless",
+        "path": "tracks/sea-of-stars/09-timeless.mp3",
+        "seconds": 189
+      },
+      {
+        "title": "Deja Vu",
+        "path": "tracks/sea-of-stars/10-deja-vu.mp3",
+        "seconds": 212
+      }
+    ]
+  },
+  {
+    "id": "a-good-book",
+    "title": "A Good Book",
+    "artist": "Purrple Cat",
+    "url": "https://freelofi.com/albums/a-good-book/",
+    "tracks": [
+      {
+        "title": "Bookworm",
+        "path": "tracks/a-good-book/01-bookworm.mp3",
+        "seconds": 193
+      },
+      {
+        "title": "Coffee Jelly",
+        "path": "tracks/a-good-book/02-coffee-jelly.mp3",
+        "seconds": 129
+      },
+      {
+        "title": "Tiny Ballerina",
+        "path": "tracks/a-good-book/03-tiny-ballerina.mp3",
+        "seconds": 178
+      },
+      {
+        "title": "I Have Too Many Feelings",
+        "path": "tracks/a-good-book/04-i-have-too-many-feelings.mp3",
+        "seconds": 195
+      },
+      {
+        "title": "Summer Crush",
+        "path": "tracks/a-good-book/05-summer-crush.mp3",
+        "seconds": 141
+      },
+      {
+        "title": "Another Dimension",
+        "path": "tracks/a-good-book/06-another-dimension.mp3",
+        "seconds": 119
+      },
+      {
+        "title": "Wait What",
+        "path": "tracks/a-good-book/07-wait-what.mp3",
+        "seconds": 167
+      },
+      {
+        "title": "Happy",
+        "path": "tracks/a-good-book/08-happy.mp3",
+        "seconds": 150
+      },
+      {
+        "title": "Fake Mustache",
+        "path": "tracks/a-good-book/09-fake-mustache.mp3",
+        "seconds": 214
+      },
+      {
+        "title": "Sad Ending",
+        "path": "tracks/a-good-book/10-sad-ending.mp3",
+        "seconds": 151
+      }
+    ]
+  },
+  {
+    "id": "sleep-tight",
+    "title": "Sleep Tight",
+    "artist": "Purrple Cat",
+    "url": "https://freelofi.com/albums/sleep-tight/",
+    "tracks": [
+      {
+        "title": "Comfy",
+        "path": "tracks/sleep-tight/01-comfy.mp3",
+        "seconds": 195
+      },
+      {
+        "title": "Everchanging",
+        "path": "tracks/sleep-tight/02-everchanging.mp3",
+        "seconds": 217
+      },
+      {
+        "title": "Still of the Night",
+        "path": "tracks/sleep-tight/03-still-of-the-night.mp3",
+        "seconds": 160
+      },
+      {
+        "title": "Fading",
+        "path": "tracks/sleep-tight/04-fading.mp3",
+        "seconds": 214
+      },
+      {
+        "title": "Zzz...",
+        "path": "tracks/sleep-tight/05-zzz.mp3",
+        "seconds": 192
+      },
+      {
+        "title": "Dream State",
+        "path": "tracks/sleep-tight/06-dream-state.mp3",
+        "seconds": 147
+      },
+      {
+        "title": "Breathing Underwater",
+        "path": "tracks/sleep-tight/07-breathing-underwater.mp3",
+        "seconds": 178
+      },
+      {
+        "title": "Night Light",
+        "path": "tracks/sleep-tight/08-night-light.mp3",
+        "seconds": 216
+      },
+      {
+        "title": "Out of Place",
+        "path": "tracks/sleep-tight/09-out-of-place.mp3",
+        "seconds": 222
+      },
+      {
+        "title": "Soft",
+        "path": "tracks/sleep-tight/10-soft.mp3",
+        "seconds": 134
+      },
+      {
+        "title": "Weird Dream",
+        "path": "tracks/sleep-tight/11-weird-dream.mp3",
+        "seconds": 160
+      },
+      {
+        "title": "Astral Projection",
+        "path": "tracks/sleep-tight/12-astral-projection.mp3",
+        "seconds": 186
+      },
+      {
+        "title": "All Curled Up",
+        "path": "tracks/sleep-tight/13-all-curled-up.mp3",
+        "seconds": 148
+      },
+      {
+        "title": "Weightless",
+        "path": "tracks/sleep-tight/14-weightless.mp3",
+        "seconds": 195
+      },
+      {
+        "title": "Familiar Faces",
+        "path": "tracks/sleep-tight/15-familiar-faces.mp3",
+        "seconds": 161
+      }
+    ]
+  }
+]

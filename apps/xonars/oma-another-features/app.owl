@@ -1,0 +1,152 @@
+app "Oma Another Features" {
+  // Fixed SHA-256 resource package; installed only inside this entry's private directory.
+  let storeBootstrap = """
+# Template embedded in store OWL. Packages are fixed and SHA-256 verified.
+import fcntl
+import hashlib
+import io
+import os
+from pathlib import Path, PurePosixPath
+import tempfile
+import urllib.request
+import zipfile
+
+
+def install(url, digest, entry):
+    if not entry or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789-" for c in entry):
+        raise ValueError("Invalid store entry")
+    root = Path.home() / '.local/share/omalauncher-store' / entry
+    if any(p.is_symlink() for p in [root, *root.parents]):
+        raise ValueError('Symlink in resource destination')
+    root.mkdir(parents=True, exist_ok=True)
+    with (root / '.install.lock').open('w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        marker = root / '.installed'
+        if marker.exists() and marker.read_text() == digest:
+            return
+        with urllib.request.urlopen(url, timeout=60) as response:
+            payload = response.read(32 * 1024 * 1024 + 1)
+        if len(payload) > 32 * 1024 * 1024 or hashlib.sha256(payload).hexdigest() != digest:
+            raise ValueError('Store resource SHA-256 mismatch')
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            members = archive.infolist()
+            if sum(x.file_size for x in members) > 128 * 1024 * 1024:
+                raise ValueError('Store resource package too large')
+            for info in members:
+                path = PurePosixPath(info.filename)
+                if path.is_absolute() or '..' in path.parts or not path.parts or path.parts[0] not in ('widgets', 'support'):
+                    raise ValueError('Invalid store resource path')
+                target = root.joinpath(*path.parts)
+                # No symlinks in the destination chain or package extraction.
+                if any(p.is_symlink() for p in [target, *target.parents]):
+                    raise ValueError('Symlink in resource destination')
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as output:
+                    output.write(archive.read(info))
+                    temporary = Path(output.name)
+                os.replace(temporary, target)
+        marker.write_text(digest)
+
+install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/c40eb777b4b0a1c6c1d72034f5933fd8d4162e18750ac7df9437becb44f7e7e6.zip', 'c40eb777b4b0a1c6c1d72034f5933fd8d4162e18750ac7df9437becb44f7e7e6', 'xonars-oma-another-features')
+"""
+  let storeInstall = "python -c ${sh(storeBootstrap)}"
+
+  meta { owl: 11; version: "1.0.1"; description: "Возможности OMA Another: наглядный каталог отличий от Oma Launcher · ресурсы при первом запуске"; category: "productivity" ; license: "MIT" }
+  requires { pacman: ["python"] }
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect x=".5" y=".5" width="47" height="47" rx="9" fill="#19191d"/><rect x=".5" y=".5" width="47" height="47" rx="9" fill="currentColor" fill-opacity=".30" stroke="currentColor" stroke-opacity=".78"/><defs><g id="symbol"><rect x="6" y="6" width="36" height="13" rx="3"/><rect x="6" y="26" width="14" height="16" rx="3"/><rect x="27" y="26" width="15" height="16" rx="3"/></g></defs><g transform="translate(3.39 3.39) scale(0.859)" fill="none" stroke="#faf8f3" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.91"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g><g transform="translate(3.39 3.39) scale(0.859)" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.91" opacity=".16"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g></svg>"""
+  title: selected == "" ? "Oma Another Features" : "Возможность"
+  back: selected != ""
+  onBack: selected = ""
+  source catalog = cmd("python -c ${sh(storeBootstrap)} && cat ~/.local/share/omalauncher-store/xonars-oma-another-features/widgets/oma-another-features/catalog.json") timeout 60s json
+  state selected = ""
+  state query = ""
+  state category = "Все"
+  state onlySaved = false
+  state saved = [] persist
+  let items = catalog.features ?? []
+  let categories = ["Все", "Экран", "Управление", "Данные", "Медиа", "Приложения"]
+  let found = items.filter(f => (category == "Все" || f.category == category) && (!onlySaved || contains(saved, f.id)) && contains(lower(f.title + " " + f.summary + " " + f.details + " " + f.howTo + " " + f.limitations + " " + f.category), lower(trim(query))))
+  let current = items.find(f => f.id == selected)
+  component Paragraph(label, body) {
+    Column { gap: 7; fill: width
+      Text { text: label; font: sans; fontSize: 12; bold: true; color: accent }
+      Text { text: body; font: sans; fontSize: 16 }
+    }
+  }
+  Column { fill: true; padding: [16, 10]; gap: 12
+    if selected == "" {
+      Column { fill: width; padding: 18; gap: 8; radius: 16; background: linear(0, 0, 1, 1, [mix(background, accent, 0.16), surface])
+        Text { text: "БОЛЬШЕ ВОЗМОЖНОСТЕЙ"; font: sans; fontSize: 11; letterSpacing: 1.4; color: accent; bold: true }
+        Row { align: center; gap: 14
+          Text { text: str(len(items)); font: sans; fontSize: 48; bold: true; color: accent }
+          Column { weight: 1; gap: 3
+            Text { text: "отличий Another"; font: sans; fontSize: 21; bold: true }
+            Text { text: "от Oma Launcher"; font: sans; fontSize: 13; color: muted }
+          }
+        }
+        Text { text: "Узнайте, что умеет ваш лаунчер. Откройте карточку — внутри польза, инструкция и важные условия."; font: sans; fontSize: 14 }
+      }
+      Box { fill: width; background: surface; radius: 12; padding: [12, 2]
+        Input { text: query; placeholder: "Найти возможность…"; underline: false; fontSize: 15; onChange: query = value }
+      }
+      Grid { columns: 3; gap: 6
+        for c in categories {
+          Box { padding: [10, 7]; radius: 9; background: category == c ? alpha(accent, 0.18) : surface; onTap: category = c
+            Text { text: c; font: sans; fontSize: 12; color: category == c ? accent : muted }
+          }
+        }
+      }
+      Row { align: center
+        Text { text: "Найдено: ${len(found)}"; font: sans; fontSize: 12; color: muted; weight: 1 }
+        Text { text: onlySaved ? "★ Избранное" : "☆ Избранное"; font: sans; fontSize: 12; color: onlySaved ? accent : muted; padding: [6, 5]; onTap: onlySaved = !onlySaved }
+      }
+      Column { weight: 1; lazy: true; gap: 10
+        for f in found key f.id {
+          Column { fill: width; padding: 16; gap: 9; radius: 14; background: surface; border: 1; borderColor: alpha(accent, 0.14); onTap: selected = f.id
+            Row { align: center
+              Text { text: f.category; font: sans; fontSize: 11; color: accent; weight: 1 }
+              Text { text: contains(saved, f.id) ? "★" : "↗"; color: accent; fontSize: 18 }
+            }
+            Text { text: f.title; font: sans; fontSize: 20; bold: true }
+            Text { text: f.summary; font: sans; fontSize: 14; color: muted }
+            Text { text: "Подробнее →"; font: sans; fontSize: 12; color: accent }
+          }
+        }
+        if len(found) == 0 {
+          Column { padding: 20; gap: 10
+            Text { text: catalog == null ? "Загружаем каталог…" : "Ничего не найдено"; font: sans; fontSize: 20 }
+            Text { text: "Попробуйте другой запрос или отключите фильтры."; font: sans; fontSize: 14; color: muted }
+            Button { text: "Сбросить фильтры"; onTap: { query = ""; category = "Все"; onlySaved = false } }
+          }
+        }
+      }
+      Text { text: "Каталог по исходникам · ${catalog.reviewed ?? "…"}"; font: sans; fontSize: 10; color: muted }
+    } else {
+      Column { weight: 1; scroll: true; gap: 20
+        Text { text: "← Все возможности"; font: sans; fontSize: 14; color: accent; padding: [0, 5]; onTap: selected = "" }
+        Column { fill: width; padding: 18; radius: 16; background: mix(surface, accent, 0.08); gap: 12
+          Text { text: current.category ?? ""; font: sans; fontSize: 12; color: accent; bold: true }
+          Text { text: current.title ?? "Карточка не найдена"; font: sans; fontSize: 28; bold: true }
+          Text { text: current.summary ?? "Вернитесь в каталог."; font: sans; fontSize: 16; color: muted }
+          Text { text: contains(saved, selected) ? "★ В избранном" : "☆ Добавить в избранное"; font: sans; fontSize: 13; color: accent; padding: [0, 5]; onTap: saved = contains(saved, selected) ? saved.filter(s => s != selected) : saved + [selected] }
+        }
+        if current != null {
+          Paragraph { label: "ЧТО ЭТО ДАЁТ"; body: current.details }
+          Paragraph { label: "КАК ПОЛЬЗОВАТЬСЯ"; body: current.howTo }
+          Column { fill: width; padding: 16; radius: 12; background: alpha(yellow, 0.08); gap: 7
+            Text { text: "ВАЖНО ЗНАТЬ"; font: sans; fontSize: 12; color: yellow; bold: true }
+            Text { text: current.limitations; font: sans; fontSize: 14 }
+          }
+          for shot in current.screenshots ?? [] {
+            Column { fill: width; gap: 6
+              Image { src: shot.src; fill: width; height: 300; fit: contain; label: shot.caption }
+              Text { text: shot.caption; font: sans; fontSize: 12; color: muted }
+            }
+          }
+          Text { text: "Описание сверено с кодом. Доступность зависит от версии приложения и устройства."; font: sans; fontSize: 12; color: muted }
+        }
+        Spacer { height: 12 }
+      }
+    }
+  }
+}

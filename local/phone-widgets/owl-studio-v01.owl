@@ -1,0 +1,289 @@
+app "OWL Studio" {
+  meta { owl: 18; version: "0.1"; description: "Конструктор OWL: проекты, дерево и безопасные свойства"; license: "MIT" }
+  requires { pacman: ["python"] }
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect x=".5" y=".5" width="47" height="47" rx="9" fill="#19191d"/><rect x=".5" y=".5" width="47" height="47" rx="9" fill="currentColor" fill-opacity=".30" stroke="currentColor" stroke-opacity=".78"/><defs><g id="symbol"><rect x="4" y="7" width="40" height="34" rx="4"/><path d="M4 16h40M16 16v25m7-19h14v12H23z"/></g></defs><g transform="translate(5.28 5.28) scale(0.780)" fill="none" stroke="#faf8f3" stroke-linecap="round" stroke-linejoin="round" stroke-width="3.21"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g><g transform="translate(5.28 5.28) scale(0.780)" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="3.21" opacity=".16"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g></svg>"""
+  state projectId = "" persist
+  state nodeId = "n0"
+  state tab = "projects"
+  state reply = ""
+  state data = null
+  state busy = false
+  state busySeconds = 0
+  state notice = "Проекты сохраняются автоматически."
+  state newName = "Новый проект"
+  state newKind = "widget"
+  state editText = ""
+  state editStyle = "body"
+  state editColor = "foreground"
+  state editPadding = 0
+  state editGap = 4
+  state editBinding = "literal"
+  state editAction = "none"
+  state dirty = false
+  state applying = false
+  state confirmDelete = false
+  state checkProject = ""
+  state checkSerial = 0
+
+  source model = cmd("python3 ~/.local/share/owl-studio/studio.py ${sh(toJson({op: "view", project: projectId}))}") every 1h json timeout 30s
+  // Native check is a bounded/idempotent request; no project mutation runs in cmd.
+  source checked = cmd(checkProject == "" ? null : "python3 ~/.local/share/owl-studio/studio.py ${sh(toJson({op: "check", project: checkProject, request: checkSerial}))}") every 1h json timeout 40s status
+  let tree = data.tree ?? []
+  let selected = find(tree, n => n.id == nodeId)
+  let ready = data.project != null && data.project.id == projectId
+  let container = selected.type == "Row" || selected.type == "Column" || selected.type == "Box"
+  let editKey = ready && selected != null ? "${projectId}:${selected.id}" : ""
+
+  title: tab == "projects" ? "OWL Studio · проекты" : "OWL Studio · ${data.project.name ?? "проект"}"
+  back: tab != "projects"
+  onBack: { if tab == "edit" { tab = "projects" } else { tab = "edit" } }
+
+  on model first {
+    if !busy && value.ok && (value.project.id ?? "") == projectId { data = value }
+    if !busy && value.ok == false { notice = value.status ?? "Не удалось загрузить проекты" }
+  }
+  on reply first {
+    if value != "" {
+      let r = parseJson(value)
+      busy = false
+      busySeconds = 0
+      if r.ok {
+        if applying { dirty = false }
+        let previousProject = projectId
+        projectId = r.project.id ?? projectId
+        data = r
+        if previousProject != projectId { nodeId = "n0"; tab = "edit"; dirty = false }
+        if find(r.tree ?? [], n => n.id == nodeId) == null { nodeId = "n0"; dirty = false }
+        notice = r.status ?? "Готово"
+      } else { notice = r.status ?? "Ошибка команды: проверьте диагностику backend" }
+      applying = false
+    }
+  }
+  on checked first {
+    if checkProject != "" && value != null {
+      busy = false
+      busySeconds = 0
+      checkProject = ""
+      if value.ok && value.out.ok {
+        if value.out.project.id == projectId { data = value.out }
+        notice = value.out.status ?? "Проверка завершена"
+      } else { notice = value.out.status ?? ((value.err ?? "") != "" ? value.err : "Проверка не выполнена") }
+    }
+  }
+  on editKey first {
+    if value != "" {
+      editText = selected.props.text ?? ""
+      editStyle = selected.props.style ?? "body"
+      editColor = selected.props.color ?? "foreground"
+      editPadding = selected.props.padding ?? 0
+      editGap = selected.props.gap ?? 4
+      editBinding = selected.props.binding ?? "literal"
+      editAction = selected.props.action ?? "none"
+      dirty = false
+      confirmDelete = false
+    }
+  }
+  every 1s {
+    if busy {
+      busySeconds = busySeconds + 1
+      if busySeconds > 60 { busy = false; checkProject = ""; notice = "Нет ответа за 60 с. Обновите список; не повторяйте запись вслепую." }
+    } else { busySeconds = 0 }
+  }
+
+  Column {
+    fill: true
+    padding: [12, 8]
+    gap: 8
+    Row {
+      gap: 6
+      Text { text: "OWL / 0.1"; style: label; color: accent; weight: 1 }
+      Text { text: busy ? "Выполняется… ${busySeconds} с" : (dirty ? "Есть неприменённые поля" : "Локально · без сервера"); style: small; color: muted }
+    }
+    if tab != "projects" {
+      Flow {
+        gap: 4
+        for item in [{id: "edit", name: "Дерево"}, {id: "code", name: "Код"}, {id: "preview", name: "PNG"}] {
+          Button { text: item.name; color: tab == item.id ? accent : muted; onTap: tab = item.id }
+        }
+        Button { text: "Проекты"; onTap: tab = "projects" }
+      }
+    }
+    Column {
+      weight: 1
+      scroll: true
+      gap: 10
+      if tab == "projects" {
+        Text { text: "Мои проекты"; style: title }
+        Text { text: "JSON сохраняется после каждого изменения. Поля инспектора — по кнопке «Применить»."; style: small; color: muted }
+        if data == null { Text { text: "Загрузка… Если список не появился, проверьте установку studio.py."; style: small } }
+        for p in data.projects ?? [] key p.id {
+          Row {
+            padding: 10
+            background: alpha(surface, 0.8)
+            border: 1
+            borderColor: p.id == projectId ? accent : muted
+            radius: 8 * corners
+            Text { text: p.name; weight: 1; bold: true }
+            Text { text: "Открыть →"; color: accent }
+            onTap: {
+              if !busy {
+                projectId = p.id
+                nodeId = "n0"
+                dirty = false
+                tab = "edit"
+                refresh()
+              }
+            }
+          }
+        }
+        if len(data.projects ?? []) == 0 && data != null { Text { text: "Пока пусто. Создайте проект или откройте пример счётчика."; color: muted } }
+        Text { text: "Новый проект"; style: label }
+        Input { text: newName; placeholder: "Название"; onChange: newName = value }
+        Row {
+          Button { text: newKind == "widget" ? "● Виджет" : "○ Виджет"; onTap: newKind = "widget" }
+          Button { text: newKind == "app" ? "● Приложение" : "○ Приложение"; onTap: newKind = "app" }
+        }
+        if !busy {
+          Flow {
+            Button { text: "Создать"; onTap: { busy = true; reply = ""; reply = run("python3 ~/.local/share/owl-studio/studio.py ${sh(toJson({op: "new", name: newName, kind: newKind}))}") } }
+            Button { text: "Пример: счётчик"; onTap: { busy = true; reply = ""; reply = run("python3 ~/.local/share/owl-studio/studio.py ${sh(toJson({op: "demo"}))}") } }
+            Button { text: "Обновить"; onTap: refresh() }
+          }
+        }
+      } else if !ready {
+        Text { text: "Загрузка проекта…"; style: title }
+        Button { text: "Обновить"; onTap: refresh() }
+      } else if tab == "code" {
+        Row {
+          Text { text: "Исходный OWL"; style: title; weight: 1 }
+          Button { text: "Копировать"; onTap: copy(data.code ?? "") }
+        }
+        Text { text: "Код генерируется из сохранённого дерева. Ручное выполнение выражений отключено."; style: small; color: muted }
+        Text { text: data.code ?? "Ещё нет кода"; font: mono; fontSize: 12; padding: 8; background: surface }
+      } else if tab == "preview" {
+        Text { text: "Предпросмотр PNG"; style: title }
+        Text { text: "Сначала соберите проект, затем нажмите «Проверить PNG». Это снимок owl-check, не встроенный runtime."; style: small; color: muted }
+        if (data.preview ?? "") != "" {
+          Image { src: data.preview; fit: contain; fill: width; height: 320; label: "Снимок собранного OWL" }
+        } else { Text { text: "Снимка пока нет"; padding: 20; color: muted; background: surface } }
+        if !busy {
+          Button { text: "Проверить PNG · до 40 с"; onTap: { busy = true; busySeconds = 0; checkSerial = checkSerial + 1; checkProject = projectId } }
+        }
+        Text { text: "Виджет добавляется на домашний экран средствами лаунчера; приложение — через список приложений."; style: small }
+      } else {
+        Row {
+          Text { text: "Дерево"; style: title; weight: 1 }
+          Text { text: "${len(tree)} / 40 · рев. ${data.project.revision ?? 0}"; style: small; color: muted }
+        }
+        Text { text: "Выберите узел. Новый элемент добавляется внутрь выбранного контейнера."; style: small; color: muted }
+        for n in tree key n.id {
+          Text {
+            text: "${n.id == nodeId ? "●" : "○"} ${n.label}"
+            font: mono
+            fontSize: 13
+            padding: [10, 8]
+            background: n.id == nodeId ? alpha(accent, 0.18) : surface
+            onTap: { if !busy { nodeId = n.id; confirmDelete = false } }
+          }
+        }
+        if selected != null {
+          if !busy {
+            if container && len(tree) < 40 {
+              Flow {
+                gap: 4
+                for kind in ["Text", "Button", "Row", "Column", "Box"] {
+                  Button { text: "+ ${kind}"; onTap: { busy = true; reply = ""; reply = run("python3 ~/.local/share/owl-studio/studio.py ${sh(toJson({op: "add", project: projectId, parent: nodeId, type: kind}))}") } }
+                }
+              }
+            } else if !container { Text { text: "Для добавления выберите Row, Column или Box."; style: small; color: muted } }
+            if len(tree) >= 40 { Text { text: "Достигнут лимит редактора: 40 узлов."; color: red; style: small } }
+            if nodeId != "n0" {
+              Flow {
+                Button { text: "↑ Выше"; onTap: { busy = true; reply = ""; reply = run("python3 ~/.local/share/owl-studio/studio.py ${sh(toJson({op: "move", project: projectId, node: nodeId, delta: -1}))}") } }
+                Button { text: "↓ Ниже"; onTap: { busy = true; reply = ""; reply = run("python3 ~/.local/share/owl-studio/studio.py ${sh(toJson({op: "move", project: projectId, node: nodeId, delta: 1}))}") } }
+                Button { text: "Удалить…"; color: red; onTap: confirmDelete = true }
+              }
+              if confirmDelete {
+                Text { text: "Удалить узел и всех его потомков?"; color: red }
+                Row {
+                  Button { text: "Да, удалить"; color: red; onTap: { confirmDelete = false; busy = true; reply = ""; reply = run("python3 ~/.local/share/owl-studio/studio.py ${sh(toJson({op: "delete", project: projectId, node: nodeId}))}") } }
+                  Button { text: "Отмена"; onTap: confirmDelete = false }
+                }
+              }
+            }
+          }
+          Text { text: "Инспектор · ${selected.type} / ${nodeId}"; style: title }
+          if !busy {
+            if selected.type == "Text" || selected.type == "Button" {
+              Text { text: "Текст"; style: label }
+              Input { text: editText; placeholder: "Текст элемента"; lines: 3; onChange: { editText = value; dirty = true } }
+              Text { text: "Цвет темы"; style: label }
+              Flow {
+                gap: 4
+                for tint in ["foreground", "accent", "muted", "red", "green", "blue", "yellow", "surface", "background"] {
+                  Button { text: editColor == tint ? "● ${tint}" : tint; onTap: { editColor = tint; dirty = true } }
+                }
+              }
+            }
+            if selected.type == "Text" {
+              Text { text: "Стиль текста"; style: label }
+              Flow {
+                gap: 4
+                for s in ["huge", "title", "body", "small", "muted", "label"] {
+                  Button { text: editStyle == s ? "● ${s}" : s; onTap: { editStyle = s; dirty = true } }
+                }
+              }
+              Button { text: editBinding == "counter" ? "Значение: счётчик" : "Значение: обычный текст"; onTap: { editBinding = editBinding == "counter" ? "literal" : "counter"; dirty = true } }
+            }
+            if selected.type == "Button" {
+              Button { text: editAction == "increment" ? "Действие: +1 к счётчику" : "Действие: нет"; onTap: { editAction = editAction == "increment" ? "none" : "increment"; dirty = true } }
+            }
+            Row {
+              Text { text: "Отступ: ${editPadding}"; weight: 1 }
+              Button { text: "−"; onTap: { editPadding = max(0, editPadding - 2); dirty = true } }
+              Button { text: "+"; onTap: { editPadding = min(64, editPadding + 2); dirty = true } }
+            }
+            if selected.type == "Row" || selected.type == "Column" {
+              Row {
+                Text { text: "Интервал: ${editGap}"; weight: 1 }
+                Button { text: "−"; onTap: { editGap = max(0, editGap - 2); dirty = true } }
+                Button { text: "+"; onTap: { editGap = min(64, editGap + 2); dirty = true } }
+              }
+            }
+            Button {
+              text: "Применить свойства"
+              onTap: {
+                busy = true
+                applying = true
+                reply = ""
+                let props = selected.type == "Text" ? {text: editText, style: editStyle, color: editColor, padding: editPadding, binding: editBinding} : (selected.type == "Button" ? {text: editText, color: editColor, padding: editPadding, action: editAction} : (selected.type == "Box" ? {padding: editPadding} : {padding: editPadding, gap: editGap}))
+                reply = run("python3 ~/.local/share/owl-studio/studio.py ${sh(toJson({op: "set", project: projectId, node: nodeId, props: props}))}")
+              }
+            }
+          }
+        }
+      }
+      if ready && tab != "projects" {
+        Text { text: "Сборка и публикация"; style: label }
+        if !busy {
+          Flow {
+            gap: 4
+            Button { text: "Сохранить"; onTap: { busy = true; reply = ""; reply = run("python3 ~/.local/share/owl-studio/studio.py ${sh(toJson({op: "save", project: projectId}))}") } }
+            if !dirty {
+              Button { text: "Собрать"; onTap: { busy = true; reply = ""; reply = run("python3 ~/.local/share/owl-studio/studio.py ${sh(toJson({op: "build", project: projectId}))}") } }
+            }
+          }
+        }
+        if dirty { Text { text: "Перед сборкой примените поля инспектора. «Сохранить» сохраняет дерево, а не черновик полей."; style: small; color: muted } }
+        Text { text: data.buildCurrent ? "Текущая версия опубликована" : (data.published ? "Последняя сборка: дерево изменено, пересоберите" : "Изменения ещё не опубликованы"); color: data.buildCurrent ? green : muted; style: small }
+        if (data.openkey ?? "") != "" { Button { text: "Открыть приложение"; onTap: open(data.openkey) } }
+        if (data.output ?? "") != "" { Text { text: data.output; font: mono; fontSize: 11 } }
+      }
+      Text { text: "Диагностика"; style: label }
+      Text { text: notice; fontSize: 12; color: muted }
+      if (data.status ?? "") != "" && data.status != notice { Text { text: data.status; font: mono; fontSize: 11 } }
+      Text { text: "Для сборки нужен установленный Java CLI. Studio не меняет runtime и не выполняет произвольный код."; style: small; color: muted }
+      Spacer { height: 12 }
+    }
+  }
+}

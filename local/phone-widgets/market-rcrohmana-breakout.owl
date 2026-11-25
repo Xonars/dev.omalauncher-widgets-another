@@ -1,11 +1,7 @@
 // Breakout by rcrohmana, 2026. MIT License.
 app "breakout" {
   title: ""
-  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M4 6h10v7H4zM19 6h10v7H19zM34 6h10v7H34zM4 19h10v7H4zM19 19h10v7H19z"/>
-    <circle cx="35" cy="31" r="3"/>
-    <path d="M13 42h22"/>
-  </svg>"""
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect x=".5" y=".5" width="47" height="47" rx="9" fill="#19191d"/><rect x=".5" y=".5" width="47" height="47" rx="9" fill="currentColor" fill-opacity=".30" stroke="currentColor" stroke-opacity=".78"/><defs><g id="symbol"><path d="M4 6h10v7H4zM19 6h10v7H19zM34 6h10v7H34zM4 19h10v7H4zM19 19h10v7H19z"/><circle cx="35" cy="31" r="3"/><path d="M13 42h22"/></g></defs><g transform="translate(5.28 5.28) scale(0.780)" fill="none" stroke="#faf8f3" stroke-linecap="round" stroke-linejoin="round" stroke-width="3.21"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g><g transform="translate(5.28 5.28) scale(0.780)" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="3.21" opacity=".16"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g></svg>"""
   meta { owl: 10; description: "Relaxed Breakout with themed bricks, drag controls, multiball, wide-paddle and piercing bonuses. Tap to serve, pause anytime, and keep playing with no lives."; version: "3.3.1"; license: "MIT"; author: "rcrohmana"; category: "games" }
 
   // Use OWL's frame clock so the game needs no Linux process or access.

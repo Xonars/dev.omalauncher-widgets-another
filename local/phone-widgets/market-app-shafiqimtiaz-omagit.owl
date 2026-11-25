@@ -825,7 +825,7 @@ except (OSError, ValueError, subprocess.TimeoutExpired) as error:
   }
 
   // Git fork in the shared 48x48 theme-aware outline style.
-  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="9" r="5"/><circle cx="36" cy="9" r="5"/><circle cx="24" cy="38" r="5"/><path d="M12 14v6a4 4 0 0 0 4 4h16a4 4 0 0 0 4-4v-6M24 24v9"/></svg>"""
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect x=".5" y=".5" width="47" height="47" rx="9" fill="#19191d"/><rect x=".5" y=".5" width="47" height="47" rx="9" fill="currentColor" fill-opacity=".30" stroke="currentColor" stroke-opacity=".78"/><defs><g id="symbol"><circle cx="12" cy="9" r="5"/><circle cx="36" cy="9" r="5"/><circle cx="24" cy="38" r="5"/><path d="M12 14v6a4 4 0 0 0 4 4h16a4 4 0 0 0 4-4v-6M24 24v9"/></g></defs><g transform="translate(4.85 5.24) scale(0.798)" fill="none" stroke="#faf8f3" stroke-linecap="round" stroke-linejoin="round" stroke-width="3.13"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g><g transform="translate(4.85 5.24) scale(0.798)" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="3.13" opacity=".16"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g></svg>"""
 
   // ═══════════════════════════════════════════════════════════════════════════
   // The repository picker

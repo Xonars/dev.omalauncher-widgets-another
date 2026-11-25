@@ -12,6 +12,7 @@ HOME = Path.home()
 STYLE = HOME / '.config/omalauncher/style/style.toml'
 BASES = [HOME / '.local/share/omarchy/themes', HOME / '.config/omarchy/themes']
 EXT = {'.png', '.jpg', '.jpeg', '.webp'}
+VIDEO_EXT = {'.mp4', '.webm', '.mkv', '.mov', '.m4v'}
 CACHE = HOME / '.cache/omalauncher/theme-catalog'
 
 
@@ -57,17 +58,20 @@ def catalog():
             except (OSError, ValueError):
                 colors = {}
             walls = {}
+            intro_roots = [b / name / 'backgrounds' / 'intros' for b in BASES] + [HOME / '.config/omarchy/backgrounds' / name / 'intros']
+            videos = sorted({str(p) for root in intro_roots if root.is_dir() for p in root.iterdir() if p.is_file() and p.suffix.lower() in VIDEO_EXT})
+            intro_stems = {Path(p).stem for p in videos}
             for root in [b / name / 'backgrounds' for b in BASES] + [HOME / '.config/omarchy/backgrounds' / name]:
                 if root.is_dir():
                     walls.update({p.name: p for p in sorted(root.iterdir()) if p.is_file() and p.suffix.lower() in EXT})
             wall_items = sorted(walls.items())
             previews = thumbnails.map(thumbnail, (p for _, p in wall_items))
-            pictures = [{'name': n, 'path': str(p), 'preview': preview, 'theme': name}
+            pictures = [{'name': n, 'path': str(p), 'preview': preview, 'theme': name, 'intro': p.stem in intro_stems}
                         for (n, p), preview in zip(wall_items, previews)]
             preview = next((thumb for p in sorted(folder.glob('preview.*')) if p.suffix.lower() in EXT and (thumb := thumbnail(p))), None)
             preview = preview or next((w['preview'] for w in pictures if w['preview']), None)
             swatch = [colors.get(k, colors.get(f'color{i}')) for k, i in [('background', 0), ('foreground', 7), ('accent', 4), ('red', 1), ('green', 2), ('yellow', 3), ('blue', 4), ('magenta', 5)]]
-            result.append({'name': name, 'preview': preview, 'swatch': [c for c in swatch if isinstance(c, str)], 'walls': pictures})
+            result.append({'live': bool(videos), 'videos': videos, 'name': name, 'preview': preview, 'swatch': [c for c in swatch if isinstance(c, str)], 'walls': pictures})
         return result
 
 
@@ -105,11 +109,11 @@ def set_appearance(theme, background=None):
         temp.unlink(missing_ok=True)
 
 
-def cached_catalog():
+def cached_catalog(force=False):
     # Appearance changes refresh sources too: reuse catalog data for five minutes.
-    target = CACHE / 'catalog-v2.json'
+    target = CACHE / 'catalog-v4.json'
     try:
-        if time.time() - target.stat().st_mtime < 300:
+        if not force and time.time() - target.stat().st_mtime < 300:
             return json.loads(target.read_text())
     except (OSError, ValueError):
         pass
@@ -133,6 +137,9 @@ def main():
             print('')
         except Exception as error:
             print(str(error))
+        return
+    if mode == 'refresh':
+        cached_catalog(force=True)
         return
     if mode == 'list':
         print(json.dumps({'themes': cached_catalog()}, ensure_ascii=False))

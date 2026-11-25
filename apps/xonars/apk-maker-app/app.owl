@@ -1,10 +1,10 @@
 app "APK Maker" {
   title: "APK Maker"
-  icon: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M16 5h16v38H8V13h8zM16 5v8H8M18 23l-5 5 5 5M28 23l5 5-5 5M24 21l-3 14"/></svg>'
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect x=".5" y=".5" width="47" height="47" rx="9" fill="#19191d"/><rect x=".5" y=".5" width="47" height="47" rx="9" fill="currentColor" fill-opacity=".30" stroke="currentColor" stroke-opacity=".78"/><defs><g id="symbol"><path d="M16 5h16v38H8V13h8zM16 5v8H8M18 23l-5 5 5 5M28 23l5 5-5 5M24 21l-3 14"/></g></defs><g transform="translate(7.25 4.38) scale(0.817)" fill="none" stroke="#faf8f3" stroke-linecap="round" stroke-linejoin="round" stroke-width="3.06"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g><g transform="translate(7.25 4.38) scale(0.817)" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="3.06" opacity=".16"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g></svg>"""
   back: forceAdv || view != "apps"
   onBack: { forceAdv = false; view = "apps"; appStep = ""; showMore = false }
 
-  meta { owl: 9; description: "Turn ideas into Android apps with Claude Code, Codex or OpenCode. Build on your phone, review changes, sync with GitHub and prepare Google Play releases."; version: "3.0.1"; license: "MIT"; category: "dev" }
+  meta { owl: 9; description: "Turn ideas into Android apps with Claude Code, Codex or OpenCode. Build on your phone, review changes, sync with GitHub and prepare Google Play releases."; version: "3.0.2"; license: "MIT"; category: "dev" }
 
   requires { pacman: ["bash", "coreutils", "grep", "sed", "tar", "gzip", "jq", "git", "github-cli", "curl", "unzip", "util-linux", "jdk17-openjdk", "android-tools", "openssl", "nano", "less", "opencode", "findutils", "gawk", "procps-ng", "bubblewrap", "python", "python-pillow"] }
 

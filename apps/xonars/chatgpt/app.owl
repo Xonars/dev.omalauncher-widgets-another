@@ -1,0 +1,239 @@
+app "ChatGPT" {
+  requires { pacman: ["python", "python-cryptography", "nodejs"] }
+
+  // Fixed SHA-256 resource package; installed only inside this entry's private directory.
+  let storeBootstrap = """
+# Template embedded in store OWL. Packages are fixed and SHA-256 verified.
+import fcntl
+import hashlib
+import io
+import os
+from pathlib import Path, PurePosixPath
+import tempfile
+import urllib.request
+import zipfile
+
+
+def install(url, digest, entry):
+    if not entry or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789-" for c in entry):
+        raise ValueError("Invalid store entry")
+    root = Path.home() / '.local/share/omalauncher-store' / entry
+    if any(p.is_symlink() for p in [root, *root.parents]):
+        raise ValueError('Symlink in resource destination')
+    root.mkdir(parents=True, exist_ok=True)
+    with (root / '.install.lock').open('w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        marker = root / '.installed'
+        if marker.exists() and marker.read_text() == digest:
+            return
+        with urllib.request.urlopen(url, timeout=60) as response:
+            payload = response.read(32 * 1024 * 1024 + 1)
+        if len(payload) > 32 * 1024 * 1024 or hashlib.sha256(payload).hexdigest() != digest:
+            raise ValueError('Store resource SHA-256 mismatch')
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            members = archive.infolist()
+            if sum(x.file_size for x in members) > 128 * 1024 * 1024:
+                raise ValueError('Store resource package too large')
+            for info in members:
+                path = PurePosixPath(info.filename)
+                if path.is_absolute() or '..' in path.parts or not path.parts or path.parts[0] not in ('widgets', 'support'):
+                    raise ValueError('Invalid store resource path')
+                target = root.joinpath(*path.parts)
+                # No symlinks in the destination chain or package extraction.
+                if any(p.is_symlink() for p in [target, *target.parents]):
+                    raise ValueError('Symlink in resource destination')
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as output:
+                    output.write(archive.read(info))
+                    temporary = Path(output.name)
+                os.replace(temporary, target)
+        marker.write_text(digest)
+
+install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b51112c24097635d72077be1a86bbf3a63823ba1d9e35b30d46c8756ae157447.zip', 'b51112c24097635d72077be1a86bbf3a63823ba1d9e35b30d46c8756ae157447', 'xonars-chatgpt')
+"""
+  let storeInstall = "python -c ${sh(storeBootstrap)}"
+
+  meta { owl: 18; description: "Прямой вход ChatGPT, чат и сохранение офлайн · ресурсы при первом запуске"; version: "2.0.1"; category: "productivity" ; license: "MIT" }
+  title: ""
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect x=".5" y=".5" width="47" height="47" rx="9" fill="#19191d"/><rect x=".5" y=".5" width="47" height="47" rx="9" fill="currentColor" fill-opacity=".30" stroke="currentColor" stroke-opacity=".78"/><defs><g id="symbol"><path d="M27 7H10a6 6 0 0 0-6 6v19a6 6 0 0 0 6 6h4v7l10-7h14a6 6 0 0 0 6-6V22M13 19h11M13 27h18"/><path d="m36 3 2.5 7.5L46 13l-7.5 2.5L36 23l-2.5-7.5L26 13l7.5-2.5Z"/></g></defs><g transform="translate(5.36 6.11) scale(0.746)" fill="none" stroke="#faf8f3" stroke-linecap="round" stroke-linejoin="round" stroke-width="3.35"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g><g transform="translate(5.36 6.11) scale(0.746)" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="3.35" opacity=".16"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g></svg>"""
+  state view = "account" persist
+  state selected = "" persist
+  state draft = ""
+  state pending = false
+  state previousJob = ""
+  state submitted = ""
+  state confirmDelete = false
+  state offlineOnly = false persist
+  state readingOffline = false persist
+  source db = cmd("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-chatgpt/support/owl-chatgpt/chat.py snapshot v2") every 2s json
+  let chats = db.chats ?? []
+  let offlineChats = db.offline_chats ?? []
+  let chat = find(readingOffline ? offlineChats : chats, c => c.id == selected)
+  let messages = chat.messages ?? []
+  let busy = db.busy ?? false
+  back: view != "chat"
+  onBack: { view = "chat"; confirmDelete = false }
+  on db first {
+    if pending && db.job != previousJob { selected = db.current; pending = false; submitted = "" }
+    if pending && !db.busy && db.error != null && db.error != "" { pending = false; draft = submitted }
+  }
+  Column {
+    fill: true
+    padding: [18, 10, 18, 12]
+    gap: 14
+    Row {
+      align: center
+      Text { text: "ChatGPT"; fontSize: 23; bold: true; weight: 1 }
+      Text { text: "⚙"; fontSize: 20; padding: [10, 10]; onTap: view = view == "account" ? "chat" : "account" }
+      Text { text: "История"; fontSize: 13; padding: [10, 12]; onTap: { view = view == "history" ? "chat" : "history"; confirmDelete = false } }
+      Text { text: "＋"; fontSize: 25; padding: [10, 8]; onTap: { selected = ""; readingOffline = false; draft = ""; view = "chat"; confirmDelete = false } }
+    }
+    if view == "account" {
+      Column {
+        gap: 16
+        weight: 1
+        scroll: true
+        Text { text: "Настройки"; style: title }
+        Text { text: db.logged_in ? db.account : "Аккаунт ChatGPT не подключён"; color: accent }
+        Text { text: "Самостоятельный вход этого приложения через браузер."; style: muted }
+        Button { text: db.auth.waiting ? "Ожидаем вход…" : "Continue with ChatGPT"; onTap: { if !db.auth.waiting { run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-chatgpt/support/owl-chatgpt/chat.py login ${sh(db.active_profile ?? "")}") } } }
+        if db.auth.url != null && db.auth.url != "" && db.auth.waiting {
+          Button { text: "Открыть страницу входа ↗"; onTap: url(db.auth.url) }
+        }
+        if db.auth.waiting { Button { text: "Отменить вход"; onTap: run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-chatgpt/support/owl-chatgpt/chat.py cancel-login") } }
+        if db.auth.message != null { Text { text: db.auth.message; style: small } }
+        if db.logged_in {
+          Text { text: db.sharing ? "Используется план ChatGPT" : "Разрешите использование плана при входе"; style: small; color: accent }
+          Button { text: "Управлять использованием ↗"; onTap: url("https://chatgpt.com/settings/usage") }
+          Button { text: "Выйти из аккаунта"; onTap: run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-chatgpt/support/owl-chatgpt/chat.py logout") }
+        }
+        for p in db.profiles ?? [] {
+          Text { text: "${p.id == db.active_profile ? "●" : "○"} ${p.email} · ${sub(p.id, 0, 4)}"; style: small; padding: 8; onTap: run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-chatgpt/support/owl-chatgpt/chat.py select-account ${sh(p.id)}") }
+        }
+        Button { text: "Добавить аккаунт"; onTap: { if !db.auth.waiting { run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-chatgpt/support/owl-chatgpt/chat.py login") } } }
+        Text { text: "Модель"; style: label }
+        Button { text: "Загрузить доступные модели"; onTap: run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-chatgpt/support/owl-chatgpt/chat.py models") }
+        for m in db.models ?? [] {
+          Text { text: "${db.model == m.id ? "●" : "○"} ${m.name}"; padding: 8; onTap: run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-chatgpt/support/owl-chatgpt/chat.py model ${sh(m.id)}") }
+        }
+        Text { text: "Офлайн"; style: title }
+        Text { text: "Сохранённые копии доступны без интернета в Истории → Офлайн. Копия содержит сообщения на момент сохранения."; style: muted }
+        if chat != null {
+          Text { text: chat.title; style: small; maxLines: 2 }
+          if !readingOffline {
+            Button { text: "Сохранить текущий чат офлайн"; onTap: run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-chatgpt/support/owl-chatgpt/chat.py offline ${sh(selected)}") }
+          }
+          Button { text: "Экспорт в HTML и Markdown"; onTap: run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-chatgpt/support/owl-chatgpt/chat.py export ${sh(selected)} ${sh(readingOffline ? "offline" : "live")}") }
+          if readingOffline {
+            Button { text: "Удалить офлайн-копию"; onTap: { run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-chatgpt/support/owl-chatgpt/chat.py delete-offline ${sh(selected)}"); selected = ""; view = "history" } }
+          }
+        } else {
+          Text { text: "Откройте чат, затем вернитесь в настройки для сохранения."; style: small; color: muted }
+        }
+        if db.notice != null && db.notice != "" { Text { text: db.notice; style: small; color: accent } }
+        if db.error != null && db.error != "" { Text { text: db.error; style: small; color: red } }
+        Text { text: "Переписка хранится на устройстве. Вход ChatGPT не синхронизирует историю с chatgpt.com."; style: muted }
+      }
+    } else {
+      if view == "history" {
+        Row {
+          Button { text: "Все чаты · ${len(chats)}"; onTap: offlineOnly = false }
+          Button { text: "Офлайн · ${len(offlineChats)}"; onTap: offlineOnly = true }
+        }
+        Column {
+          weight: 1
+          lazy: true
+          gap: 10
+          if len(offlineOnly ? offlineChats : chats) == 0 { Text { text: "Здесь появятся ваши разговоры."; color: muted; padding: [0, 24] } }
+          for c in (offlineOnly ? offlineChats : chats).sortBy(c => -c.updated) key c.id {
+            Column {
+              padding: 16
+              background: surface
+              radius: 14
+              gap: 6
+              onTap: { selected = c.id; readingOffline = offlineOnly; view = "chat"; confirmDelete = false }
+              Text { text: c.title; maxLines: 2 }
+              Text { text: "${fmtTime(c.updated, "d MMM · HH:mm")}  ·  ${len(c.messages)} сообщ."; style: small; color: muted }
+            }
+          }
+        }
+      } else {
+        if readingOffline { Text { text: "Офлайн-копия · только чтение"; color: accent; style: small } }
+        if chat != null {
+          Row {
+            Text { text: chat.title; style: small; color: muted; maxLines: 1; weight: 1 }
+            Text { text: confirmDelete ? "Удалить?" : "×"; color: confirmDelete ? red : muted; padding: 8; onTap: { if !busy && !readingOffline { if confirmDelete { run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-chatgpt/support/owl-chatgpt/chat.py delete ${sh(selected)}"); selected = ""; confirmDelete = false } else { confirmDelete = true } } } }
+          }
+        }
+        if len(messages) == 0 {
+          Column {
+            weight: 1
+            justify: center
+            gap: 12
+            Text { text: "С чего начнём?"; fontSize: 27; align: center }
+            Text { text: "Задайте вопрос или поделитесь идеей."; color: muted; align: center }
+          }
+        } else {
+          Column {
+            weight: 1
+            lazy: true
+            reverse: true
+            gap: 16
+            if busy && selected == db.current && db.partial != null && db.partial != "" && !readingOffline {
+              Column { padding: 14; Text { text: "CHATGPT"; style: small; color: muted }; Text { text: db.partial; fontSize: 16 } }
+            }
+            for m in reverse(messages) {
+              Column {
+                padding: 14
+                radius: 16
+                background: m.role == "user" ? surface : background
+                gap: 8
+                Text { text: m.role == "user" ? "ВЫ" : "CHATGPT"; fontSize: 10; color: muted; letterSpacing: 1.5 }
+                Text { text: m.text; fontSize: 16; onLongPress: copy(m.text) }
+              }
+            }
+          }
+        }
+        if busy {
+          Row {
+            Text { text: "Готовлю ответ…"; style: small; color: accent; weight: 1 }
+            Button { text: "Стоп"; onTap: run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-chatgpt/support/owl-chatgpt/chat.py cancel") }
+          }
+        }
+        if db.error != null && db.error != "" {
+          Column { height: 90; scroll: true; Text { text: db.error; style: small; color: red } }
+        }
+        if !readingOffline {
+        Row {
+          align: bottom
+          padding: [12, 8]
+          background: surface
+          radius: 20
+          Input { text: draft; placeholder: "Сообщение…"; lines: 5; weight: 1; underline: false; onChange: draft = value }
+          Text {
+            text: "↑"
+            fontSize: 26
+            color: busy || pending || trim(draft) == "" ? muted : accent
+            padding: [12, 6]
+            onTap: {
+              if !db.logged_in { view = "account" }
+              if db.logged_in && !busy && !pending && trim(draft) != "" {
+                submitted = draft
+                previousJob = db.job
+                readingOffline = false
+                pending = true
+                run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-chatgpt/support/owl-chatgpt/chat.py send ${sh(selected)} ${sh(draft)}")
+                draft = ""
+              }
+            }
+          }
+        }
+        }
+      }
+    }
+    Row {
+      Text { text: db.logged_in ? "● Подключено" : "○ Войти"; fontSize: 11; color: db.logged_in ? muted : accent; weight: 1; padding: [0, 5]; onTap: { view = view == "account" ? "chat" : "account"; run("python -c ${sh(storeBootstrap)} && python ~/.local/share/omalauncher-store/xonars-chatgpt/support/owl-chatgpt/chat.py check") } }
+      Text { text: "${view == "chat" ? "Настройки" : "← К чату"}"; fontSize: 11; color: muted; padding: [0, 5]; onTap: view = view == "chat" ? "account" : "chat" }
+    }
+  }
+}

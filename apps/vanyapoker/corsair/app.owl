@@ -2,7 +2,7 @@ app "corsair" {
   meta {
     owl: 13
     description: "A pirate survivors-like: upgrade your ship, sail five biomes, claim four relics and slay the Sea King."
-    version: "1.7.1"
+    version: "1.7.2"
     license: "MIT"
     category: "games"
   }
@@ -12,11 +12,7 @@ app "corsair" {
   onBack: {
     if phase == "play" { phase = "pause"; confirm = "" } else if phase == "harbor" { phase = "title" } else { phase = "play"; joy = false; jx = 0; jy = 0 }
   }
-  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M4 31h40l-7 11H11z"/>
-    <path d="M24 31V4l9 4-9 4"/>
-    <path d="M24 15c9 2 13 8 13 16M24 15c-7 2-11 8-11 16"/>
-  </svg>"""
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect x=".5" y=".5" width="47" height="47" rx="9" fill="#19191d"/><rect x=".5" y=".5" width="47" height="47" rx="9" fill="currentColor" fill-opacity=".30" stroke="currentColor" stroke-opacity=".78"/><defs><g id="symbol"><path d="M4 31h40l-7 11H11z"/><path d="M24 31V4l9 4-9 4"/><path d="M24 15c9 2 13 8 13 16M24 15c-7 2-11 8-11 16"/></g></defs><g transform="translate(5.28 6.06) scale(0.780)" fill="none" stroke="#faf8f3" stroke-linecap="round" stroke-linejoin="round" stroke-width="3.21"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g><g transform="translate(5.28 6.06) scale(0.780)" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="3.21" opacity=".16"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g></svg>"""
 
   requires { pacman: ["coreutils"] }
 

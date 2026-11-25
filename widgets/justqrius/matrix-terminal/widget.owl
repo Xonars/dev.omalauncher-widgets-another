@@ -59,7 +59,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/21e1
   meta {
     owl: 6
     description: "A live terminal with green Matrix rain when idle. Tap to resume your shell; tap away to bring back the rain. · ресурсы при первом запуске"
-    version: "1.2.1"
+    version: "1.2.2"
     license: "MIT"
     category: "system"
   }
@@ -67,6 +67,6 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/21e1
 
   // Isolated terminal session with automatic recovery of the shell and animation.
   Terminal {
-    command: 'python -c ${sh(storeBootstrap)} && exec bash ~/.local/share/omalauncher-store/justqrius-matrix-terminal/widgets/terminal-support/session.sh matrix'
+    command: 'exec bash ~/.local/share/omalauncher-store/justqrius-matrix-terminal/widgets/terminal-support/session.sh matrix'
   }
 }

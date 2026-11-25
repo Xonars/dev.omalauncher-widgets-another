@@ -159,6 +159,7 @@ def pin_item(pin):
     url = image.get('url', '')
     if not re.fullmatch(r'https://i\.pinimg\.com/[^\s]+', url): return None
     return dict(id=str(pin['id']), image=url,
+                width=image.get('width', 0), height=image.get('height', 0),
                 title=(pin.get('title') or pin.get('grid_title') or pin.get('description') or 'Pinterest')[:200],
                 page='https://www.pinterest.com/pin/' + str(pin['id']) + '/')
 

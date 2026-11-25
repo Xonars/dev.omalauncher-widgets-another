@@ -1,0 +1,536 @@
+app "Фиксация" {
+  // Fixed SHA-256 resource package; installed only inside this entry's private directory.
+  let storeBootstrap = """
+# Template embedded in store OWL. Packages are fixed and SHA-256 verified.
+import fcntl
+import hashlib
+import io
+import os
+from pathlib import Path, PurePosixPath
+import tempfile
+import urllib.request
+import zipfile
+
+
+def install(url, digest, entry):
+    if not entry or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789-" for c in entry):
+        raise ValueError("Invalid store entry")
+    root = Path.home() / '.local/share/omalauncher-store' / entry
+    if any(p.is_symlink() for p in [root, *root.parents]):
+        raise ValueError('Symlink in resource destination')
+    root.mkdir(parents=True, exist_ok=True)
+    with (root / '.install.lock').open('w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        marker = root / '.installed'
+        if marker.exists() and marker.read_text() == digest:
+            return
+        with urllib.request.urlopen(url, timeout=60) as response:
+            payload = response.read(32 * 1024 * 1024 + 1)
+        if len(payload) > 32 * 1024 * 1024 or hashlib.sha256(payload).hexdigest() != digest:
+            raise ValueError('Store resource SHA-256 mismatch')
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            members = archive.infolist()
+            if sum(x.file_size for x in members) > 128 * 1024 * 1024:
+                raise ValueError('Store resource package too large')
+            for info in members:
+                path = PurePosixPath(info.filename)
+                if path.is_absolute() or '..' in path.parts or not path.parts or path.parts[0] not in ('widgets', 'support'):
+                    raise ValueError('Invalid store resource path')
+                target = root.joinpath(*path.parts)
+                # No symlinks in the destination chain or package extraction.
+                if any(p.is_symlink() for p in [target, *target.parents]):
+                    raise ValueError('Symlink in resource destination')
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as output:
+                    output.write(archive.read(info))
+                    temporary = Path(output.name)
+                os.replace(temporary, target)
+        marker.write_text(digest)
+
+install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/f1ed1767eedfc80992f4cd03ede0f7dd37bf476639d48170e9cfaaaa7747f97c.zip', 'f1ed1767eedfc80992f4cd03ede0f7dd37bf476639d48170e9cfaaaa7747f97c', 'xonars-fixation')
+"""
+  let storeInstall = "python -c ${sh(storeBootstrap)}"
+
+ meta { owl:19; description:"Мрачная история о памяти и версиях реальности. Эпизод I: Семь исправлений. · ресурсы при первом запуске"; version:"0.8.1"; category:"games" ; license: "MIT" }
+ title:""
+ statusBar:false
+ fps:20
+ requires { pacman:["python", "nodejs","git","util-linux","coreutils"] }
+ icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect x=".5" y=".5" width="47" height="47" rx="9" fill="#19191d"/><rect x=".5" y=".5" width="47" height="47" rx="9" fill="currentColor" fill-opacity=".30" stroke="currentColor" stroke-opacity=".78"/><defs><g id="symbol"><path d="M10 4h20l8 8v32H10zM29 4v10h9M17 21h14M17 28h8M19 35v5m0-3h11v-5"/><circle cx="19" cy="33" r="2"/><circle cx="30" cy="30" r="2"/></g></defs><g transform="translate(5.28 5.28) scale(0.780)" fill="none" stroke="#faf8f3" stroke-linecap="round" stroke-linejoin="round" stroke-width="3.21"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g><g transform="translate(5.28 5.28) scale(0.780)" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="3.21" opacity=".16"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g></svg>"""
+ state world = null
+ state loaded = false
+ state request = null
+ state response = ""
+ state intent = null
+ state busy = false
+ state menu = true
+ state modal = ""
+ state px = 5
+ state py = 15
+ state movement = null
+ state autoMove = false
+ state facing = 1
+ state capture = true
+ state touch = false persist
+ state audio = true persist
+ state quietMotion = false persist
+ state toast = ""
+ state heartbeat = 0
+ state rippleAt = 0
+ state mapOpen = false
+ source snapshot = cmd('python -c ${sh(storeBootstrap)} && flock -w 15 /root/.local/share/omalauncher-store/xonars-fixation/support/gitfixation/.native.lock node /root/.local/share/omalauncher-store/xonars-fixation/support/gitfixation/native/cli.js') every 60s json
+ source pulse = stream('while :; do date +%s%3N; sleep 0.16; done')
+ on snapshot first {
+  if value.ok && !busy {
+   world = value.state
+   if !loaded && value.state != null { px = value.state.savedPosition.x; py = value.state.savedPosition.y }
+   loaded = true
+  } else if !value.ok { loaded = true; toast = value.error }
+ }
+ on response first {
+  if response != "" {
+   let result = parseJson(response)
+   busy = false
+   if result.ok {
+    world = result.state
+    if request.type == "story-begin" || request.type == "start" { px = result.state.savedPosition.x; py = result.state.savedPosition.y; menu = false; modal = "" }
+    if request.type != "story-position" { toast = "" }
+    if contains(["story-protect","story-official","story-memory","checkout","switch"],request.type) { rippleAt = num(pulse); if audio { sound("/root/.local/share/omalauncher-store/xonars-fixation/support/gitfixation/assets/shift.wav") } }
+    else if contains(["story-checkpoint","story-resolve"],request.type) { rippleAt = num(pulse); if audio { sound("/root/.local/share/omalauncher-store/xonars-fixation/support/gitfixation/assets/stamp.wav") } }
+    else if request.type == "interact" && audio { sound("/root/.local/share/omalauncher-store/xonars-fixation/support/gitfixation/assets/paper.wav") }
+   } else { toast = result.error ?? "Не удалось прочитать документы. Попробуйте ещё раз." }
+  }
+ }
+ on request first {
+  if request != null && !busy {
+   busy = true; autoMove = false; response = ""
+   response = run("python -c ${sh(storeBootstrap)} && flock -w 15 /root/.local/share/omalauncher-store/xonars-fixation/support/gitfixation/.native.lock node /root/.local/share/omalauncher-store/xonars-fixation/support/gitfixation/native/cli.js ${sh(toJson(request))}")
+  }
+ }
+ let compact = screenWidth < 600
+ let low = screenHeight < 560
+ let wide = screenWidth >= 1050 && !low
+ let margin = compact || low ? 12 : 24
+ let pad = low ? 40 : 46
+ let objects = world.objects ?? []
+ let conflicts = world.conflicts ?? []
+ let card = world.card
+ let target = world.target
+ let routeStep = find(world.route ?? [],p => p.x == px && p.y == py)
+ let nearest = find(objects,o => abs(o.x-px)+abs(o.y-py)<=1 && o.id == target.id) ?? find(objects,o => abs(o.x-px)+abs(o.y-py)<=1)
+ let canPlay = !menu && modal == "" && card == null && len(conflicts) == 0 && world != null && !busy
+ let showTouch = !wide || touch
+ let verbs = {event:"Прочитать отчёт",log:"Открыть журнал",notebook:"Открыть блокнот",card:"Прочитать карточку",colleague:"Поговорить",terminal:"Осмотреть пульт",exit:"Закончить смену"}
+ let inReach = nearest != null && nearest.id == target.id
+ let primary = busy ? "Подождите…" : autoMove ? "Остановиться" : inReach ? get(verbs,nearest.id,"Осмотреть") : "Идти к цели"
+ let dialogW = min(660,screenWidth-2*margin)
+ let dialogH = screenHeight-screenTop-2*margin
+ captureKeys: capture && modal != "history" && modal != "journal"
+ back:!menu
+ onBack: { autoMove = false; if modal != "" { modal = "" } else { modal = "pause" } }
+ on movement first {
+  if canPlay && movement != null {
+   let nx = px + movement.dx
+   let ny = py + movement.dy
+   if any(world.tiles,p => p.x == nx && p.y == ny) { px = nx; py = ny; if movement.dx != 0 { facing = movement.dx } }
+  }
+ }
+ on pulse first { heartbeat = num(value) }
+ on heartbeat {
+  if autoMove && canPlay {
+   if routeStep != null && routeStep.d > 0 { movement = {dx:routeStep.nx-px,dy:routeStep.ny-py,nonce:heartbeat} }
+   else { autoMove = false; toast = "Вы на месте. Теперь осмотрите предмет." }
+  }
+ }
+ on intent first {
+  if intent != null && !busy {
+   let kind = intent.type
+   if kind == "resume" { menu = false; modal = ""; toast = "" }
+   else if kind == "begin" { request = {type:world == null ? "start" : "story-begin",guided:true,nonce:random()} }
+   else if kind == "play" { modal = ""; menu = false }
+   else if kind == "resume-title" { modal = "" }
+   else if contains(["pause","journal","history","help","new"],kind) { modal = kind; autoMove = false }
+   else if kind == "title" { menu = true; modal = ""; autoMove = false; request = {type:"story-position",px:px,py:py,nonce:random()} }
+   else if kind == "audio" { audio = !audio }
+   else if kind == "motion" { quietMotion = !quietMotion }
+   else if kind == "context" {
+    if autoMove { autoMove = false }
+    else if inReach { request = {type:"interact",id:target.id,px:px,py:py,nonce:random()} }
+    else if routeStep != null && routeStep.d > 0 { autoMove = true; toast = "Можно остановиться стрелкой или этой же кнопкой." }
+   } else if kind == "close" { request = {type:"story-position",px:px,py:py,nonce:random()}; close() }
+   else { request = merge(intent,{px:px,py:py,nonce:random()}) }
+  }
+ }
+ onKeyDown: {
+  if capture && !busy {
+   if menu {
+    if value.key == "ENTER" && loaded { intent = {type:world.hasCampaign ? "resume" : "begin",nonce:value.time} }
+    else if value.key == "N" && loaded { modal = "new" }
+    else if value.key == "V" && world != null { modal = "history" }
+    else if value.key == "ESC" { close() }
+   } else if modal != "" {
+    if value.key == "ESC" { modal = "" }
+    else if modal == "new" && value.key == "ENTER" { intent = {type:"begin",nonce:value.time} }
+    else if modal == "pause" {
+     if value.key == "ENTER" { modal = "" }
+     else if value.key == "H" { modal = "help" }
+     else if value.key == "J" { modal = "journal" }
+     else if value.key == "V" { modal = "history" }
+     else if value.key == "S" { audio = !audio }
+     else if value.key == "A" { quietMotion = !quietMotion }
+     else if value.key == "K" { touch = !touch }
+     else if value.key == "T" { intent = {type:"title",nonce:value.time} }
+    } else if modal == "help" && value.key == "ENTER" { modal = "" }
+   } else if len(conflicts) > 0 {
+    if contains(["1","2","3"],value.key) { request = {type:"story-resolve",choice:value.key == "1" ? "official" : value.key == "2" ? "memory" : "both",px:px,py:py,nonce:value.time} }
+    else if value.key == "ESC" { modal = "pause" }
+   } else if card != null {
+    if card.kind == "ending" && value.key == "T" { intent = {type:"title",nonce:value.time} }
+    else if card.kind == "quiz" && contains(["1","2","3"],value.key) { request = merge(card.actions[num(value.key)-1],{px:px,py:py,nonce:value.time}) }
+    else if contains(["ENTER","E","SPACE"],value.key) && card.kind != "quiz" && value.repeat == 0 { request = merge(card.actions[0],{px:px,py:py,nonce:value.time}) }
+    else if value.key == "ESC" { modal = "pause" }
+   } else if canPlay {
+    if contains(["UP","DOWN","LEFT","RIGHT","W","A","S","D"],value.key) {
+     autoMove = false
+     movement = {dx:contains(["LEFT","A"],value.key) ? -1 : contains(["RIGHT","D"],value.key) ? 1 : 0,dy:contains(["UP","W"],value.key) ? -1 : contains(["DOWN","S"],value.key) ? 1 : 0,nonce:value.time}
+    } else if value.repeat == 0 {
+     if value.key == "E" || value.key == "ENTER" { intent = {type:"context",nonce:value.time} }
+     else if value.key == "ESC" { modal = "pause"; autoMove = false }
+     else if value.key == "F" && nearest != null { intent = {type:"interact",id:nearest.id,nonce:value.time} }
+     else if value.key == "J" { modal = "journal"; autoMove = false }
+     else if value.key == "H" { modal = "help"; autoMove = false }
+     else if value.key == "TAB" { mapOpen = !mapOpen }
+    }
+   }
+  }
+ }
+ component Choice(label, command, secondary = false) {
+  Box { fill:width; radius:4; background:secondary ? #202b2e : #c8b589
+   onTap: { if !busy { haptic(); intent = merge(command,{nonce:random()}) } }
+   Text { text:label; padding:[16,14]; font:sans; fontSize:14; bold:!secondary; color:secondary ? #b9c1b9 : #172024; align:center }
+  }
+ }
+ component Key(label, dx, dy) {
+  Box { width:pad; height:pad; radius:5; background:#253236; repeats:true
+   onPress: { if canPlay { autoMove = false; movement = {dx:dx,dy:dy,nonce:random()} } }
+   Text { text:label; fontSize:23; width:pad; height:pad; align:center; padding:[0,7]; color:#c6cbbb }
+  }
+ }
+ Box { fill:true; background:#0c1117
+  if menu {
+   Canvas { fill:true
+    rect(0,0,width,height,fill:linear(0,0,width,height,[#0b131b,#16242a,#10151a]))
+    let bw = min(width*0.85,980)
+    let bx = (width-bw)/2
+    rect(bx,height*0.49,bw,height*0.53,fill:#111b21)
+    rect(bx-18,height*0.48,bw+36,7,fill:#2f3b3b)
+    for yy in range(5) { for xx in range(12) {
+     let wx = bx+20+xx*(bw-25)/12
+     let wy = height*0.54+yy*height*0.09
+     rect(wx,wy,bw*0.041,height*0.047,fill:xx == 4 && yy == 1 ? #b19f70 : #1f3037)
+     if xx == 4 && yy == 1 { circle(wx,wy,65,fill:radial(wx,wy,65,[alpha(#c8aa71,0.1),alpha(#c8aa71,0)])) }
+    } }
+    if !quietMotion { for i in range(65) {
+     let rx = (hash(i,2)*width + time*8)%width
+     let ry = (hash(i,4)*height + time*110)%(height+30)
+     line(rx,ry,rx-5,ry+20,stroke:alpha(#a9bbbf,0.09),width:1)
+    } }
+    rect(0,0,width,height,fill:linear(0,0,0,height,[alpha(#0b1117,0.2),alpha(#0b1117,0.1),#0b1117]))
+   }
+   Column { width:min(520,screenWidth-2*margin); height:screenHeight-screenTop-2*margin; offset:[(screenWidth-min(520,screenWidth-2*margin))/2,screenTop+margin]; justify:center; gap:low ? 8 : 19; scroll:true
+    Text { text:"МИНИСТЕРСТВО / АРХИВ 5.3"; font:mono; fontSize:10; letterSpacing:2; color:#9aa99d; align:center }
+    Text { text:"ФИКСАЦИЯ"; font:serif; fontSize:compact ? 39 : low ? 46 : 62; letterSpacing:3; color:#e0dac4; align:center }
+    Text { text:"Эпизод I · Семь исправлений"; fontSize:16; color:#c3b99b; align:center }
+    Text { text:"В новой версии прошлого всё согласовано.\nКроме того, что вы помните."; font:serif; fontSize:18; color:#a5b0ad; align:center }
+    Spacer { height:low ? 0 : 24 }
+    if !loaded { Text { text:"Читаем архив…"; color:#b5bbaa; align:center; fontSize:14 } }
+    else {
+     if world.hasCampaign {
+      Choice { label:"Продолжить смену"; command:{type:"resume"} }
+      Text { text:world.objective.act + " / " + world.objective.goal; fontSize:11; color:#929f98; align:center }
+      Choice { label:"Новая смена"; command:{type:"new"}; secondary:true }
+     } else if len(conflicts) > 0 {
+      Text { text:"В прежнем прохождении осталось незавершённое слияние. Его можно отменить, сохранив обе исходные ветки, и начать новую редакцию."; fontSize:14; color:#adbaa8 }
+      Choice { label:"Отменить прежнее слияние"; command:{type:"abort"}; secondary:true }
+     } else {
+      Choice { label:"Начать историю"; command:{type:"begin"} }
+      Text { text:world == null ? "Без команд и знакомства с Git. Правила откроются по ходу истории." : "Новая редакция эпизода. Прежние ветки и записи останутся в архиве."; fontSize:12; color:#8f9f98; align:center }
+     }
+     if world != null { Choice { label:"История сохранённых версий"; command:{type:"history"}; secondary:true } }
+    }
+    Text { text:"Enter — начать / продолжить · V — архив · N — новая смена"; font:mono; fontSize:10; color:#6f8484; align:center }
+    if toast != "" { Text { text:toast; fontSize:12; color:#d5ad85; align:center } }
+   }
+   Box { width:42; height:42; offset:[screenWidth-52,screenTop+10]; onTap:close(); Text { text:"×"; width:42; padding:[10,8]; fontSize:20; color:#778d86; align:center } }
+  } else if world != null {
+   Column { fill:true; padding:[margin,screenTop+6,margin,low ? 4 : 10]; gap:low ? 5 : 9
+    Row { align:center; gap:8
+     Text { weight:1; text:world.objective.act; font:mono; fontSize:10; letterSpacing:1.5; color:#b4b299 }
+     Text { text:world.version; fontSize:11; color:world.version == "Личная версия" ? #9fbec8 : #9baa9b }
+     Box { width:54; onTap:mapOpen = !mapOpen; Text { text:mapOpen ? "Ближе" : "План"; width:54; padding:[6,10]; fontSize:11; align:center; radius:4; background:#202c30; color:#a8b7aa } }
+     Box { width:46; onTap: { autoMove = false; modal = "pause" }; Text { text:"Ⅱ"; width:46; padding:[10,8]; fontSize:16; align:center; radius:4; background:#202c30; color:#c4cabc } }
+    }
+    Row { align:center; gap:10
+     Column { weight:1; gap:3
+      Text { text:world.objective.goal; font:sans; fontSize:low ? 15 : compact ? 17 : 22; color:#e0ddca }
+      if !low { Text { text:world.objective.detail; font:sans; fontSize:12; color:#8fa29f; maxLines:2 } }
+     }
+     Box { width:42; onTap: { autoMove = false; modal = "help" }; Text { text:"?"; padding:[12,10]; fontSize:16; align:center; color:#d6c395; background:#273236; radius:20 } }
+    }
+    Progress { value:world.objective.progress; max:100; height:2; color:#9d8c60; track:#202b2e }
+    Row { weight:1; fill:width; gap:20
+     Canvas { weight:1; fill:height
+      let cell = mapOpen ? min(width/31,height/22) : max(compact ? 32 : low ? 29 : 38,min(width/31,height/22))
+      let ox = width >= 30*cell ? (width-30*cell)/2 : clamp(width/2-(px+0.5)*cell,width-30*cell,0)
+      let oy = height >= 21*cell ? (height-21*cell)/2 : clamp(height/2-(py+0.5)*cell,height-21*cell,0)
+      let personal = world.version == "Личная версия"
+      let report = find(objects,o => o.id == "event")
+      rect(0,0,width,height,radius:5,fill:#0c1319)
+      clip(0,0,width,height) {
+       translate(ox,oy) {
+        for room in world.scene.rooms {
+         rect((room.x-0.22)*cell,(room.y-0.55)*cell,(room.w+0.44)*cell,(room.h+0.8)*cell,radius:3,fill:#090f14)
+         rect(room.x*cell,(room.y-0.5)*cell,room.w*cell,0.7*cell,fill:room.tone == "cold" ? #405052 : #4b4e43)
+         rect(room.x*cell,room.y*cell,room.w*cell,room.h*cell,fill:room.tone == "dark" ? #1a272d : personal ? #2d3d42 : room.tone == "cold" ? #2e3a3c : #3d4138)
+         for yy in range(room.y,room.y+room.h) {
+          line(room.x*cell,yy*cell,(room.x+room.w)*cell,yy*cell,stroke:alpha(#9b9f8b,0.045),width:1)
+         }
+         text(room.name,(room.x+room.w/2)*cell,(room.y+0.6)*cell,size:clamp(cell*0.21,8,12),color:alpha(#c7ccaf,0.42),align:center,font:mono,letterSpacing:1)
+         if room.id == "office" || room.id == "archive" {
+          for wi in range(2) {
+           let wx = (room.x+1.5+wi*3.5)*cell
+           rect(wx,(room.y-0.48)*cell,2*cell,0.22*cell,fill:personal ? #8da5b0 : #b8bda6)
+           path([[wx,(room.y+0.1)*cell],[wx+2*cell,(room.y+0.1)*cell],[wx+3.5*cell,(room.y+3.5)*cell],[wx+0.5*cell,(room.y+3.5)*cell]],closed:true,fill:alpha(personal ? #b2c5da : #d0cba4,0.035))
+          }
+         }
+        }
+        for link in world.scene.links { rect(link.x*cell,link.y*cell,link.w*cell,link.h*cell,fill:personal ? #26373d : #303a35) }
+        for lamp in world.scene.lights {
+         circle((lamp.x+0.5)*cell,(lamp.y+0.7)*cell,lamp.r*cell,fill:radial((lamp.x+0.5)*cell,(lamp.y+0.7)*cell,lamp.r*cell,[alpha(personal ? #8caeb9 : #c0aa6d,0.12),alpha(#18282e,0)]))
+        }
+        for f in world.scene.furniture {
+         rect((f.x+0.08)*cell,(f.y+0.2)*cell,f.w*cell-0.12*cell,f.h*cell,fill:#101c21)
+         if f.kind == "plant" {
+          rect((f.x+0.3)*cell,(f.y+0.5)*cell,cell*0.4,cell*0.4,fill:#5c5847)
+          for leaf in range(5) { circle((f.x+0.5+sin(leaf*72)*0.25)*cell,(f.y+0.3+cos(leaf*72)*0.2)*cell,cell*0.2,fill:#3b5144) }
+         } else {
+          rect(f.x*cell,f.y*cell,f.w*cell,cell*0.65,fill:f.kind == "shelf" ? #55584b : #555044)
+          for sl in range(f.w*4) { rect((f.x+0.05+sl*0.23)*cell,(f.y+0.07)*cell,cell*0.13,cell*0.45,fill:sl%3 == 0 ? #757a66 : #424d49) }
+         }
+        }
+        if routeStep != null && routeStep.d > 0 && canPlay && !mapOpen {
+         circle((routeStep.nx+0.5)*cell,(routeStep.ny+0.55)*cell,cell*0.08,fill:#b6a472)
+         circle((routeStep.nx+0.5)*cell,(routeStep.ny+0.55)*cell,cell*0.19,stroke:alpha(#cdbb8a,0.22),width:1)
+        }
+        for o in objects {
+         let hot = o.id == target.id && world.phase != "done"
+         let near = nearest.id == o.id
+         if o.kind == "person" {
+          circle((o.x+0.5)*cell,(o.y+0.8)*cell,cell*0.3,fill:#111e22)
+          sprite(["..hhhh..","..ssss..","..ssss..","...ss...",".jjjjjj.",".jjjjjj.",".jjjjjj.","..bbbb..","..b..b.."],(o.x+0.17)*cell,(o.y-0.3)*cell,cell*0.085,palette:{h:#333a34,s:#b9ad96,j:#6b7b70,b:#142226})
+         } else if o.kind == "exit" {
+          rect((o.x-0.15)*cell,(o.y-0.35)*cell,cell*1.3,cell*1.5,fill:#0d181e)
+          rect(o.x*cell,(o.y-0.2)*cell,cell,cell*1.2,fill:world.phase == "exit" || world.phase == "done" ? #69715a : #344741)
+          circle((o.x+0.75)*cell,(o.y+0.5)*cell,cell*0.055,fill:#b0aa84)
+          rect((o.x+0.15)*cell,(o.y-0.1)*cell,cell*0.7,cell*0.18,fill:#91a277)
+         } else if o.kind == "cabinet" {
+          rect((o.x-0.1)*cell,(o.y+0.2)*cell,cell*1.2,cell,fill:#121d21)
+          rect((o.x-0.1)*cell,(o.y-0.2)*cell,cell*1.2,cell,fill:#626452)
+          for drawer in range(3) { rect(o.x*cell,(o.y-0.1+drawer*0.28)*cell,cell,cell*0.22,fill:#4a5148); line((o.x+0.4)*cell,(o.y+drawer*0.28)*cell,(o.x+0.65)*cell,(o.y+drawer*0.28)*cell,stroke:#91977b,width:1) }
+          rect((o.x+0.2)*cell,(o.y-0.25)*cell,cell*0.55,cell*0.35,fill:#b6b79b)
+         } else {
+          rect((o.x-0.35)*cell,(o.y+0.1)*cell,cell*1.7,cell*1.15,radius:2,fill:#101a20)
+          rect((o.x-0.35)*cell,(o.y-0.15)*cell,cell*1.7,cell*0.9,radius:2,fill:o.kind == "terminal" ? #4c5f5a : #696047)
+          if o.kind == "terminal" {
+           rect((o.x+0.12)*cell,(o.y-0.45)*cell,cell*0.8,cell*0.65,radius:2,fill:#14292c)
+           rect((o.x+0.2)*cell,(o.y-0.36)*cell,cell*0.64,cell*0.45,fill:#789584)
+           for r in range(3) { line((o.x+0.26)*cell,(o.y-0.25+r*0.1)*cell,(o.x+0.72)*cell,(o.y-0.25+r*0.1)*cell,stroke:#304e45,width:1) }
+           rect((o.x+0.1)*cell,(o.y+0.35)*cell,cell*0.8,cell*0.2,fill:#2a3e3c)
+          } else if o.kind == "book" {
+           rect((o.x+0.04)*cell,(o.y+0.02)*cell,cell*0.88,cell*0.55,fill:personal ? #bbc8bd : #aaa990)
+           line((o.x+0.48)*cell,(o.y+0.02)*cell,(o.x+0.48)*cell,(o.y+0.57)*cell,stroke:#585f54,width:1)
+           if o.state == 1 { for l in range(3) { line((o.x+0.12)*cell,(o.y+0.16+l*0.1)*cell,(o.x+0.4)*cell,(o.y+0.16+l*0.1)*cell,stroke:#3a5557,width:1) } }
+          } else {
+           rect((o.x+0.1)*cell,o.y*cell,cell*0.55,cell*0.6,fill:#c0bea3)
+           for l in range(3) { line((o.x+0.18)*cell,(o.y+0.14+l*0.11)*cell,(o.x+0.55)*cell,(o.y+0.14+l*0.11)*cell,stroke:#777c68,width:1) }
+           if o.id == "event" && o.state == 3 { rect((o.x+0.7)*cell,(o.y+0.06)*cell,cell*0.5,cell*0.62,fill:#a4bbc0) }
+           if o.id == "event" && o.state == 2 { line((o.x+0.12)*cell,(o.y+0.5)*cell,(o.x+0.6)*cell,(o.y+0.1)*cell,stroke:#557875,width:2) }
+           if o.id == "event" && find(objects,q => q.id == "log").state > 0 { rect((o.x-0.24)*cell,(o.y+0.4)*cell,cell*0.24,cell*0.2,fill:#95805a) }
+          }
+         }
+         if hot {
+          let yy = (o.y-0.9)*cell
+          path([[(o.x+0.5)*cell,yy-cell*0.13],[(o.x+0.64)*cell,yy],[(o.x+0.5)*cell,yy+cell*0.13],[(o.x+0.36)*cell,yy]],closed:true,fill:#d8c190)
+          circle((o.x+0.5)*cell,(o.y+0.5)*cell,cell*0.95,stroke:alpha(#cbb580,near ? 0.7 : 0.18),width:1)
+         }
+         if hot || near || mapOpen { text(o.short,(o.x+0.5)*cell,(o.y+1.5)*cell,size:mapOpen ? 8 : 11,align:center,color:hot ? #d9caa3 : #a1b2a7) }
+        }
+        circle((px+0.5)*cell,(py+0.85)*cell,cell*0.29,fill:alpha(#050b0e,0.65))
+        sprite(["...hhhh...","..hhhhhh..","..ssssss..","..ssksks..","...ssss...","....ss....","..cccccc..",".cccccccc.",".ccCccccc.","..cccccc..","...bbbb...","...b..b..."],(px+0.1)*cell,(py-0.43)*cell,cell*0.08,palette:{h:#373b32,s:#baac92,k:#222e31,c:#8b937c,C:#b2b397,b:#142327})
+       }
+       rect(0,0,width,height,fill:radial(width/2,height/2,max(width,height)*0.7,[alpha(#071017,0),alpha(#050b10,0.36)]))
+       if !quietMotion { for rain in range(14) { let rx = hash(rain,6)*width; let ry = (hash(rain,9)*height+time*48)%(height+18); line(rx,ry,rx-2,ry+12,stroke:alpha(#9eafb5,0.025),width:1) } }
+      }
+      if routeStep != null && routeStep.d > 0 && canPlay { text("◆ ${target.short} · ${routeStep.d} шаг.",14,20,size:11,color:#c3b48c,font:mono) }
+      if canPlay { text(mapOpen ? "TAB · приблизить" : "TAB · план отдела",width-12,height-14,size:9,color:#708685,font:mono,align:end) }
+
+     }
+     if wide {
+      Column { width:225; fill:height; gap:16; padding:[0,14]; scroll:true
+       Text { text:"МАТЕРИАЛЫ ПРОВЕРКИ"; font:mono; fontSize:10; letterSpacing:1; color:#697e7f }
+       Text { text:contains(world.seen,"event") ? "01 / Отчёт 5.3\nЗаявлено: 24 исправления." : "01 / Служебное задание\nСверить отчёт и журнал."; font:serif; fontSize:16; color:#b5bba9 }
+       if world.objective.progress >= 23 { Text { text:"02 / Журнал\nНайдено: 17 исправлений."; font:serif; fontSize:16; color:#b5bba9 } }
+       if world.objective.progress >= 36 { Text { text:"03 / Фиксация\nИсходное расхождение сохранено."; font:serif; fontSize:16; color:#b5bba9 } }
+       if world.objective.progress >= 50 { Text { text:"04 / Личная версия\nСвидетельство о 12 числе."; font:serif; fontSize:16; color:#9fb7bd } }
+       Spacer { height:8 }
+       Choice { label:"Личный дневник · J"; command:{type:"journal"}; secondary:true }
+       Choice { label:"Нужна подсказка · H"; command:{type:"help"}; secondary:true }
+       Text { text:"WASD / стрелки — идти\nE — действие\nTab — план отдела\nEsc — пауза"; font:mono; fontSize:10; color:#6f8583 }
+      }
+     }
+    }
+    if toast != "" { Text { text:toast; fontSize:11; color:#c9bc99; maxLines:2 } }
+    Row { gap:12; align:center
+     if showTouch {
+      if low {
+       Row { gap:4
+        Key { label:"←"; dx:-1; dy:0 } Key { label:"↑"; dx:0; dy:-1 } Key { label:"↓"; dx:0; dy:1 } Key { label:"→"; dx:1; dy:0 }
+       }
+      } else {
+       Column { width:3*pad+8; gap:4; align:center
+        Key { label:"↑"; dx:0; dy:-1 }
+        Row { gap:4
+         Key { label:"←"; dx:-1; dy:0 } Key { label:"↓"; dx:0; dy:1 } Key { label:"→"; dx:1; dy:0 }
+        }
+       }
+      }
+     }
+     Column { weight:1; gap:4
+      Choice { label:(!showTouch ? "E · " : "") + primary; command:{type:"context"} }
+      if nearest != null && !inReach { Box { fill:width; onTap: { intent = {type:"interact",id:nearest.id,nonce:random()} }; Text { text:"Рядом: ${nearest.short} · осмотреть${showTouch ? "" : " · F"}"; fontSize:11; color:#9cae9b; padding:[4,5]; align:center } } }
+      if !low { Text { text:inReach ? "Предмет рядом. Нажмите, чтобы осмотреть." : autoMove ? "Арен идёт к отмеченному предмету." : "Автоматически подойти к отмеченному предмету"; fontSize:10; color:#788f8b; align:center; maxLines:2 } }
+     }
+     if !showTouch { Box { width:115; onTap:touch = true; Text { text:"Сенсор"; fontSize:12; color:#809690; align:center; padding:12 } } }
+    }
+   }
+  }
+  if !quietMotion && num(pulse)-rippleAt < 900 && rippleAt > 0 {
+   Canvas { fill:true
+    let fade = clamp(1-(num(pulse)-rippleAt)/900,0,1)
+    rect(0,0,width,height,fill:alpha(#adbdaf,fade*0.1))
+    line(0,(1-fade)*height,width,(1-fade)*height,stroke:alpha(#d4d7b9,fade*0.35),width:2)
+   }
+  }
+  if (!menu && (card != null || len(conflicts)>0)) || modal != "" {
+   Box { fill:true; background:alpha(#060e14,0.9)
+    Column { width:dialogW; height:dialogH; offset:[(screenWidth-dialogW)/2,screenTop+margin]; padding:compact || low ? 18 : 30; gap:low ? 10 : 16;  background:#182326; border:1; borderColor:#37433e; radius:5
+     if low { Text { text:"↓ Текст можно прокручивать"; font:mono; fontSize:10; color:#9b987e } }
+     Column { weight:1; fill:width; scroll:true; gap:low ? 10 : 16
+     if modal == "pause" {
+      Text { text:"СМЕНА ПРИОСТАНОВЛЕНА"; font:mono; fontSize:10; letterSpacing:1.5; color:#9ba68e }
+      Text { text:"Ничего не исчезнет."; font:serif; fontSize:30; color:#e0d9c3 }
+      Text { text:"Документы, версии и решения сохранены. Продолжите, когда будете готовы."; fontSize:14; color:#a3b4ac }
+      Choice { label:"Продолжить · Enter"; command:{type:"play"} }
+      Choice { label:"Текущая цель и управление · H"; command:{type:"help"}; secondary:true }
+      Choice { label:"Личный дневник · J"; command:{type:"journal"}; secondary:true }
+      Choice { label:"История версий · V"; command:{type:"history"}; secondary:true }
+      Row { gap:8
+       Box { weight:1; onTap:audio = !audio; Text { text:audio ? "Звук: вкл · S" : "Звук: выкл · S"; padding:13; fontSize:12; background:#243236; color:#b5c2b4; align:center; radius:4 } }
+       Box { weight:1; onTap:quietMotion = !quietMotion; Text { text:quietMotion ? "Эффекты: тихие · A" : "Эффекты: вкл · A"; padding:13; fontSize:12; background:#243236; color:#b5c2b4; align:center; radius:4 } }
+      }
+      Box { onTap:touch = !touch; Text { text:touch ? "Скрыть сенсор на широком экране" : "Показать сенсор на широком экране"; padding:10; fontSize:12; color:#859e94 } }
+      Choice { label:"На титульный экран · T"; command:{type:"title"}; secondary:true }
+     } else if modal == "new" {
+      Text { text:"Новая смена"; font:serif; fontSize:30; color:#e0d9c3 }
+      Text { text:"Вы начнёте переработанный эпизод с объяснением правил. Все прежние ветки и фиксации останутся в истории."; fontSize:15; color:#acbcb0 }
+      Choice { label:"Начать сначала · Enter"; command:{type:"begin"} }
+      Choice { label:menu ? "Вернуться" : "Продолжить текущую смену"; command:menu ? {type:"resume-title"} : {type:"play"}; secondary:true }
+     } else if modal == "help" {
+      Text { text:"ЦЕЛЬ СЕЙЧАС"; font:mono; fontSize:10; letterSpacing:1.5; color:#b5a478 }
+      Text { text:world.objective.goal; font:serif; fontSize:28; color:#e0d9c3 }
+      Text { text:world.objective.hint; font:sans; fontSize:16; color:#bec9b7 }
+      Text { text:"Золотой ромб — нужный предмет. Точка на полу — следующий шаг.\n\n«Идти к цели» автоматически подводит Арена к предмету. Затем нажмите кнопку осмотра. Можно в любой момент идти вручную.\n\nWASD / стрелки — движение. E — действие. Enter — продолжить текст. 1–3 — выбрать ответ. Esc — пауза. Tab — план отдела."; fontSize:14; color:#8fa69e }
+      Choice { label:"Понятно, вернуться"; command:{type:"play"} }
+     } else if modal == "journal" {
+      Text { text:"Личный дневник"; font:serif; fontSize:30; color:#e0d9c3 }
+      Text { text:"Память о ваших наблюдениях остаётся при переключении. Сами документы меняются вместе с версией."; fontSize:13; color:#8fa69e }
+      if len(world.journal) == 0 { Text { text:"Первую запись вы сделаете после осмотра отчёта."; fontSize:15; color:#b8c4b2 } }
+      for page in world.journal { Column { gap:6; padding:[0,10]
+       Text { text:page.title; font:serif; fontSize:21; color:#c6cbb6 }
+       Text { text:page.text; font:sans; fontSize:15; color:#9eb1a4 }
+      } }
+      Choice { label:"Вернуться"; command:{type:"play"} }
+     } else if modal == "history" {
+      Text { text:"Архив версий"; font:serif; fontSize:30; color:#e0d9c3 }
+      Text { text:"Каждый узел — сохранённое состояние мира. Старые прохождения тоже здесь. Во время истории архив доступен для чтения, чтобы случайное переключение не прервало эпизод."; fontSize:13; color:#8fa69e }
+      for branch in world.branches { Text { text:"⑂ ${branch}${branch == world.branch ? " · сейчас" : ""}"; font:mono; fontSize:12; padding:[10,9]; background:#233438; color:#b9c6b4; radius:3 } }
+      for run in world.archivedSessions { Column { gap:6; padding:12; background:#202f32
+       Text { text:"Прошлая смена · ${run.round}"; font:serif; fontSize:20; color:#c1c6ad }
+       for entry in run.journal { Text { text:"${entry.title}\n${entry.text}"; fontSize:13; color:#8fa99e } }
+      } }
+      Text { text:"СНИМКИ / УЗЕЛ ← РОДИТЕЛИ"; font:mono; fontSize:10; color:#829890 }
+      for item in world.graph { Column { gap:3; padding:[0,8]
+       Text { text:item.message; fontSize:14; color:#bec7b3 }
+       Text { text:"● ${item.hash} ← ${item.parents}"; font:mono; fontSize:10; color:#6d8985 }
+       if world.phase == "done" { Box { onTap: { modal = ""; intent = {type:"checkout",hash:item.hash,nonce:random()} }; Text { text:"Осмотреть этот снимок"; fontSize:12; color:#b9aa80; padding:[0,8] } } }
+      } }
+      Choice { label:menu ? "На титульный экран" : "Вернуться к смене"; command:{type:menu ? "resume-title" : "play"} }
+     } else if len(conflicts)>0 {
+      Text { text:"ПРОТИВОРЕЧИЕ / ВАШЕ РЕШЕНИЕ"; font:mono; fontSize:10; color:#c4a57c; letterSpacing:1 }
+      Text { text:"Оба листа не могут быть правдой.\nНо оба могут остаться."; font:serif; fontSize:compact ? 25 : 31; color:#e0d9c3 }
+      Text { text:"Отчёт: «события не было». Свидетельство: «я помню 12 число».\n\nПульт совместил остальные изменения. Это противоречие он оставил вам. Здесь нет правильного ответа."; fontSize:15; color:#a8bbb2 }
+      for option, index in world.resolutions { Box { fill:width; padding:14; background:#263638; border:1; borderColor:#465149; radius:4
+       onTap: { if !busy { intent = {type:"story-resolve",choice:option.id,nonce:random()} } }
+       Column { gap:6
+        Text { text:"${index+1} · ${option.title}"; fontSize:16; color:#d2c6a4; bold:true }
+        Text { text:option.text; font:sans; fontSize:13; color:#a2b6ad }
+        Text { text:option.consequence; font:sans; fontSize:12; color:#758f88; italic:true }
+       }
+      } }
+      Text { text:"Каждое решение сохранится отдельно. Исходные версии останутся доступны."; fontSize:11; color:#748f86 }
+      Choice { label:"Вернуться к сравнению"; command:{type:"story-abort"}; secondary:true }
+     } else if card != null {
+      Text { text:card.eyebrow; font:mono; fontSize:10; letterSpacing:1.4; color:#afaa8e }
+      if card.kind == "intro" { Text { text:"${world.introIndex+1} / 3"; font:mono; fontSize:10; color:#607f80 } }
+      Text { text:card.title; font:serif; fontSize:low ? 25 : compact ? 27 : 34; color:#e0d9c3 }
+      Text { text:card.text; font:sans; fontSize:compact ? 16 : 17; color:#aebfb3 }
+      if card.kind == "quiz" {
+       Row { gap:12
+        Column { weight:1; background:#283735; padding:16; gap:4
+         Text { text:"ОТЧЁТ"; font:mono; fontSize:10; color:#a0a78e; align:center }
+         Text { text:"24"; font:serif; fontSize:42; color:#d9cba7; align:center }
+        }
+        Column { weight:1; background:#26363b; padding:16; gap:4
+         Text { text:"ЖУРНАЛ"; font:mono; fontSize:10; color:#90a7ac; align:center }
+         Text { text:"17"; font:serif; fontSize:42; color:#b2c6c8; align:center }
+        }
+       }
+       if card.feedback != "" { Text { text:card.feedback; font:sans; fontSize:14; color:#d0ba8e } }
+      }
+      if card.kind == "comparison" {
+       for row in card.rows { Column { gap:8; padding:14; background:#223236; radius:3
+        Text { text:row.name; fontSize:15; color:#cecbb2 }
+        Text { text:"ОФИЦИАЛЬНАЯ\n${row.official}"; fontSize:14; color:#a7b6a3 }
+        Text { text:"ЛИЧНАЯ\n${row.memory}"; fontSize:14; color:#a1bec7 }
+       } }
+      }
+      Text { text:card.aside; font:sans; fontSize:13; color:#778f86; italic:true }
+      if card.kind == "ending" { Choice { label:"На титульный экран · T"; command:{type:"title"}; secondary:true } }
+     }
+     if busy { Text { text:"Фиксируем состояние…"; fontSize:12; color:#b3a582; align:center } }
+     if toast != "" { Text { text:toast; fontSize:12; color:#d2ad83 } }
+     }
+     if modal == "" && len(conflicts) == 0 && card != null {
+      if card.kind == "quiz" {
+       Text { text:"Не подтверждено исправлений:"; fontSize:12; color:#a9b6a3 }
+       Row { gap:8
+        for option,index in card.actions { Box { weight:1; Choice { label:showTouch ? option.label : "${index+1} · ${option.label}"; command:option } } }
+       }
+      } else { for option in card.actions { Choice { label:busy ? "Сохраняем…" : option.label; command:option } } }
+      Text { text:card.kind == "quiz" ? "1–3 — ответ · Esc — пауза" : "Enter — продолжить · Esc — пауза"; font:mono; fontSize:10; color:#5c7a77; align:center }
+     }
+    }
+   }
+  }
+ }
+}

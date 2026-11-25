@@ -1,0 +1,100 @@
+widget "System monitor" {
+  meta { owl: 15; description: "Battery, CPU, RAM, GPU and storage at a glance" ; version: "1.0.1"; license: "MIT"; category: "system" }
+  size: 2x4
+  minSize: 2x2
+  padding: 7
+
+  source bat = android.battery
+  source power = android.power every 3s
+  source sys = android.system every 3s
+  source ticks = cmd("awk '/^cpu / {total=0; for(i=2;i<=9;i++) total+=$i; print total, $5+$6; exit}' /proc/stat") every 3s optional
+  source gpuClocks = cmd('for p in /sys/class/kgsl/kgsl-3d0/devfreq /sys/class/devfreq/*gpu* /sys/class/devfreq/*mali*; do if [[ -r "$p/cur_freq" && -r "$p/max_freq" ]]; then printf "%s %s" "$(<"$p/cur_freq")" "$(<"$p/max_freq")"; break; fi; done') every 3s optional
+
+  state previousTotal = null
+  state previousIdle = null
+  state cpu = null
+  on ticks first {
+    let readings = words(ticks)
+    let total = num(readings[0])
+    let idle = num(readings[1])
+    if previousTotal != null && total > previousTotal {
+      cpu = clamp(100 * (1 - (idle - previousIdle) / (total - previousTotal)), 0, 100)
+    }
+    previousTotal = total
+    previousIdle = idle
+  }
+
+  let ram = sys.memory.total > 0 ? sys.memory.used / sys.memory.total * 100 : null
+  let disk = sys.storage.total > 0 ? sys.storage.used / sys.storage.total * 100 : null
+  let gpuCurrent = num(words(gpuClocks ?? "")[0])
+  let gpuMax = num(words(gpuClocks ?? "")[1])
+  let gpu = gpuMax > 0 ? clamp(gpuCurrent / gpuMax * 100, 0, 100) : null
+  let plugged = bat.plugged != null
+  let mode = bat.charging ? "CHARGING" : (plugged ? "PLUGGED" : "BATTERY")
+  let mainSize = clamp(round((tileWidth ?? 188) * 0.04), 7, 12)
+  let quiet = mix(muted, foreground, 0.46)
+  let gib = 1073741824
+
+  component Bar(amount) {
+    Canvas {
+      height: 3.5; fill: width
+      let filled = width * clamp((amount ?? 0) / 100, 0, 1)
+      rect(0, 0, width, height, radius: height / 2, fill: alpha(quiet, 0.23))
+      if filled > 0 {
+        rect(0, 0, filled, height, radius: min(height, filled) / 2, fill: accent)
+      }
+    }
+  }
+
+  component Metric(label, detail, amount) {
+    Column {
+      fill: width
+      gap: 2.5
+      Row {
+        fill: width
+        align: center
+        Text { text: label; weight: 1; font: mono; fontSize: mainSize; color: quiet; bold: true; maxLines: 1 }
+        Text { text: detail; font: mono; fontSize: mainSize; maxLines: 1 }
+      }
+      Bar { amount: amount }
+    }
+  }
+
+  Column {
+    fill: true
+    gap: 4
+    Row {
+      fill: width
+      gap: 4
+      align: center
+      Canvas {
+        width: 8; height: 11
+        if plugged {
+          rect(1, 3, 6, 5, radius: 1, fill: accent)
+          line(2, 1, 2, 4, stroke: accent, width: 1.25)
+          line(6, 1, 6, 4, stroke: accent, width: 1.25)
+          line(4, 7, 4, 10, stroke: accent, width: 1.5)
+        } else {
+          rect(1, 2, 6, 8, radius: 1, fill: accent)
+          rect(2.5, 1, 3, 2, radius: 0.5, fill: accent)
+        }
+      }
+      Text { text: power.watts == null ? "— W" : "${fixed(abs(power.watts), 1)} W"; weight: 1; font: mono; fontSize: mainSize + 4; bold: true; maxLines: 1 }
+      Box {
+        width: (len(mode) + 1) * mainSize * 0.66
+        height: 15
+        align: center
+        radius: 8
+        background: alpha(accent, 0.16)
+        Text { text: mode; font: mono; fontSize: mainSize; bold: true; color: accent; align: center; maxLines: 1 }
+      }
+    }
+    Bar { amount: bat.level }
+    Text { text: "${bat.level ?? '—'}% · ${power.current == null ? '—' : power.current + 'mA'} · ${bat.temp == null ? '—' : round(bat.temp) + '°C'}"; color: quiet; font: mono; fontSize: mainSize; maxLines: 1 }
+    Metric { label: "CPU"; amount: cpu; detail: cpu == null ? "—" : "${round(cpu)}%" }
+    Metric { label: "RAM"; amount: ram; detail: ram == null ? "—" : "${fixed(sys.memory.used / gib, 1)}/${fixed(sys.memory.total / gib, 1)}G · ${round(ram)}%" }
+    Metric { label: "GPU"; amount: gpu; detail: gpu == null ? "—" : "${round(gpuCurrent / 1000000)}/${round(gpuMax / 1000000)}MHz · ${round(gpu)}%" }
+    Metric { label: "DISK"; amount: disk; detail: disk == null ? "—" : "${round(sys.storage.used / gib)}/${round(sys.storage.total / gib)}G · ${round(disk)}%" }
+    Text { text: "${bat.voltage == null ? '' : 'BAT ' + fixed(bat.voltage, 2) + 'V'}${power.maxCurrent > 0 && power.maxVoltage > 0 ? ' · USB ≤' + fixed(power.maxCurrent * power.maxVoltage / 1000, 1) + 'W' : ''}"; color: quiet; font: mono; fontSize: mainSize; maxLines: 1 }
+  }
+}

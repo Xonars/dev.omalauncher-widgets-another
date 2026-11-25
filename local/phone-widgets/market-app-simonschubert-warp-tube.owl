@@ -1,0 +1,320 @@
+app "warp tube" {
+  // A wireframe tunnel racer. The ship rides the wall of a bending neon tube, and dragging left
+  // and right rolls it around the tube. Gates close the tube more and more; fly through the gaps.
+  //
+  // There's no game loop, as in fox lanes. The ship's distance is a formula of the time since the
+  // run started, the gates come from the run's seed at set distances, and the ship's place on the
+  // wall (`pa`) only changes in a drag: from those follows the moment it next hits a gate
+  // (`dieAt`), so a frame only has to draw. The tube and the gates are drawn by a shader, per
+  // pixel on the GPU; only the ship and the words are drawing calls.
+  //
+  // It draws frames only while a run is awake: `time` is read behind `awake`, so the title and the
+  // run that ended are still pictures, and the launcher parks the frame clock. A tile nobody is
+  // playing costs no frames at all, in the drawer or left open.
+
+  meta { owl: 14; description: "A wireframe tunnel racer in your theme's colors: roll around a bending neon tube and fly through the gaps in the gates"; version: "1.1"; license: "MIT"; category: "games" }
+
+  title: ""
+  statusBar: false
+  edge: true
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect x=".5" y=".5" width="47" height="47" rx="9" fill="#19191d"/><rect x=".5" y=".5" width="47" height="47" rx="9" fill="currentColor" fill-opacity=".30" stroke="currentColor" stroke-opacity=".78"/><defs><g id="symbol"><path d="M24 3l15 6 6 15-6 15-15 6-15-6-6-15 6-15z"/><path d="M24 14l7 3 3 7-3 7-7 3-7-3-3-7 3-7z"/><path d="M24 3v11M39 9l-8 8M45 24H34M39 39l-8-8M24 45V34M9 39l8-8M3 24h11M9 9l8 8"/></g></defs><g transform="translate(6.11 6.11) scale(0.746)" fill="none" stroke="#faf8f3" stroke-linecap="round" stroke-linejoin="round" stroke-width="3.35"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g><g transform="translate(6.11 6.11) scale(0.746)" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="3.35" opacity=".16"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g></svg>"""
+
+  // "title", "play" or "over"
+  state mode = "title"
+  state best = 0 persist
+  state seed = 1
+  // whether frames are being drawn: a run is on, or its crash is still settling. Everything that
+  // reads `time` is behind it, so a tile with no run costs no frames.
+  state awake = false
+  // the time the run started at, in the animation clock
+  state t0 = 0
+  // the second the last run stopped at, for the still picture it leaves
+  state froze = 0
+  // where the ship is around the tube, in segments (unbounded; segment s is centred on s)
+  state pa = 0
+  // when the ship last moved, or was last looked ahead for (seconds into the run)
+  state ev = 0
+  state final = 0
+  // a run shown still at this many seconds in, for the store's screens; -1 when playing
+  state hold = -1
+
+  // ---- the tube, in units and seconds ------------------------------------------------------------
+  // N segments around; the ship rides ZS ahead of the camera. It flies at V0, speeding up by ACC
+  // each second to VMAX; DC is the distance flown by then.
+  let N = 16
+  let STEP = 6.2831853 / N
+  let ZS = 2
+  let V0 = 14
+  let ACC = 0.3
+  let VMAX = 36
+  let TC = (VMAX - V0) / ACC
+  let DC = V0 * TC + ACC * TC * TC / 2
+  // Gate k stands D0 + k * GAP down the tube.
+  let D0 = 46
+  let GAP = 17
+  let NG = 600
+
+  // Each gate: when the ship reaches it, and its pattern: 0 one gap of w segments at c, 1 two gaps
+  // of w opposite each other, 2 loose blocks with a sure gap of 2 at c. The first few are wide.
+  let gates = range(NG).map(k => {
+    k: k,
+    d: D0 + k * GAP,
+    t: D0 + k * GAP < DC ? (sqrt(V0 * V0 + 2 * ACC * (D0 + k * GAP)) - V0) / ACC : TC + (D0 + k * GAP - DC) / VMAX,
+    ty: k < 4 ? 0 : k < 10 ? (hash(seed, k, 1) < 0.7 ? 0 : 1) : floor(hash(seed, k, 1) * 3),
+    c: floor(hash(seed, k, 2) * N),
+    w: k < 4 ? 10 - k : max(3, 7 - floor(k / 14)),
+    w2: max(2, 4 - floor(k / 25)),
+    p: min(0.72, 0.38 + k * 0.006)
+  })
+
+
+  // ---- what the ship runs into -------------------------------------------------------------------
+  let dev = ev < TC ? V0 * ev + ACC * ev * ev / 2 : DC + VMAX * (ev - TC)
+  let kev = max(0, floor((dev - D0) / GAP))
+  let near = gates.drop(kev).take(28).map(g => {
+    k: g.k, d: g.d, t: g.t,
+    o: range(N).map(s => g.ty == 0 ? (s - g.c + 4 * N) % N < g.w
+      : g.ty == 1 ? (s - g.c + 4 * N) % (N / 2) < g.w2
+      : (s - g.c + 4 * N) % N < 2 || hash(seed, g.k, 20 + s) > g.p)
+  }).map(g => {
+    k: g.k, d: g.d, t: g.t, o: g.o,
+    // the closed segments as bits, for the shader
+    m: sum(range(N).map(s => g.o[s] ? 0 : pow(2, s)))
+  })
+  let seg = ((floor(pa + 0.5) % N) + N) % N
+  let dieAt = first(near.filter(g => g.t >= ev && !g.o[seg])).t ?? 9999
+
+  // ---- the run's clock ---------------------------------------------------------------------------
+  // A run still at `hold` seconds in, for the store's screens; otherwise the run's own second while
+  // it is awake, and the second it stopped at once it sleeps. `time` is only read behind `awake`, so
+  // a tile with no run in it draws no frames at all.
+  let held = hold >= 0
+  let T = held ? hold : awake ? max(0, time - t0) : froze
+  // the frame clock started over: the run it belonged to is gone (the 4 s tick drops it)
+  let stale = awake ? time < t0 : false
+  let fresh = !held && (mode == "title" || stale)
+  let dead = !held && !fresh && T >= dieAt
+  let rt = fresh ? 0 : held ? hold : min(T, dieAt)
+  let since = dead ? min(T - dieAt, 1.2) : 0
+
+  // Settles a run that ended with nobody dragging, and keeps the look down the tube current. It runs
+  // while the app shows, as any trigger does, but changes nothing unless a run is awake, so a still
+  // picture is never redrawn.
+  every 4s {
+    if awake {
+      if stale {
+        mode = "title"
+        awake = false
+      } else if mode == "play" && T >= dieAt {
+        final = len(gates.filter(g => g.t < dieAt))
+        best = max(best, final)
+        froze = dieAt + 1.2
+        mode = "over"
+        // caught late: the pieces have already flown, so stop the frames now
+        if T >= froze { awake = false }
+      } else if mode == "over" && T >= froze {
+        awake = false
+      } else if mode == "play" {
+        ev = T
+      }
+    }
+  }
+
+  Box {
+    fill: true
+    background: background
+
+    // ---- where things are ----
+    // on the title the tube stands still too
+    let view = fresh ? 0 : pa
+    let d = fresh ? 0 : (rt < TC ? V0 * rt + ACC * rt * rt / 2 : DC + VMAX * (rt - TC))
+    let dc = d - ZS
+    // the screen angle of the ship's spot is straight down; everything turns about it
+    let phi = 1.5707963 - view * STEP
+    // a shake when it crashes, as a share of the tube's size on screen
+    let shake = dead && since < 0.4 ? (0.4 - since) * 0.05 : 0
+    let shk = [shake * sin(rt * 71), shake * cos(rt * 53)]
+    // the next four gates ahead of the camera: how far, and their closed segments
+    let kc = max(0, ceil((dc + 0.3 - D0) / GAP))
+    let g4 = range(4).map(j => [D0 + (kc + j) * GAP - dc, fresh ? 0 : (near[kc - kev + j].m ?? 0)])
+
+    // ---- the tube and the gates: drawn on the GPU, per pixel ----
+    // A point z ahead of the camera is drawn at F / z of its size around the tube's middle there,
+    // which drifts as the tube bends. A pixel at r from that middle sees the wall at z = F / r;
+    // a few rounds of that settle where the bent tube's wall is.
+    Shader {
+      fill: true
+      fallback: background
+      uniforms: {
+        cam: [dc, phi, shk[0], shk[1]],
+        seg: fresh ? -1 : seg,
+        gz: g4.map(g => g[0]),
+        gm: g4.map(g => g[1]),
+        bg: background,
+        acc: accent,
+        mag: magenta,
+        fg: foreground
+      }
+      code: """
+        uniform float4 cam;
+        uniform float seg;
+        uniform float4 gz;
+        uniform float4 gm;
+        uniform half4 bg;
+        uniform half4 acc;
+        uniform half4 mag;
+        uniform half4 fg;
+        const float N = 16.0;
+        const float STEP = 0.39269908;
+        float F() { return min(size.x, size.y * 0.62) * 0.95; }
+        float2 mid0() { return float2(size.x * 0.5, size.y * 0.42) + cam.zw * F(); }
+        float2 rot(float2 v, float a) { float c = cos(a); float s = sin(a); return float2(v.x * c - v.y * s, v.x * s + v.y * c); }
+        // the middle of the tube z ahead, on screen
+        float2 mid(float z) {
+          float dc = cam.x;
+          float a = 3.2 * sin((dc + z) * 0.041) + 1.4 * sin((dc + z) * 0.11 + 2.0) - 3.2 * sin(dc * 0.041) - 1.4 * sin(dc * 0.11 + 2.0);
+          float b = 2.2 * sin((dc + z) * 0.057 + 1.0) - 2.2 * sin(dc * 0.057 + 1.0);
+          return mid0() + rot(float2(a, b) * min(1.0, z / 14.0), cam.y - 1.5707963) * (F() / z);
+        }
+        // a gate z ahead with closed segments m, over col
+        half3 gate(half3 col, float2 p, float z, float m) {
+          if (z < 0.3) return col;
+          float k = F() / z;
+          float2 w = p - mid(z);
+          float r = length(w) / k;
+          if (r < 0.42 || r > 1.0) return col;
+          float u = (atan(w.y, w.x) - cam.y) / STEP + 0.5;
+          float s = mod(floor(u), N);
+          if (mod(floor(m / exp2(s)), 2.0) < 0.5) return col;
+          float f = clamp(1.0 - z / 40.0, 0.0, 1.0);
+          half3 gc = mix(bg.rgb, mag.rgb, half(0.25 + 0.75 * f));
+          float a = z > 2.0 ? 0.55 + 0.35 * f : 0.25;
+          float fu = fract(u);
+          float e = min(min(fu, 1.0 - fu) * STEP * r, min(r - 0.42, 1.0 - r)) * k;
+          half3 c = mix(col, gc, half(a));
+          return mix(c, mix(gc, fg.rgb, 0.35), half(smoothstep(2.5, 0.5, e) * (z > 2.0 ? 1.0 : 0.3)));
+        }
+        half4 main(float2 p) {
+          float f0 = F();
+          float2 c = mid0();
+          float z = 40.0;
+          for (int i = 0; i < 7; i++) {
+            z = mix(z, clamp(f0 / max(length(p - c), 1.0), 0.3, 80.0), i == 0 ? 1.0 : 0.6);
+            c = mid(z);
+          }
+          float2 v = p - c;
+          float r = length(v);
+          float fog = smoothstep(32.0, 6.0, z);
+          // a glow far down, where the tube goes
+          half3 col = bg.rgb + (acc.rgb - bg.rgb) * half(0.22 * smoothstep(12.0, 60.0, z));
+          // the lane the ship is in
+          float u = (atan(v.y, v.x) - cam.y) / STEP + 0.5;
+          if (abs(mod(floor(u), N) - seg) < 0.5) col = mix(col, acc.rgb, half(0.13 * fog));
+          // the lines along it, and the rings round it every 2, fading into the distance
+          float fu = fract(u);
+          float dl = min(fu, 1.0 - fu) * STEP * r;
+          float fr = fract((cam.x + z) * 0.5);
+          float dr = min(fr, 1.0 - fr) * 2.0 * r / z;
+          float px = size.x / 400.0;
+          // lines closer together than a few pixels fade out instead of shimmering
+          float al = smoothstep(3.0 * px, 9.0 * px, STEP * r);
+          float ar = smoothstep(4.0 * px, 12.0 * px, 2.0 * r / z);
+          float line = max(0.35 * fog * al * smoothstep(1.4 * px, 0.2 * px, dl), 0.9 * fog * fog * ar * smoothstep((0.6 + 2.4 * fog) * px, 0.0, dr));
+          col = mix(col, acc.rgb, half(line));
+          // the gates, far to near
+          col = gate(col, p, gz.w, gm.w);
+          col = gate(col, p, gz.z, gm.z);
+          col = gate(col, p, gz.y, gm.y);
+          col = gate(col, p, gz.x, gm.x);
+          return half4(col, 1.0);
+        }
+      """
+    }
+
+    // ---- the ship and the words, over it ----
+    Canvas {
+      fill: true
+      ripple: false
+
+      onTap: {
+        if mode == "title" || (mode == "over" && since > 0.8) {
+          seed = random(1000000)
+          t0 = time
+          pa = 0
+          ev = 0
+          final = 0
+          froze = 0
+          hold = -1
+          awake = true
+          mode = "play"
+        }
+      }
+
+      onDrag: {
+        if mode == "play" && hold < 0 {
+          if T >= dieAt {
+            final = len(gates.filter(g => g.t < dieAt))
+            best = max(best, final)
+            froze = dieAt + 1.2
+            mode = "over"
+          } else {
+            ev = T
+            pa = pa - dx / 34
+          }
+        }
+      }
+
+      let top = screenTop ?? 0
+      let F = min(width, height * 0.62) * 0.95
+      // the ship, just off the wall at the bottom
+      let sk = F / ZS
+      let shx = width / 2 + shk[0] * F
+      let shy = height * 0.42 + shk[1] * F + 0.8 * sk
+      let sw = 0.2 * sk
+
+      if !fresh {
+        if !dead {
+          // engine flame, then the hull: a claw pointing down the tube
+          let fl = 0.55 + 0.25 * sin(T * 40)
+          path([[shx - sw * 0.35, shy + sw * 0.2], [shx, shy + sw * (0.2 + fl)], [shx + sw * 0.35, shy + sw * 0.2]], closed: true, fill: alpha(yellow, 0.85))
+          path([[shx, shy - sw * 1.1], [shx + sw, shy + sw * 0.35], [shx + sw * 0.45, shy + sw * 0.1], [shx, shy + sw * 0.3], [shx - sw * 0.45, shy + sw * 0.1], [shx - sw, shy + sw * 0.35]],
+            closed: true, fill: alpha(cyan, 0.35), stroke: cyan, width: 2.5)
+        } else {
+          // in pieces, flying apart, and a ring of light
+          let b = since * sk * 0.9
+          for q in range(7) {
+            let a = q * 0.8976 + 0.4
+            let px = shx + cos(a) * b
+            let py = shy + sin(a) * b * 0.6 + since * since * sk * 0.6
+            rotate(since * 400 * (q % 2 == 0 ? 1 : -1), px, py) {
+              path([[px - sw * 0.3, py], [px + sw * 0.3, py - sw * 0.15], [px + sw * 0.1, py + sw * 0.25]], closed: true, fill: alpha(cyan, clamp(1.6 - since, 0, 1)))
+            }
+          }
+          if since < 0.6 {
+            circle(shx, shy, since * sk * 1.6, stroke: alpha(foreground, (0.6 - since) * 1.6), width: 3)
+          }
+        }
+      }
+      if dead && since < 0.25 { rect(0, 0, width, height, fill: alpha(foreground, (0.25 - since) * 1.6)) }
+
+      // ---- words ----
+      let score = fresh ? 0 : max(0, ceil((d - D0) / GAP))
+      if fresh {
+        text("WARP TUBE", width / 2, top + height * 0.16, size: 38, bold: true, color: foreground, align: center)
+        text("TAP TO START", width / 2, top + height * 0.16 + 40, size: 15, color: accent, align: center)
+        text("drag left and right to roll round the tube", width / 2, height * 0.88, size: 14, color: muted, align: center)
+        if best > 0 { text("BEST ${best}", width / 2, height * 0.88 + 24, size: 15, bold: true, color: accent, align: center) }
+      } else {
+        text("${score}", 20, top + 30, size: 30, bold: true, color: foreground)
+        text(score == 1 ? "gate" : "gates", 20, top + 56, size: 12, color: muted)
+        text("BEST ${max(best, score)}", width - 20, top + 30, size: 14, bold: true, color: accent, align: end)
+        if dead {
+          rect(0, height * 0.2 + top - 40, width, 130, fill: alpha(background, clamp(since * 3, 0, 0.75)))
+          text("GAME OVER", width / 2, height * 0.2 + top, size: 34, bold: true, color: magenta, align: center)
+          text("${score} gate${score == 1 ? "" : "s"}", width / 2, height * 0.2 + top + 38, size: 17, color: foreground, align: center)
+          if since > 0.8 { text("TAP TO FLY AGAIN", width / 2, height * 0.2 + top + 70, size: 15, color: accent, align: center) }
+        }
+      }
+    }
+  }
+}

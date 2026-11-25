@@ -51,9 +51,9 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/104a
 """
   let storeInstall = "python -c ${sh(storeBootstrap)}"
 
-  meta { owl: 13; description: "Манга: семь источников, все ветки глав, Webtoon, чтение и CBZ · ресурсы при первом запуске"; version: "2.1.1"; license: "MIT"; category: "productivity" }
-  requires { pacman: ["python", "python", "python-pillow", "python-beautifulsoup4"] }
-  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M24 10C17 5 10 5 4 7v33c7-2 14-1 20 3 6-4 13-5 20-3V7c-6-2-13-2-20 3v33M10 14l8 2v12l-8-2zM30 16l8-2M30 23l8-2M10 33l8 2M30 32l8-2"/></svg>"""
+  meta { owl: 13; description: "Манга: семь источников, все ветки глав, Webtoon, чтение и CBZ · ресурсы при первом запуске"; version: "2.1.2"; license: "MIT"; category: "productivity" }
+  requires { pacman: ["python", "python-pillow", "python-beautifulsoup4"] }
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect x=".5" y=".5" width="47" height="47" rx="9" fill="#19191d"/><rect x=".5" y=".5" width="47" height="47" rx="9" fill="currentColor" fill-opacity=".30" stroke="currentColor" stroke-opacity=".78"/><defs><g id="symbol"><path d="M24 10C17 5 10 5 4 7v33c7-2 14-1 20 3 6-4 13-5 20-3V7c-6-2-13-2-20 3v33M10 14l8 2v12l-8-2zM30 16l8-2M30 23l8-2M10 33l8 2M30 32l8-2"/></g></defs><g transform="translate(5.28 4.97) scale(0.780)" fill="none" stroke="#faf8f3" stroke-linecap="round" stroke-linejoin="round" stroke-width="3.21"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g><g transform="translate(5.28 4.97) scale(0.780)" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="3.21" opacity=".16"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g></svg>"""
   state tab = "catalog"
   state query = ""
   state draft = ""

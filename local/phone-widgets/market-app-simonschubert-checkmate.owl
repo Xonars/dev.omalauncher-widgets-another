@@ -18,7 +18,7 @@ app "checkmate" {
   // The header below is the title: no title row.
   title: ""
   // A theme-colored outline, matching the other OWL app icons.
-  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M24 5v10m-5-5h10M18 21l-3-5c-4-5-11-1-8 5l7 13h20l7-13c3-6-4-10-8-5l-3 5M24 15l-6 6 6 8 6-8-6-6ZM14 34v8h20v-8M14 38h20"/></svg>"""
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect x=".5" y=".5" width="47" height="47" rx="9" fill="#19191d"/><rect x=".5" y=".5" width="47" height="47" rx="9" fill="currentColor" fill-opacity=".30" stroke="currentColor" stroke-opacity=".78"/><defs><g id="symbol"><path d="M24 5v10m-5-5h10M18 21l-3-5c-4-5-11-1-8 5l7 13h20l7-13c3-6-4-10-8-5l-3 5M24 15l-6 6 6 8 6-8-6-6ZM14 34v8h20v-8M14 38h20"/></g></defs><g transform="translate(3.90 4.32) scale(0.837)" fill="none" stroke="#faf8f3" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.99"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g><g transform="translate(3.90 4.32) scale(0.837)" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.99" opacity=".16"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g></svg>"""
 
   source now = clock every 1s
 

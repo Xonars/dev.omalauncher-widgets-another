@@ -1,23 +1,25 @@
 widget "today" {
   size: 3x3
   minSize: 2x2
-  meta { description: "The date and the weather where you are, by IP or a city you type. Tap it for the next 24 hours, three days, wind, UV, sun and moon. Tap °C or °F to switch"; version: "1.10.1"; license: "MIT"; category: "world"; owl: 17 }
+  meta { description: "The date and the weather where you are: a city you type, else the phone's location once you allow it, else by IP. Tap it for 24 hours, three days, wind, UV, sun and moon, and °C or °F to switch"; version: "1.16.1"; license: "MIT"; category: "world"; owl: 18 }
 
   // What it says, in the phone's language where it has a set. wttr names the sky and the moon in English, and
   // its own Indonesian misses newer conditions, so other languages name them from wttr's codes.
   strings {
     en {
-      title: "weather"; loading: "weather…"; offline: "weather offline"; city: "city · empty = auto"
+      title: "weather"; loading: "weather…"; offline: "weather offline"; city: "city · empty = auto"; here: "use my location"
       feels: "feels"; humidity: "humidity"; rainToday: "rain today"; uv: "uv index"; pressure: "pressure"
       visibility: "visibility"; next24: "next 24 hours"; now: "now"; days: "3 days"; today: "today"
       sunrise: "sunrise"; sunset: "sunset"; moon: "moon"; kmh: "km/h"; yr: "open yr.no ↗"
+      // The month and year under the weekday, as a fmtTime pattern: a language that puts the year first has its own.
+      monthYear: "MMMM yyyy"
       sky: (code, desc) => lower(trim(desc))
       wind: dir => "wind ${lower(dir)}"
       uvLevel: uv => uv >= 8 ? "very high" : uv >= 6 ? "high" : uv >= 3 ? "moderate" : "low"
       phase: (phase, lit) => "${lower(phase)} · ${lit}% lit"
     }
     id {
-      title: "cuaca"; loading: "cuaca…"; offline: "cuaca offline"; city: "kota · kosong = otomatis"
+      title: "cuaca"; loading: "cuaca…"; offline: "cuaca offline"; city: "kota · kosong = otomatis"; here: "pakai lokasi saya"
       feels: "terasa"; humidity: "kelembapan"; rainToday: "hujan hari ini"; uv: "indeks uv"; pressure: "tekanan"
       visibility: "jarak pandang"; next24: "24 jam ke depan"; now: "kini"; days: "3 hari"; today: "hari ini"
       sunrise: "terbit"; sunset: "terbenam"; moon: "bulan"; kmh: "km/jam"; yr: "buka yr.no ↗"
@@ -50,7 +52,7 @@ widget "today" {
       }, phase, lower(phase)) + " · ${lit}% terang"
     }
     es {
-      title: "clima"; loading: "clima…"; offline: "clima sin conexión"; city: "ciudad · vacío = auto"
+      title: "clima"; loading: "clima…"; offline: "clima sin conexión"; city: "ciudad · vacío = auto"; here: "usar mi ubicación"
       feels: "sensación"; humidity: "humedad"; rainToday: "lluvia hoy"; uv: "índice uv"; pressure: "presión"
       visibility: "visibilidad"; next24: "próximas 24 horas"; now: "ahora"; days: "3 días"; today: "hoy"
       sunrise: "amanecer"; sunset: "atardecer"; moon: "luna"; kmh: "km/h"; yr: "abrir yr.no ↗"
@@ -83,7 +85,7 @@ widget "today" {
       }, phase, lower(phase)) + " · ${lit}% iluminada"
     }
     pt {
-      title: "clima"; loading: "clima…"; offline: "clima offline"; city: "cidade · vazio = auto"
+      title: "clima"; loading: "clima…"; offline: "clima offline"; city: "cidade · vazio = auto"; here: "usar minha localização"
       feels: "sensação"; humidity: "umidade"; rainToday: "chuva hoje"; uv: "índice uv"; pressure: "pressão"
       visibility: "visibilidade"; next24: "próximas 24 horas"; now: "agora"; days: "3 dias"; today: "hoje"
       sunrise: "nascer do sol"; sunset: "pôr do sol"; moon: "lua"; kmh: "km/h"; yr: "abrir yr.no ↗"
@@ -116,7 +118,7 @@ widget "today" {
       }, phase, lower(phase)) + " · ${lit}% iluminada"
     }
     de {
-      title: "wetter"; loading: "wetter…"; offline: "wetter offline"; city: "stadt · leer = auto"
+      title: "wetter"; loading: "wetter…"; offline: "wetter offline"; city: "stadt · leer = auto"; here: "meinen standort nutzen"
       feels: "gefühlt"; humidity: "luftfeuchte"; rainToday: "regen heute"; uv: "uv-index"; pressure: "luftdruck"
       visibility: "sichtweite"; next24: "nächste 24 stunden"; now: "jetzt"; days: "3 tage"; today: "heute"
       sunrise: "aufgang"; sunset: "untergang"; moon: "mond"; kmh: "km/h"; yr: "yr.no öffnen ↗"
@@ -149,7 +151,7 @@ widget "today" {
       }, phase, lower(phase)) + " · ${lit}% beleuchtet"
     }
     zh {
-      title: "天气"; loading: "天气…"; offline: "获取不到天气"; city: "城市 · 留空 = 自动"
+      title: "天气"; loading: "天气…"; offline: "获取不到天气"; city: "城市 · 留空 = 自动"; here: "使用我的位置"
       feels: "体感"; humidity: "湿度"; rainToday: "今日降水"; uv: "紫外线指数"; pressure: "气压"
       visibility: "能见度"; next24: "未来 24 小时"; now: "现在"; days: "未来 3 天"; today: "今天"
       sunrise: "日出"; sunset: "日落"; moon: "月亮"; kmh: "km/h"; yr: "打开 yr.no ↗"
@@ -181,6 +183,207 @@ widget "today" {
         "Last Quarter": "下弦月", "Waning Crescent": "残月"
       }, phase, lower(phase)) + " · 照亮 ${lit}%"
     }
+    ru {
+      title: "погода"; loading: "погода…"; offline: "погода офлайн"; city: "город · пусто = авто"; here: "моё местоположение"
+      feels: "по ощущению"; humidity: "влажность"; rainToday: "осадки сегодня"; uv: "уф-индекс"; pressure: "давление"
+      visibility: "видимость"; next24: "ближайшие 24 часа"; now: "сейчас"; days: "3 дня"; today: "сегодня"
+      sunrise: "восход"; sunset: "закат"; moon: "луна"; kmh: "км/ч"; yr: "открыть yr.no ↗"
+      sky: (code, desc) => get({
+        "113": "ясно", "116": "переменная облачность", "119": "облачно", "122": "пасмурно", "143": "дымка",
+        "176": "местами дождь", "179": "местами снег", "182": "местами мокрый снег", "185": "местами ледяная морось",
+        "200": "гроза", "227": "позёмка", "230": "метель", "248": "туман", "260": "ледяной туман",
+        "263": "местами слабая морось", "266": "слабая морось", "281": "ледяная морось", "284": "сильная ледяная морось",
+        "293": "местами небольшой дождь", "296": "небольшой дождь", "299": "временами умеренный дождь", "302": "умеренный дождь",
+        "305": "временами сильный дождь", "308": "сильный дождь", "311": "слабый ледяной дождь", "314": "сильный ледяной дождь",
+        "317": "небольшой мокрый снег", "320": "сильный мокрый снег", "323": "местами небольшой снег", "326": "небольшой снег",
+        "329": "местами умеренный снег", "332": "умеренный снег", "335": "местами сильный снег", "338": "сильный снег",
+        "350": "ледяная крупа", "353": "небольшой ливень", "356": "сильный ливень", "359": "проливной дождь",
+        "362": "небольшой ливень с мокрым снегом", "365": "сильный ливень с мокрым снегом", "368": "небольшой снегопад",
+        "371": "сильный снегопад", "374": "небольшая ледяная крупа", "377": "сильная ледяная крупа",
+        "386": "небольшой дождь с грозой", "389": "сильный дождь с грозой", "392": "небольшой снег с грозой",
+        "395": "сильный снег с грозой"
+      }, code, lower(trim(desc)))
+      // The sixteen points as Russian forecasts write them: С, В, Ю, З.
+      wind: dir => get({
+        "N": "ветер С", "NNE": "ветер ССВ", "NE": "ветер СВ", "ENE": "ветер ВСВ", "E": "ветер В", "ESE": "ветер ВЮВ",
+        "SE": "ветер ЮВ", "SSE": "ветер ЮЮВ", "S": "ветер Ю", "SSW": "ветер ЮЮЗ", "SW": "ветер ЮЗ", "WSW": "ветер ЗЮЗ",
+        "W": "ветер З", "WNW": "ветер ЗСЗ", "NW": "ветер СЗ", "NNW": "ветер ССЗ"
+      }, dir, "ветер ${lower(dir)}")
+      uvLevel: uv => uv >= 8 ? "очень высокий" : uv >= 6 ? "высокий" : uv >= 3 ? "умеренный" : "низкий"
+      phase: (phase, lit) => get({
+        "New Moon": "новолуние", "Waxing Crescent": "растущий серп", "First Quarter": "первая четверть",
+        "Waxing Gibbous": "растущая луна", "Full Moon": "полнолуние", "Waning Gibbous": "убывающая луна",
+        "Last Quarter": "последняя четверть", "Waning Crescent": "убывающий серп"
+      }, phase, lower(phase)) + " · освещено ${lit}%"
+    }
+    ja {
+      title: "天気"; loading: "天気…"; offline: "天気を取得できません"; city: "都市 · 空欄 = 自動"; here: "現在地を使う"
+      feels: "体感"; humidity: "湿度"; rainToday: "今日の降水"; uv: "UV 指数"; pressure: "気圧"
+      visibility: "視程"; next24: "今後 24 時間"; now: "現在"; days: "3 日間"; today: "今日"
+      sunrise: "日の出"; sunset: "日の入り"; moon: "月"; kmh: "km/h"; yr: "yr.no を開く ↗"
+      monthYear: "yyyy年M月"
+      // The words Japanese forecasts use: 弱い, 強い and 激しい for how hard it falls, にわか for showers.
+      sky: (code, desc) => get({
+        "113": "晴れ", "116": "晴れ時々曇り", "119": "曇り", "122": "本曇り", "143": "もや",
+        "176": "ところにより雨", "179": "ところにより雪", "182": "ところによりみぞれ", "185": "ところにより着氷性の霧雨",
+        "200": "ところにより雷", "227": "地吹雪", "230": "猛吹雪", "248": "霧", "260": "着氷性の霧",
+        "263": "ところにより弱い霧雨", "266": "弱い霧雨", "281": "着氷性の霧雨", "284": "強い着氷性の霧雨",
+        "293": "ところにより小雨", "296": "小雨", "299": "時々雨", "302": "雨",
+        "305": "時々強い雨", "308": "強い雨", "311": "弱い着氷性の雨", "314": "強い着氷性の雨",
+        "317": "弱いみぞれ", "320": "強いみぞれ", "323": "ところにより小雪", "326": "小雪",
+        "329": "ところにより雪", "332": "雪", "335": "ところにより大雪", "338": "大雪",
+        "350": "凍雨", "353": "弱いにわか雨", "356": "強いにわか雨", "359": "激しいにわか雨",
+        "362": "弱いみぞれ", "365": "強いみぞれ", "368": "弱いにわか雪",
+        "371": "強いにわか雪", "374": "弱い凍雨", "377": "強い凍雨",
+        "386": "雷を伴う弱い雨", "389": "雷を伴う強い雨", "392": "雷を伴う弱い雪",
+        "395": "雷を伴う強い雪"
+      }, code, lower(trim(desc)))
+      // The sixteen points, as Japanese forecasts name them.
+      wind: dir => get({
+        "N": "北の風", "NNE": "北北東の風", "NE": "北東の風", "ENE": "東北東の風", "E": "東の風", "ESE": "東南東の風",
+        "SE": "南東の風", "SSE": "南南東の風", "S": "南の風", "SSW": "南南西の風", "SW": "南西の風", "WSW": "西南西の風",
+        "W": "西の風", "WNW": "西北西の風", "NW": "北西の風", "NNW": "北北西の風"
+      }, dir, "風向 ${dir}")
+      uvLevel: uv => uv >= 8 ? "非常に強い" : uv >= 6 ? "強い" : uv >= 3 ? "中程度" : "弱い"
+      phase: (phase, lit) => get({
+        "New Moon": "新月", "Waxing Crescent": "三日月", "First Quarter": "上弦の月",
+        "Waxing Gibbous": "満ちていく月", "Full Moon": "満月", "Waning Gibbous": "欠けていく月",
+        "Last Quarter": "下弦の月", "Waning Crescent": "有明の月"
+      }, phase, lower(phase)) + " · 輝面率 ${lit}%"
+    }
+    uk {
+      title: "погода"; loading: "погода…"; offline: "погода офлайн"; city: "місто · порожньо = авто"; here: "моє місцезнаходження"
+      feels: "відчувається як"; humidity: "вологість"; rainToday: "опади сьогодні"; uv: "уф-індекс"; pressure: "тиск"
+      visibility: "видимість"; next24: "найближчі 24 години"; now: "зараз"; days: "3 дні"; today: "сьогодні"
+      sunrise: "схід"; sunset: "захід"; moon: "місяць"; kmh: "км/год"; yr: "відкрити yr.no ↗"
+      sky: (code, desc) => get({
+        "113": "ясно", "116": "мінлива хмарність", "119": "хмарно", "122": "похмуро", "143": "серпанок",
+        "176": "місцями дощ", "179": "місцями сніг", "182": "місцями мокрий сніг", "185": "місцями крижана мряка",
+        "200": "гроза", "227": "поземок", "230": "хуртовина", "248": "туман", "260": "крижаний туман",
+        "263": "місцями слабка мряка", "266": "слабка мряка", "281": "крижана мряка", "284": "сильна крижана мряка",
+        "293": "місцями невеликий дощ", "296": "невеликий дощ", "299": "часом помірний дощ", "302": "помірний дощ",
+        "305": "часом сильний дощ", "308": "сильний дощ", "311": "слабкий крижаний дощ", "314": "сильний крижаний дощ",
+        "317": "невеликий мокрий сніг", "320": "сильний мокрий сніг", "323": "місцями невеликий сніг", "326": "невеликий сніг",
+        "329": "місцями помірний сніг", "332": "помірний сніг", "335": "місцями сильний сніг", "338": "сильний сніг",
+        "350": "крижана крупа", "353": "невелика злива", "356": "сильна злива", "359": "проливний дощ",
+        "362": "невелика злива з мокрим снігом", "365": "сильна злива з мокрим снігом", "368": "невеликий снігопад",
+        "371": "сильний снігопад", "374": "невелика крижана крупа", "377": "сильна крижана крупа",
+        "386": "невеликий дощ із грозою", "389": "сильний дощ із грозою", "392": "невеликий сніг із грозою",
+        "395": "сильний сніг із грозою"
+      }, code, lower(trim(desc)))
+      // The sixteen points as Ukrainian forecasts write them: Пн, Сх, Пд, Зх.
+      wind: dir => get({
+        "N": "вітер Пн", "NNE": "вітер ПнПнСх", "NE": "вітер ПнСх", "ENE": "вітер СхПнСх", "E": "вітер Сх", "ESE": "вітер СхПдСх",
+        "SE": "вітер ПдСх", "SSE": "вітер ПдПдСх", "S": "вітер Пд", "SSW": "вітер ПдПдЗх", "SW": "вітер ПдЗх", "WSW": "вітер ЗхПдЗх",
+        "W": "вітер Зх", "WNW": "вітер ЗхПнЗх", "NW": "вітер ПнЗх", "NNW": "вітер ПнПнЗх"
+      }, dir, "вітер ${lower(dir)}")
+      uvLevel: uv => uv >= 8 ? "дуже високий" : uv >= 6 ? "високий" : uv >= 3 ? "помірний" : "низький"
+      phase: (phase, lit) => get({
+        "New Moon": "новий місяць", "Waxing Crescent": "молодий місяць", "First Quarter": "перша чверть",
+        "Waxing Gibbous": "місяць росте", "Full Moon": "повня", "Waning Gibbous": "місяць спадає",
+        "Last Quarter": "остання чверть", "Waning Crescent": "старий місяць"
+      }, phase, lower(phase)) + " · освітлено ${lit}%"
+    }
+    fr {
+      title: "météo"; loading: "météo…"; offline: "météo hors ligne"; city: "ville · vide = auto"; here: "utiliser ma position"
+      feels: "ressenti"; humidity: "humidité"; rainToday: "pluie aujourd’hui"; uv: "indice uv"; pressure: "pression"
+      visibility: "visibilité"; next24: "prochaines 24 heures"; now: "maint."; days: "3 jours"; today: "auj."
+      sunrise: "lever"; sunset: "coucher"; moon: "lune"; kmh: "km/h"; yr: "ouvrir yr.no ↗"
+      sky: (code, desc) => get({
+        "113": "dégagé", "116": "partiellement nuageux", "119": "nuageux", "122": "couvert", "143": "brume",
+        "176": "pluie éparse", "179": "neige éparse", "182": "neige fondue éparse", "185": "bruine verglaçante éparse",
+        "200": "orages", "227": "chasse-neige", "230": "blizzard", "248": "brouillard", "260": "brouillard givrant",
+        "263": "bruine légère éparse", "266": "bruine légère", "281": "bruine verglaçante", "284": "forte bruine verglaçante",
+        "293": "pluie légère éparse", "296": "pluie légère", "299": "pluie modérée par moments", "302": "pluie modérée",
+        "305": "forte pluie par moments", "308": "forte pluie", "311": "pluie verglaçante légère", "314": "forte pluie verglaçante",
+        "317": "neige fondue légère", "320": "forte neige fondue", "323": "neige légère éparse", "326": "neige légère",
+        "329": "neige modérée éparse", "332": "neige modérée", "335": "forte neige éparse", "338": "forte neige",
+        "350": "grésil", "353": "averses légères", "356": "fortes averses", "359": "pluie torrentielle",
+        "362": "averses légères de neige fondue", "365": "fortes averses de neige fondue", "368": "averses de neige légères",
+        "371": "fortes averses de neige", "374": "averses de grésil légères", "377": "fortes averses de grésil",
+        "386": "pluie légère et orage", "389": "forte pluie et orage", "392": "neige légère et orage",
+        "395": "forte neige et orage"
+      }, code, lower(trim(desc)))
+      // The sixteen points as French forecasts abbreviate them: west is O (ouest).
+      wind: dir => get({
+        "N": "vent n", "NNE": "vent nne", "NE": "vent ne", "ENE": "vent ene", "E": "vent e", "ESE": "vent ese",
+        "SE": "vent se", "SSE": "vent sse", "S": "vent s", "SSW": "vent sso", "SW": "vent so", "WSW": "vent oso",
+        "W": "vent o", "WNW": "vent ono", "NW": "vent no", "NNW": "vent nno"
+      }, dir, "vent ${lower(dir)}")
+      uvLevel: uv => uv >= 8 ? "très élevé" : uv >= 6 ? "élevé" : uv >= 3 ? "modéré" : "faible"
+      phase: (phase, lit) => get({
+        "New Moon": "nouvelle lune", "Waxing Crescent": "premier croissant", "First Quarter": "premier quartier",
+        "Waxing Gibbous": "gibbeuse croissante", "Full Moon": "pleine lune", "Waning Gibbous": "gibbeuse décroissante",
+        "Last Quarter": "dernier quartier", "Waning Crescent": "dernier croissant"
+      }, phase, lower(phase)) + " · éclairée à ${lit} %"
+    }
+    tr {
+      title: "hava durumu"; loading: "hava durumu…"; offline: "hava durumu çevrimdışı"; city: "şehir · boş = otomatik"; here: "konumumu kullan"
+      feels: "hissedilen"; humidity: "nem"; rainToday: "bugün yağış"; uv: "uv indeksi"; pressure: "basınç"
+      visibility: "görüş"; next24: "önümüzdeki 24 saat"; now: "şimdi"; days: "3 gün"; today: "bugün"
+      sunrise: "gün doğumu"; sunset: "gün batımı"; moon: "ay"; kmh: "km/sa"; yr: "yr.no’yu aç ↗"
+      sky: (code, desc) => get({
+        "113": "açık", "116": "parçalı bulutlu", "119": "bulutlu", "122": "kapalı", "143": "pus",
+        "176": "yer yer yağmur", "179": "yer yer kar", "182": "yer yer sulu kar", "185": "yer yer donan çisenti",
+        "200": "gök gürültülü", "227": "kar savruluyor", "230": "tipi", "248": "sis", "260": "donan sis",
+        "263": "yer yer hafif çisenti", "266": "hafif çisenti", "281": "donan çisenti", "284": "kuvvetli donan çisenti",
+        "293": "yer yer hafif yağmur", "296": "hafif yağmur", "299": "ara ara orta yağmur", "302": "orta yağmur",
+        "305": "ara ara kuvvetli yağmur", "308": "kuvvetli yağmur", "311": "hafif donan yağmur", "314": "kuvvetli donan yağmur",
+        "317": "hafif sulu kar", "320": "kuvvetli sulu kar", "323": "yer yer hafif kar", "326": "hafif kar",
+        "329": "yer yer orta kar", "332": "orta kar", "335": "yer yer yoğun kar", "338": "yoğun kar",
+        "350": "buz taneleri", "353": "hafif sağanak", "356": "kuvvetli sağanak", "359": "şiddetli sağanak",
+        "362": "hafif sulu kar sağanağı", "365": "kuvvetli sulu kar sağanağı", "368": "hafif kar sağanağı",
+        "371": "kuvvetli kar sağanağı", "374": "hafif buz tanesi sağanağı", "377": "kuvvetli buz tanesi sağanağı",
+        "386": "hafif yağmur ve gök gürültüsü", "389": "kuvvetli yağmur ve gök gürültüsü", "392": "hafif kar ve gök gürültüsü",
+        "395": "yoğun kar ve gök gürültüsü"
+      }, code, lower(trim(desc)))
+      // Where the wind comes from, in eight points: the sixteen's in-between ones go to the nearer of the four.
+      wind: dir => get({
+        "N": "kuzeyden", "NNE": "kuzeyden", "NE": "kuzeydoğudan", "ENE": "doğudan", "E": "doğudan", "ESE": "doğudan",
+        "SE": "güneydoğudan", "SSE": "güneyden", "S": "güneyden", "SSW": "güneyden", "SW": "güneybatıdan", "WSW": "batıdan",
+        "W": "batıdan", "WNW": "batıdan", "NW": "kuzeybatıdan", "NNW": "kuzeyden"
+      }, dir, "rüzgâr ${lower(dir)}")
+      uvLevel: uv => uv >= 8 ? "çok yüksek" : uv >= 6 ? "yüksek" : uv >= 3 ? "orta" : "düşük"
+      // Turkish puts the percent sign before the number.
+      phase: (phase, lit) => get({
+        "New Moon": "yeni ay", "Waxing Crescent": "büyüyen hilal", "First Quarter": "ilk dördün",
+        "Waxing Gibbous": "büyüyen şişkin ay", "Full Moon": "dolunay", "Waning Gibbous": "küçülen şişkin ay",
+        "Last Quarter": "son dördün", "Waning Crescent": "küçülen hilal"
+      }, phase, lower(phase)) + " · %${lit} aydınlık"
+    }
+    it {
+      title: "meteo"; loading: "meteo…"; offline: "meteo offline"; city: "città · vuoto = auto"; here: "usa la mia posizione"
+      feels: "percepita"; humidity: "umidità"; rainToday: "pioggia oggi"; uv: "indice uv"; pressure: "pressione"
+      visibility: "visibilità"; next24: "prossime 24 ore"; now: "ora"; days: "3 giorni"; today: "oggi"
+      sunrise: "alba"; sunset: "tramonto"; moon: "luna"; kmh: "km/h"; yr: "apri yr.no ↗"
+      sky: (code, desc) => get({
+        "113": "sereno", "116": "parzialmente nuvoloso", "119": "nuvoloso", "122": "coperto", "143": "foschia",
+        "176": "pioggia sparsa", "179": "neve sparsa", "182": "nevischio sparso", "185": "pioviggine gelata sparsa",
+        "200": "temporali", "227": "neve e vento", "230": "bufera di neve", "248": "nebbia", "260": "nebbia gelata",
+        "263": "pioviggine debole sparsa", "266": "pioviggine debole", "281": "pioviggine gelata", "284": "forte pioviggine gelata",
+        "293": "pioggia debole sparsa", "296": "pioggia debole", "299": "a tratti pioggia moderata", "302": "pioggia moderata",
+        "305": "a tratti pioggia forte", "308": "pioggia forte", "311": "pioggia gelata debole", "314": "pioggia gelata forte",
+        "317": "nevischio debole", "320": "nevischio forte", "323": "neve debole sparsa", "326": "neve debole",
+        "329": "neve moderata sparsa", "332": "neve moderata", "335": "neve forte sparsa", "338": "neve forte",
+        "350": "granuli di ghiaccio", "353": "rovesci deboli", "356": "rovesci forti", "359": "rovesci torrenziali",
+        "362": "rovesci deboli di nevischio", "365": "rovesci forti di nevischio", "368": "rovesci deboli di neve",
+        "371": "rovesci forti di neve", "374": "rovesci deboli di granuli di ghiaccio", "377": "rovesci forti di granuli di ghiaccio",
+        "386": "pioggia debole e temporale", "389": "pioggia forte e temporale", "392": "neve debole e temporale",
+        "395": "neve forte e temporale"
+      }, code, lower(trim(desc)))
+      // The sixteen points as Italian forecasts abbreviate them: west is O (ovest).
+      wind: dir => get({
+        "N": "vento n", "NNE": "vento nne", "NE": "vento ne", "ENE": "vento ene", "E": "vento e", "ESE": "vento ese",
+        "SE": "vento se", "SSE": "vento sse", "S": "vento s", "SSW": "vento sso", "SW": "vento so", "WSW": "vento oso",
+        "W": "vento o", "WNW": "vento ono", "NW": "vento no", "NNW": "vento nno"
+      }, dir, "vento ${lower(dir)}")
+      uvLevel: uv => uv >= 8 ? "molto alto" : uv >= 6 ? "alto" : uv >= 3 ? "moderato" : "basso"
+      phase: (phase, lit) => get({
+        "New Moon": "luna nuova", "Waxing Crescent": "falce crescente", "First Quarter": "primo quarto",
+        "Waxing Gibbous": "gibbosa crescente", "Full Moon": "luna piena", "Waning Gibbous": "gibbosa calante",
+        "Last Quarter": "ultimo quarto", "Waning Crescent": "falce calante"
+      }, phase, lower(phase)) + " · illuminata al ${lit}%"
+    }
   }
 
   source now = clock every 1m
@@ -193,10 +396,15 @@ widget "today" {
   state city = "" persist
   // Blank follows the country. A tap on the degree letter stores C or F.
   state unitChoice = "" persist
-  // The city, percent-encoded so "/", "?", "&" or "#" in it can't break the URL. Empty means located by IP.
+  // The city, percent-encoded so "/", "?", "&" or "#" in it can't break the URL.
   let q = city.replace("%", "%25").replace("+", "%2B").replace("/", "%2F").replace("?", "%3F").replace("#", "%23").replace("&", "%26").replace("'", "%27").replace(" ", "+")
+  // The phone's place, once a tap on the screen's "use my location" has allowed it.
+  source here = android.location
+  // A typed city wins; without one, the phone's place, to two decimals (about the kilometre a coarse fix knows), else
+  // "" for wttr's guess from the IP. Null while the source starts, so it doesn't fetch the IP's weather first.
+  let at = city != "" ? q : here == null ? null : here.available ? "${fixed(here.lat, 2)},${fixed(here.lon, 2)}" : ""
   // One request. Icons and °F countries match omarchy's weather panel.
-  source wx = http("https://wttr.in/${q}?format=j1") every 30m timeout 10s json
+  source wx = http(at == null ? null : "https://wttr.in/${int(at)}?format=j1") every 30m timeout 10s json
   let cur = wx.current_condition[0]
   let day = wx.weather[0]
   let area = wx.nearest_area[0]
@@ -274,7 +482,7 @@ widget "today" {
           gap: 0
           weight: 1
           Text { text: lower(fmtTime(now, "EEEE")); style: label; color: accent; maxLines: 1 }
-          Text { text: lower(fmtTime(now, "MMMM yyyy")); style: small; color: muted; maxLines: 1 }
+          Text { text: lower(fmtTime(now, str.monthYear)); style: small; color: muted; maxLines: 1 }
         }
       }
     }
@@ -347,6 +555,10 @@ widget "today" {
       text: city
       placeholder: str.city
       onSubmit: { city = trim(value); refresh() }
+    }
+    // Asked only from here: the tile never puts up Android's dialog on its own.
+    if here != null && !here.granted {
+      Text { text: str.here; style: body; color: accent; maxLines: 1; padding: [0, 6]; onTap: location("request") }
     }
     if cur == null {
       Text { text: wx == null ? str.loading : str.offline; style: body; color: muted }

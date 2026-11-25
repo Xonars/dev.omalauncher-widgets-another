@@ -5,10 +5,7 @@ app "Reader" {
   title: ""
   statusBar: false
   edge: true
-  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M24 13c-4-3-10-4-18-4v28c8 0 14 1 18 4 4-3 10-4 18-4V9c-8 0-14 1-18 4z"/>
-    <path d="M24 13v28"/>
-  </svg>"""
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect x=".5" y=".5" width="47" height="47" rx="9" fill="#19191d"/><rect x=".5" y=".5" width="47" height="47" rx="9" fill="currentColor" fill-opacity=".30" stroke="currentColor" stroke-opacity=".78"/><defs><g id="symbol"><path d="M24 13c-4-3-10-4-18-4v28c8 0 14 1 18 4 4-3 10-4 18-4V9c-8 0-14 1-18 4z"/><path d="M24 13v28"/></g></defs><g transform="translate(3.39 2.54) scale(0.859)" fill="none" stroke="#faf8f3" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.91"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g><g transform="translate(3.39 2.54) scale(0.859)" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.91" opacity=".16"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g></svg>"""
   requires { pacman: ["bash", "python", "python-beautifulsoup4", "python-requests", "python-pillow", "ttf-dejavu"] }
 
   // Self-contained source bundle: base64 + XZ-compressed JSON, not downloaded code.

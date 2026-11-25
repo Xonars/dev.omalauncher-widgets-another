@@ -1,0 +1,68 @@
+widget "focus" {
+  meta { description: "A pomodoro focus timer: start, stop and adjust in 5 minute steps"; version: "1.4"; license: "MIT"; category: "productivity"; owl: 16 }
+  size: 2x4
+  minSize: 2x2
+  padding: 0
+
+  source now = clock every 1s
+  state endsAt = 0
+  state length = 25 * 60
+  let left = endsAt > now ? endsAt - now : 0
+  let running = left > 0
+  let tileW = tileWidth ?? 188
+  let tileH = tileHeight ?? 246
+  let dial = max(38, min(tileW * 0.88, tileH - 64))
+  let quiet = mix(muted, foreground, 0.52)
+  let controlSize = clamp(round(tileW * 0.067), 10, 16)
+
+  component Control(label, tint, buttonWidth) {
+    Box {
+      width: buttonWidth
+      height: 28
+      radius: 0
+      border: 1
+      borderColor: tint
+      align: center
+      Text { text: label; font: mono; fontSize: controlSize; color: tint; align: center; maxLines: 1 }
+    }
+  }
+
+  Column {
+    fill: true
+    align: center
+    gap: 0
+    Box {
+      fill: width
+      weight: 1
+      align: center
+      Ring {
+        size: dial; thickness: max(4, dial * 0.045)
+        value: running ? clamp(left / length, 0, 1) : 1
+        color: running ? accent : quiet
+        track: alpha(muted, 0.22)
+        animate value: tween(900ms, "linear")
+      }
+      Text {
+        text: running ? "${pad(floor(left / 60), 2, "0")}:${pad(left % 60, 2, "0")}" : "${length / 60} min"
+        font: mono; fontSize: max(12, round(dial * 0.12)); align: center; maxLines: 1
+      }
+    }
+    Row {
+      gap: 6
+      justify: center
+      Box {
+        onTap: endsAt = running ? 0 : now + length
+        Control { label: running ? "stop" : "start"; tint: accent; buttonWidth: min(66, tileW * 0.3) }
+      }
+      Box {
+        onTap: length = max(length - 300, 300)
+        Control { label: "-5"; tint: quiet; buttonWidth: min(42, tileW * 0.18) }
+      }
+      Box {
+        onTap: length = min(length + 300, 3600)
+        Control { label: "+5"; tint: quiet; buttonWidth: min(42, tileW * 0.18) }
+      }
+    }
+    Spacer { height: min(11, tileH * 0.046) }
+  }
+}

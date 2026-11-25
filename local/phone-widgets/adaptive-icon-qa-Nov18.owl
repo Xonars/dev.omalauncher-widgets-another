@@ -1,0 +1,18 @@
+panel "Adaptive icon preview" {
+  meta { owl: 11 }
+  source d = android.drawer
+  let apps = d.apps.filter(a => a.kind == "owl")
+  Column {
+    fill: true
+    gap: 8
+    background: bg
+    for row in chunk(apps, 5) key row[0].key {
+      Row {
+        gap: 10
+        for a in row key a.key {
+          Image { src: a.icon; size: 48; label: a.label }
+        }
+      }
+    }
+  }
+}

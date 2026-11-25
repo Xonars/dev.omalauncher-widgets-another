@@ -1,5 +1,5 @@
 app "Cassette" {
-  meta { owl: 19; description: "Yandex Music client with search, library, downloads and Android media controls. English and Russian UI."; version: "1.11.2"; license: "MIT"; category: "media" }
+  meta { owl: 19; description: "Yandex Music and YouTube Music client with search, albums, downloads and Android media controls. English and Russian UI."; version: "1.16.1"; license: "MIT"; category: "media" }
   let backend = """
 #!/usr/bin/env python3
 '''Token-free mpv IPC bridge for Cassette OWL.'''
@@ -28,14 +28,15 @@ EMPTY_STATE = {'connected': False, 'idle': True, 'paused': False,
 
 def write_json(path, value):
     '''Atomically replace a small state file so readers never see half JSON.'''
-    temp = path.with_suffix(path.suffix + '.tmp')
+    temp = path.with_name(f'.{path.name}.{os.getpid()}.{time.time_ns()}.tmp')
     temp.write_text(json.dumps(value, ensure_ascii=False), encoding='utf-8')
     os.chmod(temp, 0o600)
     temp.replace(path)
 
 def read_json(path, fallback):
     try:
-        return json.loads(path.read_text(encoding='utf-8'))
+        value = json.loads(path.read_text(encoding='utf-8'))
+        return value if fallback is None or isinstance(value, type(fallback)) else fallback
     except (OSError, ValueError, json.JSONDecodeError):
         return fallback
 
@@ -53,7 +54,85 @@ def local_path(value):
 
 
 def download_name(value):
-    return ''.join(c for c in value if c.isalnum() or c in ' ._-')[:150].strip('.') or 'track'
+    clean = ''.join(c for c in str(value) if c.isalnum() or c in ' ._-')[:150]
+    return clean.encode('utf-8')[:150].decode('utf-8', errors='ignore').strip('.') or 'track'
+
+def yandex_destination(name, track, source=''):
+    identity = str(track.get('sourceId') or track.get('id') or '')
+    safe = ''.join(c for c in identity if c.isascii() and (c.isalnum() or c in '_-'))
+    if not safe or safe != identity or len(safe) > 48:
+        safe = hashlib.sha256((identity or source or name).encode()).hexdigest()[:24]
+    return MUSIC / (download_name(name) + ' [YM-' + safe + '].mp3')
+
+def budget_timeout(deadline, limit):
+    remaining = limit if deadline is None else min(limit, deadline - time.monotonic())
+    if remaining <= 0:
+        raise ValueError('Превышено время скачивания')
+    return remaining
+
+def validate_audio(path, timeout=20):
+    try:
+        result = subprocess.run(['ffprobe', '-v', 'error', '-select_streams', 'a:0',
+            '-show_entries', 'stream=codec_type', '-of', 'json', str(path)],
+            capture_output=True, text=True, check=True, timeout=timeout)
+        if not json.loads(result.stdout).get('streams'):
+            raise ValueError('Нет аудиодорожки')
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        raise ValueError('Получен некорректный аудиофайл') from exc
+
+def destination_lock(path):
+    return (CACHE / ('art-' + hashlib.sha256(str(path).encode()).hexdigest() + '.lock')).open('w')
+
+MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024
+MAX_DOWNLOAD_SECONDS = 300
+
+def download_track(args):
+    track = json.loads(args[3]) if len(args) > 3 else {}
+    if not isinstance(track, dict):
+        raise ValueError('Некорректные метаданные')
+    MUSIC.mkdir(parents=True, exist_ok=True)
+    dest = yandex_destination(args[2], track, args[1])
+    with destination_lock(dest) as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        deadline = time.monotonic() + MAX_DOWNLOAD_SECONDS
+        if not dest.is_file():
+            url = resolve(args[1])
+            temp = dest.with_name(f'.{dest.name}.{os.getpid()}.part')
+            opener = urllib.request.build_opener(YandexRedirect())
+            try:
+                with opener.open(url, timeout=budget_timeout(deadline, 30)) as response, temp.open('wb') as out:
+                    size = 0
+                    while True:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise ValueError('Превышено время скачивания')
+                        # read1 avoids accumulating 128 KiB from a trickling server.
+                        try:
+                            response.fp.raw._sock.settimeout(min(30, remaining))
+                        except AttributeError:
+                            pass
+                        chunk = getattr(response, 'read1', response.read)(131072)
+                        if time.monotonic() >= deadline:
+                            raise ValueError('Превышено время скачивания')
+                        if not chunk:
+                            break
+                        size += len(chunk)
+                        if size > MAX_DOWNLOAD_BYTES:
+                            raise ValueError('Слишком большой аудиофайл')
+                        out.write(chunk)
+                validate_audio(temp, timeout=budget_timeout(deadline, 20))
+                if time.monotonic() >= deadline:
+                    raise ValueError('Превышено время скачивания')
+                temp.replace(dest)
+            finally:
+                temp.unlink(missing_ok=True)
+        artwork_ok = False
+        if track:
+            try:
+                artwork_ok = _save_track_art(dest, track, deadline)
+            except Exception:
+                pass
+    print('Сохранено: ' + str(dest) + (' · с обложкой' if artwork_ok else ' · без обложки'))
 
 def save_track_art(path, track):
     lock_path = CACHE / ('art-' + hashlib.sha256(str(path).encode()).hexdigest() + '.lock')
@@ -61,7 +140,8 @@ def save_track_art(path, track):
         fcntl.flock(lock, fcntl.LOCK_EX)
         return _save_track_art(path, track)
 
-def _save_track_art(path, track):
+def _save_track_art(path, track, deadline=None):
+    budget_timeout(deadline, 20)
     # Public metadata only. Account credentials remain in Android's secret state.
     write_json(path.with_suffix('.json'), track)
     cover_uri = track.get('coverUri', '')
@@ -71,8 +151,22 @@ def _save_track_art(path, track):
     if not cover.is_file():
         address = 'https://' + cover_uri.replace('%%', '600x600')
         opener = urllib.request.build_opener(YandexRedirect())
-        with opener.open(trusted_url(address), timeout=20) as response:
-            data = response.read(4 * 1024 * 1024 + 1)
+        with opener.open(trusted_url(address), timeout=budget_timeout(deadline, 20)) as response:
+            chunks = []
+            size = 0
+            while size <= 4 * 1024 * 1024:
+                remaining = budget_timeout(deadline, 20)
+                try:
+                    response.fp.raw._sock.settimeout(remaining)
+                except AttributeError:
+                    pass
+                chunk = getattr(response, 'read1', response.read)(min(65536, 4 * 1024 * 1024 + 1 - size))
+                budget_timeout(deadline, 20)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                size += len(chunk)
+            data = b''.join(chunks)
         if len(data) > 4 * 1024 * 1024:
             raise ValueError('Слишком большая обложка')
         raw = cover.with_name(f'.{cover.name}.{os.getpid()}.raw')
@@ -82,7 +176,7 @@ def _save_track_art(path, track):
             subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', str(raw),
                             '-vf', 'scale=600:600:force_original_aspect_ratio=decrease',
                             '-frames:v', '1', str(image)],
-                           check=True, capture_output=True, timeout=30)
+                           check=True, capture_output=True, timeout=budget_timeout(deadline, 30))
             image.replace(cover)
         finally:
             raw.unlink(missing_ok=True)
@@ -100,7 +194,7 @@ def _save_track_art(path, track):
                         '-metadata', 'album=' + albums[0].get('title', ''),
                         '-metadata:s:v', 'title=Album cover',
                         '-metadata:s:v', 'comment=Cover (front)', str(tagged)],
-                       check=True, capture_output=True, timeout=45)
+                       check=True, capture_output=True, timeout=budget_timeout(deadline, 45))
         tagged.replace(path)
         os.utime(path, ns=(original.st_atime_ns, original.st_mtime_ns))
     finally:
@@ -113,35 +207,73 @@ def repair_downloads(tracks):
         tracks = [tracks]
     repaired = 0
     for track in tracks:
-        if not isinstance(track, dict) or not track.get('coverUri') or not isinstance(track.get('title'), str):
+        if not isinstance(track, dict) or track.get('provider') == 'youtube' or not track.get('coverUri') or not isinstance(track.get('title'), str):
             continue
         artists = ', '.join(a.get('name', '') for a in track.get('artists', []))
-        path = MUSIC / (download_name(artists + ' - ' + track.get('title', '')) + '.mp3')
-        if path.is_file() and (not path.with_suffix('.cover.jpg').is_file() or not read_json(path.with_suffix('.json'), {}).get('_artEmbedded')):
+        name = artists + ' - ' + track.get('title', '')
+        # Retain pre-stabilization filenames; never rename a user's library.
+        legacy = ''.join(c for c in name if c.isalnum() or c in ' ._-')[:150].strip('.') or 'track'
+        candidates = {yandex_destination(name, track), MUSIC / (legacy + '.mp3')}
+        for path in candidates:
             try:
-                repaired += int(save_track_art(path, track))
+                if path.is_file() and (not path.with_suffix('.cover.jpg').is_file() or not read_json(path.with_suffix('.json'), {}).get('_artEmbedded')):
+                    repaired += int(save_track_art(path, track))
             except Exception:
                 # Keep the downloaded audio playable even when artwork is offline.
                 pass
     return repaired
 
+def clean_metadata(value):
+    result = dict(value) if isinstance(value, dict) else {}
+    for key in ('title', 'coverUri', 'provider', 'sourceId', 'id'):
+        if key in result and not isinstance(result[key], (str, int)):
+            result.pop(key)
+    if 'title' in result and not isinstance(result['title'], str):
+        result.pop('title')
+    for key in ('artists', 'albums'):
+        entries = result.get(key)
+        result[key] = [entry for entry in entries if isinstance(entry, dict) and
+                       isinstance(entry.get('name' if key == 'artists' else 'title', ''), str)] if isinstance(entries, list) else []
+    return result
+
 def local_tracks():
     MUSIC.mkdir(mode=0o700, parents=True, exist_ok=True)
     tracks = []
+    # Persist probes across the short-lived status/library workers. Re-probe only changed files.
+    cached = read_json(CACHE / 'library-probes.json', {})
+    if not isinstance(cached, dict):
+        cached = {}
+    probes = {}
+    deadline = time.monotonic() + 4
     for path in sorted(MUSIC.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
         if not path.is_file() or path.suffix.lower() not in ('.mp3', '.m4a', '.ogg', '.opus', '.flac', '.wav'):
             continue
         stem = path.stem
         artist, title = (stem.split(' - ', 1) + [''])[:2] if ' - ' in stem else ('', stem)
-        try:
-            probe = subprocess.run(
-                ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
-                 '-of', 'default=noprint_wrappers=1:nokey=1', str(path)],
-                capture_output=True, text=True, timeout=5, check=False)
-            duration_ms = round(float(probe.stdout.strip() or 0) * 1000)
-        except (ValueError, subprocess.SubprocessError):
+        stat = path.stat()
+        stamp = [stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns]
+        kept = cached.get(path.name)
+        if (isinstance(kept, dict) and kept.get('stamp') == stamp and
+                type(kept.get('duration')) is int and kept['duration'] >= 0):
+            duration_ms = kept['duration']
+        elif time.monotonic() >= deadline:
+            # Fill the cache over several scans instead of timing out on a large library.
             duration_ms = 0
-        saved = read_json(path.with_suffix('.json'), {})
+            kept = None
+        else:
+            try:
+                probe = subprocess.run(
+                    ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+                     '-of', 'default=noprint_wrappers=1:nokey=1', str(path)],
+                    capture_output=True, text=True, timeout=3, check=True)
+                duration_ms = round(float(probe.stdout.strip() or 0) * 1000)
+                kept = {'stamp': stamp, 'duration': duration_ms}
+            except (OSError, ValueError, subprocess.SubprocessError):
+                duration_ms = 0
+                kept = None
+        if kept is not None:
+            probes[path.name] = kept
+        saved = clean_metadata(read_json(path.with_suffix('.json'), {}))
         cover = path.with_suffix('.cover.jpg')
         tracks.append({
             **saved,
@@ -149,11 +281,14 @@ def local_tracks():
             'coverPath': str(cover) if cover.is_file() else None,
             'id': 'local:' + path.name,
             'local': True,
+            '_wave': False,
             'path': str(path),
             'title': saved.get('title') or title or stem,
             'artists': saved.get('artists') or [{'name': artist or 'Локальный файл'}],
             'durationMs': duration_ms,
         })
+    if probes != cached:
+        write_json(CACHE / 'library-probes.json', probes)
     return tracks
 
 def ipc(command):
@@ -162,37 +297,68 @@ def ipc(command):
         sock.connect(SOCKET)
         sock.sendall((json.dumps({'command': command}) + '\n').encode())
         data = b''
-        while b'\n' not in data:
+        received = 0
+        deadline = time.monotonic() + 2
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError('Плеер не ответил')
+            sock.settimeout(remaining)
             part = sock.recv(65536)
             if not part:
                 raise RuntimeError('Плеер отключился')
+            received += len(part)
+            if received > 1024 * 1024:
+                raise RuntimeError('Слишком большой ответ плеера')
             data += part
-        for line in data.splitlines():
-            reply = json.loads(line)
-            if 'error' in reply:
-                if reply['error'] != 'success':
-                    return None
-                return reply.get('data')
+            while b'\n' in data:
+                line, data = data.split(b'\n', 1)
+                reply = json.loads(line)
+                if not isinstance(reply, dict):
+                    raise RuntimeError('Некорректный ответ плеера')
+                if 'error' in reply:
+                    if reply['error'] != 'success':
+                        raise RuntimeError('Плеер отклонил команду')
+                    return reply.get('data')
+
+def remove_extra_players(keep_pid=None):
+    # A replaced IPC socket can leave its old player running and audible.
+    for proc in Path('/proc').iterdir():
+        if not proc.name.isdigit() or int(proc.name) == keep_pid:
+            continue
+        try:
+            argv = (proc / 'cmdline').read_bytes().split(b'\0')
+            if (Path(os.fsdecode(argv[0])).name != 'mpv' or
+                    os.fsencode('--input-ipc-server=' + SOCKET) not in argv):
+                continue
+            os.kill(int(proc.name), 15)
+        except (OSError, ValueError):
+            continue
 
 def ensure_player():
-    try:
-        ipc(['get_property', 'idle-active'])
-        return
-    except (OSError, RuntimeError):
-        pass
-    # Several OWL actions can arrive together. Only one may start the daemon.
+    # Serialize both recovery and startup, including the socket health check.
     with LOCK.open('w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         try:
+            with socket.socket(socket.AF_UNIX) as owner:
+                owner.settimeout(2)
+                owner.connect(SOCKET)
+                import struct
+                player_pid = struct.unpack('3i', owner.getsockopt(
+                    socket.SOL_SOCKET, socket.SO_PEERCRED, 12))[0]
             ipc(['get_property', 'idle-active'])
-            return
         except (OSError, RuntimeError):
-            pass
+            player_pid = None
+        remove_extra_players(player_pid)
+        if player_pid is not None:
+            ipc(['set_property', 'keep-open', 'yes'])
+            return
         Path(SOCKET).unlink(missing_ok=True)
         subprocess.Popen(['mpv', '--idle=yes', '--no-video', '--no-terminal',
-            '--audio-display=no', '--ao=pulse', '--audio-device=pulse/android',
+            '--audio-display=no', '--keep-open=yes', '--ao=pulse', '--audio-device=pulse/android',
             '--audio-samplerate=48000', '--audio-buffer=1', '--pulse-buffer=500',
             '--demuxer-readahead-secs=15', '--cache-pause-wait=3',
+            '--demuxer-max-bytes=16MiB', '--demuxer-max-back-bytes=4MiB',
             '--input-ipc-server=' + SOCKET],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             start_new_session=True)
@@ -231,27 +397,316 @@ def resolve(url):
     digest = hashlib.md5(('XGRlBW9FXlekgbPrRHuSiA' + path.lstrip('/') + salt).encode()).hexdigest()
     return trusted_url(f'https://{host}/get-mp3/{digest}/{ts}/{path.lstrip("/")}')
 
+YT_ENV = Path.home() / '.local/share/cassette-youtube/venv'
+
+def dependency_health():
+    python = YT_ENV / 'bin/python'
+    packages = ['ytmusicapi', 'yt-dlp', 'requests']
+    missing = ['python'] + packages
+    if python.is_file():
+        script = ('import importlib.metadata as m,json\n'
+                  'missing=[]\n'
+                  'for name in ("ytmusicapi","yt-dlp","requests"):\n'
+                  ' try: m.version(name)\n'
+                  ' except m.PackageNotFoundError: missing.append(name)\n'
+                  'print(json.dumps(missing))')
+        try:
+            result = subprocess.run([str(python), '-I', '-c', script],
+                capture_output=True, text=True, timeout=8, check=True)
+            found = json.loads(result.stdout)
+            if isinstance(found, list) and all(name in packages for name in found):
+                missing = found
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
+    return {'youtube': {'ready': not missing, 'missing': missing}}
+
+def youtube_id(value):
+    import re
+    video = str(value).removeprefix('yt:')
+    if not re.fullmatch(r'[A-Za-z0-9_-]{11}', video):
+        raise ValueError('Недопустимый ID YouTube')
+    return video
+
+def yt_command():
+    binary = YT_ENV / 'bin/python'
+    if not binary.is_file():
+        raise ValueError('Не установлен модуль YouTube Music')
+    return [str(binary), '-m', 'yt_dlp', '--ignore-config', '--no-playlist',
+            '--js-runtimes', 'node', '--socket-timeout', '20', '--retries', '2']
+
+def yt_resolve(value):
+    video = youtube_id(value)
+    result = subprocess.run(yt_command() + ['-f', 'bestaudio/best', '-g',
+        'https://music.youtube.com/watch?v=' + video],
+        capture_output=True, text=True, timeout=100)
+    if result.returncode:
+        raise ValueError('YouTube не отдал аудио: возможны ограничения сети или требование входа')
+    url = result.stdout.strip().splitlines()[0]
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme != 'https' or not (parsed.hostname or '').endswith('.googlevideo.com'):
+        raise ValueError('YouTube вернул неизвестный адрес аудио')
+    return url
+
+def yt_download(track):
+    video = youtube_id(track['id'])
+    with (CACHE / ('yt-download-' + video + '.lock')).open('w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _yt_download(track)
+
+def _yt_download(track):
+    deadline = time.monotonic() + MAX_DOWNLOAD_SECONDS
+    video = youtube_id(track['id'])
+    MUSIC.mkdir(parents=True, exist_ok=True)
+    artist = ', '.join(a.get('name', '') for a in track.get('artists', []))
+    stem = download_name(artist + ' - ' + track.get('title', video)) + ' [YT-' + video + ']'
+    dest = MUSIC / (stem + '.mp3')
+    if not dest.is_file():
+        # A temporary directory keeps incomplete downloads out of the library.
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix='youtube-', dir=CACHE) as temp:
+            template = str(Path(temp) / 'audio.%(ext)s')
+            result = subprocess.run(yt_command() + ['--max-filesize', str(MAX_DOWNLOAD_BYTES), '-f', 'bestaudio/best', '-x',
+                '--audio-format', 'mp3', '--audio-quality', '0', '--embed-metadata',
+                '--embed-thumbnail', '--convert-thumbnails', 'jpg', '-o', template,
+                'https://music.youtube.com/watch?v=' + video],
+                capture_output=True, text=True, timeout=budget_timeout(deadline, 300))
+            audio = Path(temp) / 'audio.mp3'
+            if result.returncode or not audio.is_file():
+                raise ValueError('Не удалось скачать аудио YouTube. Проверьте сеть и доступность трека')
+            if audio.stat().st_size > MAX_DOWNLOAD_BYTES:
+                raise ValueError('Слишком большой аудиофайл')
+            validate_audio(audio, timeout=budget_timeout(deadline, 20))
+            import shutil
+            pending = dest.with_suffix('.part')
+            try:
+                shutil.copyfile(audio, pending)
+                budget_timeout(deadline, 20)
+                pending.replace(dest)
+            finally:
+                pending.unlink(missing_ok=True)
+    write_json(dest.with_suffix('.json'), {**track, 'sourceId': track['id'], '_artEmbedded': True})
+    cover = dest.with_suffix('.cover.jpg')
+    if not cover.is_file():
+        pending_cover = cover.with_name(f'.{cover.name}.{os.getpid()}.jpg')
+        try:
+            result = subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', str(dest),
+                '-map', '0:v:0', '-frames:v', '1', str(pending_cover)],
+                capture_output=True, timeout=budget_timeout(deadline, 30))
+            if result.returncode == 0 and pending_cover.is_file() and pending_cover.stat().st_size:
+                pending_cover.replace(cover)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
+        finally:
+            pending_cover.unlink(missing_ok=True)
+    return str(dest)
+
+def yt_catalog(request):
+    # The isolated environment keeps Python dependencies out of Arch's packages.
+    for site in (YT_ENV / 'lib').glob('python*/site-packages'):
+        sys.path.insert(0, str(site))
+    from ytmusicapi import YTMusic
+    import requests
+    class Session(requests.Session):
+        def request(self, *args, **kwargs):
+            kwargs.setdefault('timeout', 20)
+            return super().request(*args, **kwargs)
+    api = YTMusic(language='en', requests_session=Session())
+    def cover(item):
+        images = item.get('thumbnails') or []
+        return str(images[-1].get('url', '')).removeprefix('https://') if images else None
+    def artists(item, fallback=None):
+        result = item.get('artists') or fallback or []
+        if not result:
+            result = [{'name': item.get('artist') or item.get('author') or 'YouTube Music'}]
+        return [{'id': a.get('id'), 'name': a.get('name', '')} for a in result if isinstance(a, dict)]
+    def track(item, album=None, default_artists=None, default_cover=None):
+        album_ref = item.get('album') if isinstance(item.get('album'), dict) else album
+        duration = item.get('duration_seconds')
+        if duration is None:
+            try:
+                duration = 0
+                for part in str(item.get('duration') or '0').split(':'):
+                    duration = duration * 60 + int(part)
+            except ValueError:
+                duration = 0
+        return {'id': 'yt:' + item['videoId'], 'videoId': item['videoId'],
+                'provider': 'youtube', 'title': item.get('title') or 'YouTube',
+                'artists': artists(item, default_artists),
+                'coverUri': cover(item) or default_cover,
+                'durationMs': int(duration or 0) * 1000,
+                'available': item.get('isAvailable', True),
+                'albums': [{'id': album_ref.get('id'), 'title': album_ref.get('name', '')}] if album_ref else []}
+    def album_item(item):
+        return {'id': item.get('browseId'), 'title': item.get('title', ''),
+                'coverUri': cover(item), 'year': item.get('year', ''),
+                'trackCount': item.get('trackCount'), 'artists': artists(item)}
+    def wrap(value):
+        return {'ok': True, 'code': 200, 'out': {'result': value}}
+    result = {}
+    collection = request.get('collection') or ''
+    artist_id = request.get('artist') or ''
+    if collection:
+        if request.get('owner'):
+            data = api.get_playlist(collection, limit=500)
+            result['playlist'] = wrap({'title': data.get('title'), 'tracks': [
+                {'track': track(t)} for t in data.get('tracks', []) if t.get('videoId')]})
+        else:
+            data = api.get_album(collection)
+            ref = {'id': collection, 'name': data.get('title', '')}
+            tracks = [track(t, ref, data.get('artists'), cover(data)) for t in data.get('tracks', []) if t.get('videoId')]
+            result['album'] = wrap({**album_item(data), 'volumes': [tracks]})
+    elif artist_id:
+        data = api.get_artist(artist_id)
+        result['artistInfo'] = wrap({'artist': {'name': data.get('name'), 'cover': {'uri': cover(data)}}})
+        result['artistTracks'] = wrap({'tracks': [track(t, default_artists=[{'id': artist_id, 'name': data.get('name', '')}]) for t in (data.get('songs') or {}).get('results', []) if t.get('videoId')]})
+        if request.get('section') == 'albums':
+            section = data.get('albums') or {}
+            items = section.get('results', [])
+            page = int(request.get('page', 0))
+            if section.get('browseId') and section.get('params'):
+                items = api.get_artist_albums(section['browseId'], section['params'], limit=(page + 1) * 20 + 1)
+            result['artistAlbums'] = wrap({'albums': [album_item(a) for a in items[page * 20:(page + 1) * 20]]})
+    elif request.get('query'):
+        kind = request.get('kind', 'track')
+        filter_kind = {'track': 'songs', 'album': 'albums', 'artist': 'artists', 'playlist': 'playlists'}[kind]
+        items = api.search(request['query'], filter=filter_kind, limit=30)[:30]
+        if kind == 'track':
+            items = [track(t) for t in items if t.get('videoId')]
+        elif kind == 'album':
+            items = [album_item(a) for a in items if a.get('browseId')]
+        elif kind == 'artist':
+            items = [{'id': a.get('browseId'), 'name': a.get('artist') or a.get('title'), 'coverUri': cover(a)} for a in items if a.get('browseId')]
+        else:
+            items = [{'kind': a.get('playlistId') or str(a.get('browseId', '')).removeprefix('VL'), 'owner': {'uid': 'youtube'}, 'title': a.get('title')} for a in items]
+        key = {'track': 'tracks', 'album': 'albums', 'artist': 'artists', 'playlist': 'playlists'}[kind]
+        result['search'] = wrap({key: {'results': items}})
+    return result
+
+
+def load_track(target, details=None, request_id=None):
+    # Keep a status snapshot consistent with the file and metadata being loaded.
+    with (CACHE / 'playback-state.lock').open('w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if request_id is not None and read_json(CACHE / 'play-request.json', {}).get('request') != request_id:
+            return
+        ipc(['loadfile', target, 'replace'])
+        ipc(['set_property', 'pause', False])
+        if details is not None:
+            write_json(NOW_PLAYING, details)
+        ERROR.unlink(missing_ok=True)
+
 def main(args):
+    # Allocate generations and read replay metadata under the same lock used by
+    # load, stop and status. Slow URL resolution happens outside this lock.
+    if args and args[0] in ('play', 'play-youtube', 'play-local', 'replay', 'stop'):
+        import uuid
+        request_id = uuid.uuid4().hex
+        with (CACHE / 'playback-state.lock').open('w') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            write_json(CACHE / 'play-request.json', {'request': request_id})
+            replay_track = read_json(NOW_PLAYING, {}) if args[0] == 'replay' else None
+            ERROR.unlink(missing_ok=True)
+        try:
+            return _main(args, request_id, replay_track)
+        except Exception as exc:
+            with (CACHE / 'playback-state.lock').open('w') as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                if read_json(CACHE / 'play-request.json', {}).get('request') == request_id:
+                    write_json(ERROR, {'error': 'Ошибка аудио: ' + type(exc).__name__})
+            raise
+    return _main(args)
+
+def _main(args, request_id=None, replay_track=None):
     if not args:
         raise ValueError('Не указана команда')
     action = args[0]
+    if action == 'health':
+        print(json.dumps(dependency_health()))
+        return
+    if action == 'launch-job':
+        subprocess.Popen([sys.executable, '-c', args[1], 'run-job', args[2]],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, start_new_session=True)
+        return
+    if action == 'run-job':
+        import contextlib
+        import io
+        job = json.loads(args[1])
+        output = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(output):
+                main([job['action']] + [str(a) for a in job.get('args', [])])
+            message = output.getvalue().strip()
+        except Exception as exc:
+            message = ('Ошибка аудио: ' + type(exc).__name__)[:160]
+        if job.get('slot'):
+            subprocess.run(['owl-send', 'market-app-xonars-xonars-cassette.owl', 'set', job['slot'], message],
+                timeout=10, capture_output=True)
+        return
+    if action == 'yt-catalog':
+        try:
+            print(json.dumps({**yt_catalog(json.loads(args[1])), '_request': args[1]}, ensure_ascii=False))
+        except Exception as exc:
+            print(json.dumps({'_request': args[1], 'error': 'YouTube Music: не удалось загрузить каталог (' + type(exc).__name__ + ')'}))
+        return
+    if action == 'yt-download':
+        print('Сохранено: ' + yt_download(json.loads(args[1])))
+        return
+    if action == 'batch-track':
+        import contextlib
+        import io
+        result = {'index': int(args[1]), 'ok': False}
+        if len(args) > 5:
+            result['job'] = str(args[5])
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                if args[2].startswith('yt:'):
+                    yt_download(json.loads(args[4]))
+                else:
+                    main(['download'] + args[2:5])
+            result['ok'] = True
+        except Exception as exc:
+            # Exception text may contain signed URLs. Publish type only, bounded.
+            result['error'] = ('Не удалось скачать: ' + type(exc).__name__)[:160]
+        print(json.dumps(result))
+        return
     if action == 'cache-metadata':
         print(repair_downloads(json.loads(args[1])))
+        return
+    if action == 'delete-local':
+        try:
+            path = local_path(args[1])
+            path.unlink(missing_ok=True)
+            for suffix in ('.json', '.cover.jpg'):
+                path.with_suffix(suffix).unlink(missing_ok=True)
+            print(json.dumps({'ok': True}))
+        except (OSError, ValueError):
+            print(json.dumps({'ok': False}))
         return
     if action == 'library':
         print(json.dumps(local_tracks(), ensure_ascii=False))
         return
     if action == 'status':
-        try:
-            state = {k: ipc(['get_property', prop]) for k, prop in
-                [('idle', 'idle-active'), ('paused', 'pause'), ('position', 'time-pos'),
-                 ('duration', 'duration'), ('volume', 'volume'), ('path', 'path')]}
-            state.pop('path', None)
-            state['connected'] = True
-        except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
-            state = dict(EMPTY_STATE)
-        state.update(read_json(NOW_PLAYING, {}))
-        state['error'] = read_json(ERROR, {}).get('error', '')
+        with (CACHE / 'playback-state.lock').open('w') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            try:
+                state = dict(EMPTY_STATE)
+                state['idle'] = ipc(['get_property', 'idle-active'])
+                state['paused'] = ipc(['get_property', 'pause'])
+                for key, prop, default in [('eof', 'eof-reached', False),
+                        ('position', 'time-pos', 0), ('duration', 'duration', 0),
+                        ('volume', 'volume', 100)]:
+                    try:
+                        value = ipc(['get_property', prop])
+                        state[key] = default if value is None else value
+                    except RuntimeError:
+                        state[key] = default
+                state['connected'] = True
+            except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
+                state = dict(EMPTY_STATE)
+            details = read_json(NOW_PLAYING, {})
+            state.update({key: details[key] for key in ('id', 'title', 'artist', 'cover', 'local', 'source') if key in details})
+            state['error'] = read_json(ERROR, {}).get('error', '')
         print(json.dumps(state, ensure_ascii=False))
         return
     if action == 'resolve':
@@ -267,30 +722,30 @@ def main(args):
         return
     ensure_player()
     if action == 'replay':
-        track = read_json(NOW_PLAYING, {})
+        track = replay_track or {}
         source = track.get('source')
         if not source:
             raise ValueError('Нет трека для повторного воспроизведения')
-        target = str(local_path(source)) if track.get('local') else resolve(source)
-        ipc(['loadfile', target, 'replace'])
-        ipc(['set_property', 'pause', False])
-    elif action == 'play':
+        target = str(local_path(source)) if track.get('local') else yt_resolve(source) if source.startswith('yt:') else resolve(source)
+        load_track(target, track, request_id)
+    elif action in ('play', 'play-youtube'):
         if len(args) < 2:
             raise ValueError('Не указан адрес аудио')
-        url = resolve(args[1])
-        ipc(['loadfile', url, 'replace'])
-        ipc(['set_property', 'pause', False])
-        write_json(NOW_PLAYING, metadata(args))
+        url = yt_resolve(args[1]) if action == 'play-youtube' else resolve(args[1])
+        if read_json(CACHE / 'play-request.json', {}).get('request') != request_id:
+            return
+        load_track(url, metadata(args), request_id)
     elif action == 'play-local':
         if len(args) < 2:
             raise ValueError('Не указан локальный файл')
-        ipc(['loadfile', str(local_path(args[1])), 'replace'])
-        ipc(['set_property', 'pause', False])
-        write_json(NOW_PLAYING, metadata(args, local=True))
+        load_track(str(local_path(args[1])), metadata(args, local=True), request_id)
     elif action == 'toggle':
         ipc(['cycle', 'pause'])
     elif action == 'play-control':
-        ipc(['set_property', 'pause', False])
+        if ipc(['get_property', 'eof-reached']):
+            main(['replay'])
+        else:
+            ipc(['set_property', 'pause', False])
     elif action == 'pause-control':
         ipc(['set_property', 'pause', True])
     elif action == 'seek':
@@ -302,47 +757,37 @@ def main(args):
             raise ValueError('Не указана громкость')
         ipc(['set_property', 'volume', max(0, min(100, float(args[1])))])
     elif action == 'stop':
-        ipc(['stop'])
-        NOW_PLAYING.unlink(missing_ok=True)
+        with (CACHE / 'playback-state.lock').open('w') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if read_json(CACHE / 'play-request.json', {}).get('request') == request_id:
+                ipc(['stop'])
+                NOW_PLAYING.unlink(missing_ok=True)
+                ERROR.unlink(missing_ok=True)
     elif action == 'download':
-        url = resolve(args[1])
-        target = MUSIC
-        target.mkdir(parents=True, exist_ok=True)
-        name = download_name(args[2])
-        dest = target / (name + '.mp3')
-        temp = dest.with_name(f'.{dest.name}.{os.getpid()}.part')
-        opener = urllib.request.build_opener(YandexRedirect())
-        try:
-            with opener.open(url, timeout=30) as response, temp.open('wb') as out:
-                while chunk := response.read(131072):
-                    out.write(chunk)
-            temp.replace(dest)
-        finally:
-            temp.unlink(missing_ok=True)
-        artwork_ok = False
-        if len(args) > 3:
-            try:
-                artwork_ok = save_track_art(dest, json.loads(args[3]))
-            except Exception:
-                pass
-        print('Сохранено: ' + str(dest) + (' · с обложкой' if artwork_ok else ' · без обложки'))
+        download_track(args)
     else:
         raise ValueError('Неизвестная команда')
-    ERROR.unlink(missing_ok=True)
 
 if __name__ == '__main__':
     try:
         main(sys.argv[1:])
     except Exception as exc:
         # Never expose signed media URLs in UI or logs.
-        message = 'Ошибка аудио: ' + (str(exc) if isinstance(exc, ValueError) else type(exc).__name__)
-        write_json(ERROR, {'error': message})
-        print(message, file=sys.stderr)
-        raise SystemExit(1)
+        message = ('Ошибка аудио: ' + type(exc).__name__)[:160]
+        if len(sys.argv) > 1 and sys.argv[1] in ('yt-download', 'download'):
+            print(message)
+        else:
+            if len(sys.argv) < 2 or sys.argv[1] not in ('play', 'play-youtube', 'play-local', 'replay', 'stop'):
+                write_json(ERROR, {'error': message})
+            print(message, file=sys.stderr)
+            raise SystemExit(1)
 """
-  requires { pacman: ["python", "mpv", "ffmpeg"] }
+  requires { pacman: ["python", "mpv", "ffmpeg", "nodejs"] }
   title: ""
-  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="9" width="42" height="30" rx="4"/><circle cx="15" cy="22" r="5"/><circle cx="33" cy="22" r="5"/><path d="M20 22h8M11 39l4-9h18l4 9"/></svg>"""
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect x=".5" y=".5" width="47" height="47" rx="9" fill="#19191d"/><rect x=".5" y=".5" width="47" height="47" rx="9" fill="currentColor" fill-opacity=".30" stroke="currentColor" stroke-opacity=".78"/><defs><g id="symbol"><rect x="3" y="9" width="42" height="30" rx="4"/><circle cx="15" cy="22" r="5"/><circle cx="33" cy="22" r="5"/><path d="M20 22h8M11 39l4-9h18l4 9"/></g></defs><g transform="translate(6.11 6.11) scale(0.746)" fill="none" stroke="#faf8f3" stroke-linecap="round" stroke-linejoin="round" stroke-width="3.35"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g><g transform="translate(6.11 6.11) scale(0.746)" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="3.35" opacity=".16"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g></svg>"""
+  let ytPython = "/root/.local/share/cassette-youtube/venv/bin/python"
+  state provider = "yandex" persist
+  let youtube = provider == "youtube"
   state token = null secret
   state language = "ru" persist
   let english = language == "en"
@@ -355,65 +800,183 @@ if __name__ == '__main__':
   state heading = ""
   state artistId = ""
   state artistName = ""
+  state artistSection = "tracks"
+  state albumPage = 0
+  state batchGeneration = 0
+  state batchTracks = []
+  state batchIndex = -1
+  state batchBusy = false
+  state batchResult = null
+  state batchSaved = 0
+  state batchFailed = 0
   state waveRequest = 0
+  state waveTicket = 0
+  state wave = null
+  state waveDraining = false
+  state waveBusy = false
+  state waveSession = ""
+  state waveCreating = false
+  state waveRestart = false
+  state waveReplace = false
+  state waveTracks = []
+  state waveSeen = [] persist
+  state waveTarget = 20
+  state waveEmptyBatches = 0
+  state waveError = ""
+  state waveWaiting = false
+  state waveStartedKey = ""
+  state waveEndedKey = ""
+  state waveAnnounced = []
+  source waveClock = clock every 1s
   state queue = []
   state index = -1
   state repeatMode = false persist
   state mixed = false
   state message = ""
+  state mutationDraining = false
   state mutation = null
   state likePendingId = ""
   state likePendingAdd = false
   state likedPage = 0
+  state playRequest = 0
+  state playbackDeadline = 0
+  state verifiedAudioId = ""
+  state verifiedAudioURL = ""
+  state verifiedAudioInfo = null
+  state playbackEpoch = 0
+  state downloadTrack = null
+  state downloadEpoch = 0
+  state downloadBefore = null
+  state downloadReplyId = ""
   state loadedId = ""
   state ready = false
   state wasPlaying = false
   state playerView = false
+  state deleteTrack = null
+  state deleteConfirm = false
+  state deleteResult = null
   state trackMenu = false
   state artworkAttempted = []
   state sessionRunning = false
   state mediaControl = null
-  source account = http(token == null ? null : "https://api.music.yandex.net/account/status", {Authorization: "OAuth ${token}"}) json status
-  let uid = account.out.result.account.uid
-  source search = http(token == null || query == "" ? null : "https://api.music.yandex.net/search?text=${enc(query)}&type=${enc(kind)}&page=0", {Authorization: "OAuth ${token}"}) json status
-  source likes = http(uid == null ? null : "https://api.music.yandex.net/users/${enc(uid)}/likes/tracks", {Authorization: "OAuth ${token}"}) json status
+  source account = http(youtube || token == null ? null : "https://api.music.yandex.net/account/status", {Authorization: "OAuth ${token}"}) json status
+  let uid = token == null ? null : account.out.result.account.uid
+  source yandexSearch = http(youtube || token == null || query == "" ? null : "https://api.music.yandex.net/search?text=${enc(query)}&type=${enc(kind)}&page=0", {Authorization: "OAuth ${token}"}) json status
+  source likes = http(youtube || uid == null ? null : "https://api.music.yandex.net/users/${enc(uid)}/likes/tracks", {Authorization: "OAuth ${token}"}) json status
   let allLikedIds = (likes.out.result.library.tracks ?? []).map(t => str(t.id))
   let likedIds = allLikedIds.drop(likedPage * 150).take(150)
-  source likedTracks = http(uid == null || len(likedIds) == 0 ? null : "https://api.music.yandex.net/tracks?track-ids=${enc(join(likedIds, ","))}", {Authorization: "OAuth ${token}"}) json status
-  source playlists = http(uid == null ? null : "https://api.music.yandex.net/users/${enc(uid)}/playlists/list", {Authorization: "OAuth ${token}"}) json status
-  source playlist = http(collection == "" || owner == "" ? null : "https://api.music.yandex.net/users/${enc(owner)}/playlists/${enc(collection)}", {Authorization: "OAuth ${token}"}) json status
-  source album = http(collection == "" || owner != "" ? null : "https://api.music.yandex.net/albums/${enc(collection)}/with-tracks", {Authorization: "OAuth ${token}"}) json status
-  source artistInfo = http(artistId == "" ? null : "https://api.music.yandex.net/artists/${enc(artistId)}/brief-info", {Authorization: "OAuth ${token}"}) json status
-  source artistTracks = http(artistId == "" ? null : "https://api.music.yandex.net/artists/${enc(artistId)}/tracks?page=0&page-size=100", {Authorization: "OAuth ${token}"}) json status
-  source wave = http(token == null || tab != "Волна" || waveRequest == 0 ? null : "https://api.music.yandex.net/rotor/station/user:onyourwave/tracks?settings2=true&reload=${int(waveRequest)}", {Authorization: "OAuth ${token}"}) json status
+  source likedTracks = http(youtube || uid == null || len(likedIds) == 0 ? null : "https://api.music.yandex.net/tracks?track-ids=${enc(join(likedIds, ","))}", {Authorization: "OAuth ${token}"}) json status
+  source playlists = http(youtube || uid == null ? null : "https://api.music.yandex.net/users/${enc(uid)}/playlists/list", {Authorization: "OAuth ${token}"}) json status
+  source yandexPlaylist = http(youtube || collection == "" || owner == "" ? null : "https://api.music.yandex.net/users/${enc(owner)}/playlists/${enc(collection)}", {Authorization: "OAuth ${token}"}) json status
+  source yandexAlbum = http(youtube || collection == "" || owner != "" ? null : "https://api.music.yandex.net/albums/${enc(collection)}/with-tracks", {Authorization: "OAuth ${token}"}) json status
+  source yandexArtistInfo = http(youtube || artistId == "" ? null : "https://api.music.yandex.net/artists/${enc(artistId)}/brief-info", {Authorization: "OAuth ${token}"}) json status
+  source yandexArtistTracks = http(youtube || artistId == "" ? null : "https://api.music.yandex.net/artists/${enc(artistId)}/tracks?page=0&page-size=100", {Authorization: "OAuth ${token}"}) json status
+  source yandexArtistAlbums = http(youtube || artistId == "" || collection != "" || artistSection != "albums" ? null : "https://api.music.yandex.net/artists/${enc(artistId)}/direct-albums?page=${int(albumPage)}&page-size=20&sort-by=year", {Authorization: "OAuth ${token}"}) json status
+  let ytRequest = toJson({query: query, kind: kind, collection: collection, owner: owner, artist: artistId, section: artistSection, page: albumPage})
+  source ytCatalog = cmd(youtube ? "${sh(ytPython)} -c ${sh(backend)} yt-catalog ${sh(ytRequest)}" : ":") every 10m json timeout 120s status
+  let ytCatalogReady = ytCatalog.out._request == ytRequest
+  let search = youtube ? (ytCatalogReady ? ytCatalog.out.search : null) : yandexSearch
+  let playlist = youtube ? (ytCatalogReady ? ytCatalog.out.playlist : null) : yandexPlaylist
+  let album = youtube ? (ytCatalogReady ? ytCatalog.out.album : null) : yandexAlbum
+  let artistInfo = youtube ? (ytCatalogReady ? ytCatalog.out.artistInfo : null) : yandexArtistInfo
+  let artistTracks = youtube ? (ytCatalogReady ? ytCatalog.out.artistTracks : null) : yandexArtistTracks
+  let artistAlbums = youtube ? (ytCatalogReady ? ytCatalog.out.artistAlbums : null) : yandexArtistAlbums
+  let batchTrack = batchIndex >= 0 && batchIndex < len(batchTracks) ? batchTracks[batchIndex] : null
+  source batchInfo = http(token == null || batchTrack.provider == "youtube" || batchTrack == null || batchBusy ? null : "https://api.music.yandex.net/tracks/${enc(batchTrack.id)}/download-info", {Authorization: "OAuth ${token}"}) json status
+  let batchAudio = (batchInfo.out.result ?? []).filter(d => d.codec == "mp3").sortBy(d => -d.bitrateInKbps)[0]
+  source dependencyHealth = cmd(youtube && tab == "Настройки" ? "python -c ${sh(backend)} health" : ":") every 30s json timeout 10s
   source player = cmd("python -c ${sh(backend)} status") every 1s json
-  source localTracks = cmd("python -c ${sh(backend)} library") every 30s json
-  let artworkCandidates = (localTracks ?? []).filter(t => t.coverPath == null && !contains(artworkAttempted, t.id))
+  source localTracks = cmd("python -c ${sh(backend)} library") every 30s json timeout 30s
+  let artworkCandidates = (localTracks ?? []).filter(t => t.provider != "youtube" && t.coverPath == null && !contains(artworkAttempted, t.id))
   let artworkCandidate = artworkCandidates[0]
-  source artworkLookup = http(token == null || artworkCandidate == null ? null : "https://api.music.yandex.net/search?text=${enc(join((artworkCandidate.artists ?? []).map(a => a.name), ", ") + " " + artworkCandidate.title)}&type=track&page=0", {Authorization: "OAuth ${token}"}) json status
-  let current = queue[index]
+  source artworkLookup = http(youtube || token == null || artworkCandidate.provider == "youtube" || artworkCandidate == null ? null : "https://api.music.yandex.net/search?text=${enc(join((artworkCandidate.artists ?? []).map(a => a.name), ", ") + " " + artworkCandidate.title)}&type=track&page=0", {Authorization: "OAuth ${token}"}) json status
+  let current = index >= 0 && index < len(queue) ? queue[index] : null
   let currentDetails = current.local ? ((localTracks ?? []).filter(t => t.id == current.id)[0] ?? current) : current
   let currentSongId = current.local ? currentDetails.sourceId : current.id
-  let currentSongLink = currentSongId == null ? "" : currentDetails.albums[0].id != null ? "https://music.yandex.ru/album/${enc(currentDetails.albums[0].id)}/track/${enc(split(str(currentSongId), ":")[0])}" : "https://music.yandex.ru/track/${enc(split(str(currentSongId), ":")[0])}"
+  let currentSongLink = currentSongId == null ? "" : currentDetails.provider == "youtube" ? "https://music.youtube.com/watch?v=${enc(replace(str(currentSongId), "yt:", ""))}" : currentDetails.albums[0].id != null ? "https://music.yandex.ru/album/${enc(currentDetails.albums[0].id)}/track/${enc(split(str(currentSongId), ":")[0])}" : "https://music.yandex.ru/track/${enc(split(str(currentSongId), ":")[0])}"
   let currentArt = currentDetails.coverPath
   let currentArtist = join((current.artists ?? []).map(a => a.name), ", ")
   let currentCover = currentDetails.coverUri == null ? "" : "https://${replace(currentDetails.coverUri, "%%", "600x600")}"
   let currentLiked = current.id != null && (likePendingId == str(current.id) ? likePendingAdd : contains(allLikedIds, str(current.id)))
-  source download = http(current.id == null || str(current.id) == "" || current.local ? null : "https://api.music.yandex.net/tracks/${enc(current.id)}/download-info", {Authorization: "OAuth ${token}"}) json status
-  let audio = (download.out.result ?? []).filter(d => d.codec == "mp3").sortBy(d => -d.bitrateInKbps)[0]
-  let rows = artistId != "" ? (artistTracks.out.result.tracks ?? []) : collection != "" ? (owner != "" ? (playlist.out.result.tracks ?? []).map(t => t.track) : flatten(album.out.result.volumes ?? [])) : tab == "Любимое" ? (likedTracks.out.result ?? []) : tab == "Очередь" ? queue : tab == "Скачанное" ? (localTracks ?? []) : tab == "Волна" ? (wave.out.result.sequence ?? []).map(t => t.track) : (search.out.result.tracks.results ?? [])
-  let rowsLoading = artistId != "" ? artistInfo == null || artistTracks == null : collection != "" ? (owner != "" ? playlist == null : album == null) : tab == "Любимое" ? likes == null || len(likedIds) > 0 && likedTracks == null : tab == "Скачанное" ? localTracks == null : tab == "Волна" ? waveRequest != 0 && wave == null : tab == "Поиск" && query != "" ? search == null : false
+  // Keep the HTTP target immutable until its reply is drained. The host does
+  // not tag responses, so never pair a late reply with the current selection.
+  // The local fragment changes the source key for same-ID retries, not the API request.
+  source download = http(token == null || downloadTrack == null || download != downloadBefore ? null : "https://api.music.yandex.net/tracks/${enc(downloadTrack.id)}/download-info#cassette-${int(downloadEpoch)}", {Authorization: "OAuth ${token}"}) every 24h json status
+  let audio = verifiedAudioId == str(current.id) ? verifiedAudioInfo : null
+  let rows = artistId != "" && collection == "" ? (artistTracks.out.result.tracks ?? []) : collection != "" ? (owner != "" ? (playlist.out.result.tracks ?? []).map(t => t.track) : flatten(album.out.result.volumes ?? [])) : tab == "Любимое" ? (likedTracks.out.result ?? []) : tab == "Очередь" ? queue : tab == "Скачанное" ? (localTracks ?? []) : tab == "Волна" ? waveTracks : (search.out.result.tracks.results ?? [])
+  // Bound local artwork subscriptions; leave the complete list available to playback.
+  state rowPage = 0
+  let rowPageLimit = max(0, int((len(rows) - 1) / 20))
+  let visibleRows = rows.drop(rowPage * 20).take(20)
+  let rowContext = {tab: tab, provider: provider, collection: collection, artist: artistId, section: artistSection, query: query, kind: kind, liked: likedPage}
+  on rowContext { rowPage = 0 }
+  on rowPageLimit first { rowPage = min(rowPage, value) }
+  let rowsLoading = youtube ? !ytCatalogReady : artistId != "" && collection == "" ? (artistSection == "albums" ? artistAlbums == null : artistInfo == null || artistTracks == null) : collection != "" ? (owner != "" ? playlist == null : album == null) : tab == "Любимое" ? likes == null || len(likedIds) > 0 && likedTracks == null : tab == "Скачанное" ? localTracks == null : tab == "Волна" ? waveBusy : tab == "Поиск" && query != "" ? search == null : false
   let emptyHint = artistId != "" ? (english ? "No tracks available for this artist" : "У исполнителя нет доступных треков") : tab == "Очередь" ? (english ? "The queue is empty — add tracks with +" : "Очередь пуста — добавьте треки через +") : tab == "Скачанное" ? (english ? "Downloaded tracks will appear here" : "Здесь появятся сохранённые треки") : tab == "Любимое" ? (english ? "No liked tracks yet" : "В избранном пока нет треков") : tab == "Волна" ? (english ? "No recommendations available" : "Не удалось подобрать музыку") : (english ? "Enter a search to find music" : "Введите запрос, чтобы найти музыку")
-  let apiError = account != null && !account.ok ? (english ? "Sign-in failed: HTTP ${account.code}. Check your token and connection." : "Вход не выполнен: HTTP ${account.code}. Проверьте токен и доступность сервиса.") : account.out.error != null ? "${account.out.error.message}" : ""
-  let contentError = artistId != "" && artistInfo != null && !artistInfo.ok ? (english ? "Could not load artist · HTTP ${artistInfo.code}" : "Не удалось загрузить исполнителя · HTTP ${artistInfo.code}") : artistId != "" && artistTracks != null && !artistTracks.ok ? (english ? "Could not load artist tracks · HTTP ${artistTracks.code}" : "Не удалось загрузить треки исполнителя · HTTP ${artistTracks.code}") : collection != "" && owner != "" && playlist != null && !playlist.ok ? (english ? "Could not load playlist · HTTP ${playlist.code}" : "Не удалось загрузить плейлист · HTTP ${playlist.code}") : collection != "" && owner == "" && album != null && !album.ok ? (english ? "Could not load album · HTTP ${album.code}" : "Не удалось загрузить альбом · HTTP ${album.code}") : tab == "Волна" && wave != null && !wave.ok ? (english ? "My Wave is unavailable · HTTP ${wave.code}" : "Моя волна сейчас недоступна · HTTP ${wave.code}") : tab == "Любимое" && likes != null && !likes.ok ? (english ? "Could not read likes · HTTP ${likes.code}" : "Не удалось прочитать любимое · HTTP ${likes.code}") : tab == "Любимое" && likedTracks != null && !likedTracks.ok ? (english ? "Could not load liked tracks · HTTP ${likedTracks.code}" : "Не удалось загрузить любимое · HTTP ${likedTracks.code}") : tab == "Плейлисты" && playlists != null && !playlists.ok ? (english ? "Could not load playlists · HTTP ${playlists.code}" : "Не удалось загрузить плейлисты · HTTP ${playlists.code}") : tab == "Поиск" && search != null && !search.ok ? (english ? "Search unavailable · HTTP ${search.code}" : "Поиск недоступен · HTTP ${search.code}") : ""
+  let apiError = youtube ? ((ytCatalogReady ? ytCatalog.out.error : null) ?? (!ytCatalog.ok && ytCatalog != null ? "YouTube Music: ошибка загрузки" : "")) : account != null && !account.ok ? (english ? "Sign-in failed: HTTP ${account.code}. Check your token and connection." : "Вход не выполнен: HTTP ${account.code}. Проверьте токен и доступность сервиса.") : account.out.error != null ? "${account.out.error.message}" : ""
+  let contentError = youtube ? "" : artistId != "" && collection == "" && artistSection == "albums" && artistAlbums != null && !artistAlbums.ok ? (english ? "Could not load albums · HTTP ${artistAlbums.code}" : "Не удалось загрузить альбомы · HTTP ${artistAlbums.code}") : artistId != "" && artistInfo != null && !artistInfo.ok ? (english ? "Could not load artist · HTTP ${artistInfo.code}" : "Не удалось загрузить исполнителя · HTTP ${artistInfo.code}") : artistId != "" && artistTracks != null && !artistTracks.ok ? (english ? "Could not load artist tracks · HTTP ${artistTracks.code}" : "Не удалось загрузить треки исполнителя · HTTP ${artistTracks.code}") : collection != "" && owner != "" && playlist != null && !playlist.ok ? (english ? "Could not load playlist · HTTP ${playlist.code}" : "Не удалось загрузить плейлист · HTTP ${playlist.code}") : collection != "" && owner == "" && album != null && !album.ok ? (english ? "Could not load album · HTTP ${album.code}" : "Не удалось загрузить альбом · HTTP ${album.code}") : tab == "Волна" && waveError != "" ? waveError : tab == "Любимое" && likes != null && !likes.ok ? (english ? "Could not read likes · HTTP ${likes.code}" : "Не удалось прочитать любимое · HTTP ${likes.code}") : tab == "Любимое" && likedTracks != null && !likedTracks.ok ? (english ? "Could not load liked tracks · HTTP ${likedTracks.code}" : "Не удалось загрузить любимое · HTTP ${likedTracks.code}") : tab == "Плейлисты" && playlists != null && !playlists.ok ? (english ? "Could not load playlists · HTTP ${playlists.code}" : "Не удалось загрузить плейлисты · HTTP ${playlists.code}") : tab == "Поиск" && search != null && !search.ok ? (english ? "Search unavailable · HTTP ${search.code}" : "Поиск недоступен · HTTP ${search.code}") : ""
   back: trackMenu || playerView || artistId != "" || collection != "" || tab != "Главная"
-  onBack: { if trackMenu { trackMenu = false } else if playerView { playerView = false } else if artistId != "" { artistId = ""; artistName = "" } else { collection = ""; tab = "Главная" } }
-  on current {
+  onBack: { if trackMenu { trackMenu = false } else if playerView { playerView = false } else if collection != "" { collection = "" } else if artistId != "" { artistId = ""; artistName = "" } else { collection = ""; tab = "Главная" } }
+  on artistId { artistSection = "tracks"; albumPage = 0 }
+  let ytBatchPending = batchTrack != null && batchTrack.provider == "youtube" && !batchBusy
+  on ytBatchPending first {
+    if value {
+      batchBusy = true
+      run("${sh(ytPython)} -c ${sh(backend)} launch-job ${sh(backend)} ${sh(toJson({action: "batch-track", args: [str(batchIndex), batchTrack.id, batchTrack.title, toJson(batchTrack), str(batchGeneration)], slot: "batchResult"}))}")
+    }
+  }
+  // HTTP status has no URL/request identity. Overlapping GET replies cannot be
+  // conclusively correlated in OWL; batch job-generation checks below cover jobs only.
+  on batchInfo first {
+    if batchTrack != null && batchTrack.provider != "youtube" && !batchBusy && value != null {
+      if value.ok && batchAudio.downloadInfoUrl != null {
+        batchBusy = true
+        run("python -c ${sh(backend)} launch-job ${sh(backend)} ${sh(toJson({action: "batch-track", args: [str(batchIndex), batchAudio.downloadInfoUrl, join((batchTrack.artists ?? []).map(a => a.name), ", ") + " - " + batchTrack.title, toJson(batchTrack), str(batchGeneration)], slot: "batchResult"}))}")
+      } else {
+        batchFailed = batchFailed + 1
+        batchIndex = batchIndex + 1
+      }
+    }
+  }
+  on batchResult first {
+    let result = value
+    if batchBusy && result.index == batchIndex && result.job == str(batchGeneration) {
+      if result.ok { batchSaved = batchSaved + 1 } else { batchFailed = batchFailed + 1 }
+      batchIndex = batchIndex + 1
+      batchBusy = false
+    }
+  }
+  on batchIndex {
+    if value >= len(batchTracks) && value >= 0 {
+      message = english ? "Album downloaded: ${batchSaved}; failed: ${batchFailed}" : "Альбом: скачано ${batchSaved}, ошибок ${batchFailed}"
+      batchIndex = -1
+      refresh()
+    }
+  }
+  // The queue starts empty: play its first non-null track too.
+  let playSelection = {track: current, request: playRequest}
+  on playSelection first {
+    let selected = value.track
+    let previous = old.track
+    playbackEpoch = playbackEpoch + 1
+    let retryKnown = selected != null && str(selected.id) == verifiedAudioId && verifiedAudioURL != ""
+    if previous._wave == true && waveStartedKey == str(previous.id) + ":" + previous._waveSession && waveEndedKey != waveStartedKey {
+      post("https://api.music.yandex.net/rotor/session/${enc(previous._waveSession)}/feedback", {batchId: previous._waveBatch, event: {type: "skip", timestamp: fmtTime(waveClock, "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", "UTC"), trackId: str(previous.id), totalPlayedSeconds: str(player.id) == str(previous.id) ? (player.position ?? 0) : 0}}, {Authorization: "OAuth ${token}"})
+    }
+    waveStartedKey = ""
+    waveEndedKey = ""
+    waveWaiting = false
+    if selected._wave == true {
+      waveTracks = waveTracks.drop(max(0, indexOf(waveTracks.map(t => str(t.id)), str(selected.id))))
+      waveTarget = 20
+      if len(waveTracks) < 10 && !waveBusy { waveEmptyBatches = 0; waveRequest = waveRequest + 1 }
+    }
     trackMenu = false
-    if value != null && !value.local { run("python -c ${sh(backend)} cache-metadata ${sh(toJson([value]))}") }
+    if selected != null && !selected.local && selected.provider != "youtube" { run("python -c ${sh(backend)} cache-metadata ${sh(toJson([selected]))}") }
+    loadedId = ""
     ready = false
     wasPlaying = false
-    sessionRunning = value.id != null
+    sessionRunning = selected.id != null
     if sessionRunning {
       mediaSession({
         background: true,
@@ -434,17 +997,62 @@ if __name__ == '__main__':
         },
       })
     }
-    if value.local {
-      loadedId = str(value.id)
-      run("python -c ${sh(backend)} play-local ${sh(value.path)} ${sh(value.id)} ${sh(value.title)} ${sh(join((value.artists ?? []).map(a => a.name), ", "))} ${sh("")}")
+    playbackDeadline = waveClock + 120
+    // Stop deletes backend playback metadata. Retry the same known ID explicitly;
+    // backend play resolves download-info again rather than reusing a signed URL.
+    // Never infer another track's source from the retained download HTTP value.
+    if retryKnown && !selected.local && selected.provider != "youtube" {
+      loadedId = str(selected.id)
+      run("python -c ${sh(backend)} play ${sh(verifiedAudioURL)} ${sh(selected.id)} ${sh(selected.title)} ${sh(currentArtist)} ${sh(currentCover)}")
       ready = true
+    } else if selected.provider == "youtube" && !selected.local {
+      loadedId = str(selected.id)
+      run("${sh(ytPython)} -c ${sh(backend)} launch-job ${sh(backend)} ${sh(toJson({action: "play-youtube", args: [selected.id, selected.id, selected.title, currentArtist, currentCover]}))}")
+      ready = true
+    } else if selected.local {
+      loadedId = str(selected.id)
+      run("python -c ${sh(backend)} play-local ${sh(selected.path)} ${sh(selected.id)} ${sh(selected.title)} ${sh(join((selected.artists ?? []).map(a => a.name), ", "))} ${sh(currentArt ?? currentCover)}")
+      ready = true
+    } else if selected != null { refresh() }
+  }
+  let downloadNeeded = sessionRunning && current != null && !current.local && current.provider != "youtube" && !ready && downloadTrack == null
+  on downloadNeeded first {
+    if value { downloadBefore = download; downloadEpoch = playbackEpoch; downloadTrack = current }
+  }
+  let downloadDelivery = {response: download}
+  on downloadDelivery first {
+    let response = value.response
+    let requestedTrack = downloadTrack
+    let requestedEpoch = downloadEpoch
+    if response != null && requestedTrack != null {
+      let deliveredAudio = (response.out.result ?? []).filter(d => d.codec == "mp3").sortBy(d => -d.bitrateInKbps)[0]
+      // Drain before requesting a different target, but preserve the captured
+      // identity across these immediate state writes. Obsolete replies never play.
+      downloadTrack = null
+      if sessionRunning && current != null && !current.local && current.provider != "youtube" && requestedEpoch == playbackEpoch && str(requestedTrack.id) == str(current.id) && !ready {
+        downloadReplyId = str(requestedTrack.id)
+        if response.ok && deliveredAudio.downloadInfoUrl != null {
+          verifiedAudioId = str(requestedTrack.id)
+          verifiedAudioURL = deliveredAudio.downloadInfoUrl
+          verifiedAudioInfo = deliveredAudio
+          loadedId = str(requestedTrack.id)
+          run("python -c ${sh(backend)} play ${sh(deliveredAudio.downloadInfoUrl)} ${sh(requestedTrack.id)} ${sh(requestedTrack.title)} ${sh(join((requestedTrack.artists ?? []).map(a => a.name), ", "))} ${sh(currentCover)}")
+          ready = true
+        } else {
+          sessionRunning = false
+          ready = false
+          message = english ? "Audio unavailable. Tap Play to retry." : "Аудио недоступно. Нажмите «Слушать» для повтора."
+        }
+      }
     }
   }
-  on download first {
-    if sessionRunning && value.ok && audio.downloadInfoUrl != null && loadedId != str(current.id) {
-      loadedId = str(current.id)
-      run("python -c ${sh(backend)} play ${sh(audio.downloadInfoUrl)} ${sh(current.id)} ${sh(current.title)} ${sh(currentArtist)} ${sh(currentCover)}")
-      ready = true
+  let playbackExpired = sessionRunning && !wasPlaying && playbackDeadline > 0 && waveClock >= playbackDeadline
+  on playbackExpired first {
+    if value {
+      sessionRunning = false; ready = false; wasPlaying = false
+      run("python -c ${sh(backend)} stop")
+      mediaSession(null)
+      message = english ? "Playback timed out. Tap Play to retry." : "Время ожидания истекло. Нажмите «Слушать» для повтора."
     }
   }
   on sessionRunning {
@@ -469,8 +1077,12 @@ if __name__ == '__main__':
       })
     } else { mediaSession(null) }
   }
-  on mediaControl {
-    if value.action == "stop-control" {
+  on mediaControl first {
+    if value.action == "play-control" {
+      if !sessionRunning || player.idle || player.eof { playRequest = playRequest + 1 }
+      else if player.paused { run("python -c ${sh(backend)} toggle") }
+    } else if value.action == "stop-control" {
+      waveWaiting = false
       sessionRunning = false
       ready = false
       wasPlaying = false
@@ -478,8 +1090,21 @@ if __name__ == '__main__':
       mediaSession(null)
     } else if value.action == "next" {
       if index + 1 < len(queue) { index = index + 1 }
+      else if current._wave == true {
+        if waveStartedKey != "" && waveEndedKey != waveStartedKey {
+          post("https://api.music.yandex.net/rotor/session/${enc(current._waveSession)}/feedback", {batchId: current._waveBatch, event: {type: "skip", timestamp: fmtTime(waveClock, "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", "UTC"), trackId: str(current.id), totalPlayedSeconds: player.position ?? 0}}, {Authorization: "OAuth ${token}"})
+          waveEndedKey = waveStartedKey
+        }
+        waveWaiting = true
+        ready = false
+        wasPlaying = false
+        waveTarget = 20
+        sessionRunning = true
+        if !waveBusy { waveEmptyBatches = 0; waveRequest = waveRequest + 1 }
+      }
       else if repeatMode && len(queue) > 1 { index = 0 }
       else if repeatMode && current != null {
+        playbackDeadline = waveClock + 120
         run("python -c ${sh(backend)} replay")
         sessionRunning = true
         ready = true
@@ -488,25 +1113,44 @@ if __name__ == '__main__':
     } else if value.action == "previous" {
       if index > 0 { index = index - 1 }
       else if current != null {
-        if player.idle { run("python -c ${sh(backend)} replay"); sessionRunning = true; ready = true }
+        if player.idle { playbackDeadline = waveClock + 120; wasPlaying = false; run("python -c ${sh(backend)} replay"); sessionRunning = true; ready = true }
         else { run("python -c ${sh(backend)} seek 0") }
       }
     }
   }
   on player first {
     // Never mistake the previous track (still resolving/loading) for the new one.
-    if ready && value.connected && !value.idle && str(value.id) == str(current.id) { wasPlaying = true }
-    if sessionRunning && ready && wasPlaying && value.idle && value.error == "" {
+    if ready && value.connected && !value.idle && !value.eof && str(value.id) == str(current.id) { wasPlaying = true }
+    if sessionRunning && wasPlaying && !value.paused && str(value.id) == str(current.id) && current._wave == true && waveStartedKey != str(current.id) + ":" + current._waveSession {
+      if !contains(waveAnnounced, current._waveSession) {
+        post("https://api.music.yandex.net/rotor/session/${enc(current._waveSession)}/feedback", {batchId: current._waveBatch, event: {type: "radioStarted", timestamp: fmtTime(waveClock, "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", "UTC")}}, {Authorization: "OAuth ${token}"})
+        waveAnnounced = flatten([waveAnnounced, [current._waveSession]]).drop(max(0, len(waveAnnounced) - 9))
+      }
+      post("https://api.music.yandex.net/rotor/session/${enc(current._waveSession)}/feedback", {batchId: current._waveBatch, event: {type: "trackStarted", timestamp: fmtTime(waveClock, "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", "UTC"), trackId: str(current.id)}}, {Authorization: "OAuth ${token}"})
+      waveStartedKey = str(current.id) + ":" + current._waveSession
+      waveEndedKey = ""
+    }
+    if sessionRunning && ready && wasPlaying && value.eof == true && str(value.id) == str(current.id) && value.error == "" {
+      if current._wave == true {
+        post("https://api.music.yandex.net/rotor/session/${enc(current._waveSession)}/feedback", {batchId: current._waveBatch, event: {type: "trackFinished", timestamp: fmtTime(waveClock, "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", "UTC"), trackId: str(current.id), totalPlayedSeconds: value.position ?? value.duration ?? 0}}, {Authorization: "OAuth ${token}"})
+        waveEndedKey = str(current.id) + ":" + current._waveSession
+      }
       wasPlaying = false
       ready = false
       if index + 1 < len(queue) { index = index + 1 }
+      else if current._wave == true {
+        waveWaiting = true
+        waveTarget = 20
+        if !waveBusy { waveEmptyBatches = 0; waveRequest = waveRequest + 1 }
+      }
       else if repeatMode && len(queue) > 1 { index = 0 }
       else if repeatMode && current != null {
+        playbackDeadline = waveClock + 120
         run("python -c ${sh(backend)} replay")
         ready = true
       } else { sessionRunning = false }
     }
-    if sessionRunning && value.idle && value.error != "" { sessionRunning = false }
+    if sessionRunning && value.idle && ready && str(value.id) == str(current.id) && value.error != "" { sessionRunning = false }
     if !sessionRunning {
       mediaSession(null)
     } else {
@@ -520,7 +1164,7 @@ if __name__ == '__main__':
         album: currentDetails.albums[0].title ?? "",
         duration: str(value.id) == str(current.id) ? (value.duration ?? current.durationMs / 1000) : current.durationMs / 1000,
         position: str(value.id) == str(current.id) ? (value.position ?? 0) : 0,
-        playing: value.connected && !value.idle && !value.paused && str(value.id) == str(current.id),
+        playing: value.connected && !value.idle && !value.eof && !value.paused && str(value.id) == str(current.id),
         commands: {
           play: "python -c ${sh(backend)} play-control",
           pause: "python -c ${sh(backend)} pause-control",
@@ -532,6 +1176,15 @@ if __name__ == '__main__':
       })
     }
   }
+  let waveNeedsMore = current._wave == true && sessionRunning && len(queue) - index <= 4 && !waveBusy && waveError == ""
+  on waveNeedsMore first {
+    if value { waveTarget = 20; waveRequest = waveRequest + 1 }
+  }
+  on localTracks first {
+    // Deleted downloads must not accumulate in the background artwork bookkeeping.
+    let ids = (value ?? []).map(t => t.id)
+    artworkAttempted = artworkAttempted.filter(id => contains(ids, id))
+  }
   on artworkLookup first {
     if value.ok && artworkCandidate != null {
       run("python -c ${sh(backend)} cache-metadata ${sh(toJson((value.out.result.tracks.results ?? []).map(t => {id: t.id, title: t.title, coverUri: t.coverUri, artists: (t.artists ?? []).map(a => {id: a.id, name: a.name}), albums: (t.albums ?? []).map(a => {id: a.id, title: a.title})})))}")
@@ -539,26 +1192,100 @@ if __name__ == '__main__':
     }
   }
   on likedTracks first {
-    if value.ok { run("python -c ${sh(backend)} cache-metadata ${sh(toJson((value.out.result ?? []).map(t => {id: t.id, title: t.title, coverUri: t.coverUri, artists: (t.artists ?? []).map(a => {id: a.id, name: a.name}), albums: (t.albums ?? []).map(a => {id: a.id, title: a.title})})))}") }
+    if !youtube && value.ok { run("python -c ${sh(backend)} cache-metadata ${sh(toJson((value.out.result ?? []).map(t => {id: t.id, title: t.title, coverUri: t.coverUri, artists: (t.artists ?? []).map(a => {id: a.id, name: a.name}), albums: (t.albums ?? []).map(a => {id: a.id, title: a.title})})))}") }
   }
   on search first {
-    if value.ok { run("python -c ${sh(backend)} cache-metadata ${sh(toJson((value.out.result.tracks.results ?? []).map(t => {id: t.id, title: t.title, coverUri: t.coverUri, artists: (t.artists ?? []).map(a => {id: a.id, name: a.name}), albums: (t.albums ?? []).map(a => {id: a.id, title: a.title})})))}") }
+    if !youtube && value.ok { run("python -c ${sh(backend)} cache-metadata ${sh(toJson((value.out.result.tracks.results ?? []).map(t => {id: t.id, title: t.title, coverUri: t.coverUri, artists: (t.artists ?? []).map(a => {id: a.id, name: a.name}), albums: (t.albums ?? []).map(a => {id: a.id, title: a.title})})))}") }
   }
-  on mutation {
-    message = value.ok && value.out.error == null ? (likePendingAdd ? (english ? "Added to liked tracks" : "Добавлено в любимое") : (english ? "Removed from liked tracks" : "Удалено из любимого")) : (english ? "Error: ${value.out.error.message ?? value.err ?? value.code}" : "Ошибка: ${value.out.error.message ?? value.err ?? value.code}")
+  let mutationDelivery = {response: mutation}
+  on mutationDelivery first {
+    let response = value.response
+    if response == null { }
+    else if mutationDraining { mutationDraining = false; mutation = null }
+    else if likePendingId != "" {
+    message = response.ok && response.out.error == null ? (likePendingAdd ? (english ? "Added to liked tracks" : "Добавлено в любимое") : (english ? "Removed from liked tracks" : "Удалено из любимого")) : (english ? "Error: ${response.out.error.message ?? response.err ?? response.code}" : "Ошибка: ${response.out.error.message ?? response.err ?? response.code}")
     likePendingId = ""
     refresh()
+    }
   }
-  on wave first { waveRequest = 0 }
+  // Each request is a POST belonging to one radio session, never a polled first batch.
+  on waveRequest {
+    if !waveBusy && !waveDraining && token != null {
+      wave = null
+      waveTicket = value
+      waveBusy = true
+      waveError = ""
+      waveCreating = waveSession == "" || waveRestart
+      waveRestart = false
+      if waveCreating {
+        wave = post("https://api.music.yandex.net/rotor/session/new", {seeds: ["user:onyourwave"], queue: waveSeen, includeTracksInResponse: true}, {Authorization: "OAuth ${token}"})
+      } else {
+        wave = post("https://api.music.yandex.net/rotor/session/${enc(waveSession)}/tracks", {queue: waveSeen}, {Authorization: "OAuth ${token}"})
+      }
+    }
+  }
+  let waveDelivery = wave == null ? null : {request: waveTicket, response: wave}
+  on waveDelivery first {
+    if waveDraining { waveDraining = false; wave = null }
+    else if waveBusy && token != null && value.request == waveTicket {
+      let reply = value.response
+      waveBusy = false
+      if !reply.ok || reply.out.error != null {
+        waveError = english ? "My Wave: HTTP ${reply.code}. Tap Retry." : "Моя волна: HTTP ${reply.code}. Нажмите «Повторить»."
+      } else if reply.out.result.unknownSession == true {
+        waveSession = ""
+        waveEmptyBatches = waveEmptyBatches + 1
+        if waveEmptyBatches < 3 { waveRequest = waveRequest + 1 }
+        else { waveError = english ? "Radio session expired. Tap Retry." : "Сессия волны истекла. Нажмите «Повторить»." }
+      } else {
+        let sessionId = waveCreating ? (reply.out.result.radioSessionId ?? "") : waveSession
+        let received = values(groupBy((reply.out.result.sequence ?? []).filter(s => s.track.id != null && s.track.available != false).map(s => merge(s.track, {_wave: true, _waveSession: sessionId, _waveBatch: reply.out.result.batchId ?? ""})), t => split(str(t.id), ":")[0])).map(g => g[0]).filter(t => !contains(waveSeen, split(str(t.id), ":")[0]))
+        if sessionId == "" {
+          waveError = english ? "My Wave returned no session. Tap Retry." : "Яндекс не вернул сессию волны. Нажмите «Повторить»."
+        } else {
+          waveSession = sessionId
+          if len(received) > 0 {
+            let seen = flatten([waveSeen, received.map(t => split(str(t.id), ":")[0])])
+            waveSeen = seen.drop(max(0, len(seen) - 500))
+            if waveReplace {
+              waveTracks = received
+              if current._wave == true { queue = flatten([queue.take(index + 1), received]) }
+              waveReplace = false
+            } else {
+              let buffered = flatten([waveTracks, received])
+              waveTracks = buffered.drop(max(0, len(buffered) - 60))
+              if current._wave == true {
+                let cut = max(0, index - 20)
+                queue = flatten([queue.drop(cut), received])
+                index = index - cut
+              }
+            }
+            waveEmptyBatches = 0
+            if waveWaiting && current._wave == true && index + 1 < len(queue) {
+              waveWaiting = false
+              index = index + 1
+            }
+            if len(waveTracks) < waveTarget { waveRequest = waveRequest + 1 }
+          } else {
+            waveEmptyBatches = waveEmptyBatches + 1
+            waveSession = ""
+            if waveEmptyBatches < 3 { waveRequest = waveRequest + 1 }
+            else { waveError = english ? "No new tracks returned. Tap Retry." : "Яндекс пока не вернул новых треков. Нажмите «Повторить»." }
+          }
+        }
+      }
+    }
+  }
   component FavoriteButton(big = false) {
     Box {
-      visible: !current.local && current.id != null
+      visible: !current.local && current.provider != "youtube" && current.id != null
       size: big ? 52 : 44
       radius: big ? 26 : 22
       background: currentLiked ? alpha(accent, 0.16) : alpha(foreground, 0.06)
       align: center
       onTap: {
-        if likePendingId == "" {
+        if likePendingId == "" && !mutationDraining && token != null {
+          mutation = null
           let likedBefore = currentLiked
           haptic()
           likePendingId = str(current.id)
@@ -573,7 +1300,50 @@ if __name__ == '__main__':
   component Track(t, items) {
     Row {
       gap: 10; padding: [4, 10]; fill: width
-      onTap: { queue = items; index = indexOf(items.map(x => str(x.id)), str(t.id)); message = "" }
+      onTap: {
+        // My Wave trims its live list when current changes: capture both before writing.
+        let retrySelection = str(current.id) == str(t.id)
+        let selectedItems = items
+        let selectedIndex = indexOf(selectedItems.map(x => str(x.id)), str(t.id))
+        if selectedIndex >= 0 { queue = selectedItems; index = selectedIndex; message = ""; if retrySelection { playRequest = playRequest + 1 } }
+      }
+      onLongPress: {
+        if t.local { haptic(); deleteTrack = t; deleteConfirm = false }
+      }
+      Popup {
+        visible: deleteTrack != null && deleteTrack.path == t.path && t.local
+        onDismiss: { deleteTrack = null; deleteConfirm = false }
+        Column { width: min(300, screenWidth - 48); gap: 12; padding: 12
+          if deleteConfirm {
+            Text { text: english ? "Delete downloaded track?" : "Удалить скачанный трек?"; bold: true; maxLines: 2 }
+            Text { text: deleteTrack.title; color: muted; maxLines: 3 }
+            Row {
+              Button { text: english ? "Cancel" : "Отмена"; onTap: { deleteTrack = null; deleteConfirm = false } }
+              Button { text: english ? "Delete" : "Удалить"; color: red; onTap: {
+                let target = deleteTrack
+                deleteResult = run("python -c ${sh(backend)} delete-local ${sh(target.path)}")
+                deleteResult = parseJson(deleteResult)
+                if deleteResult.ok {
+                  let keptIndex = len(queue.take(index).filter(x => x.path != target.path))
+                  let deletingCurrent = current.path == target.path
+                  if deletingCurrent {
+                    sessionRunning = false; ready = false; wasPlaying = false; playerView = false
+                    mediaSession(null)
+                    run("python -c ${sh(backend)} stop")
+                  }
+                  queue = queue.filter(x => x.path != target.path)
+                  index = deletingCurrent || index < 0 ? -1 : keptIndex
+                  message = english ? "Track deleted" : "Трек удалён"
+                  refresh()
+                } else { message = english ? "Could not delete track" : "Не удалось удалить трек" }
+                deleteTrack = null; deleteConfirm = false
+              } }
+            }
+          } else {
+            Text { text: english ? "Delete" : "Удалить"; color: red; padding: [12, 10]; onTap: deleteConfirm = true }
+          }
+        }
+      }
       let coverPath = t.coverPath ?? (localTracks ?? []).filter(l => l.id == t.id)[0].coverPath
       Box {
         width: 48; height: 48; background: alpha(accent, 0.12); radius: 9; clip: true; align: center
@@ -612,25 +1382,45 @@ if __name__ == '__main__':
         }
         Box { size: big ? 68 : 56; radius: 34; background: accent; align: center; onTap: {
           haptic()
-          sessionRunning = current != null
-          if player.idle && current.local { run("python -c ${sh(backend)} play-local ${sh(current.path)} ${sh(current.id)} ${sh(current.title)} ${sh(currentArtist)} ${sh(currentCover)}"); ready = true }
-          else if player.idle && audio.downloadInfoUrl != null { run("python -c ${sh(backend)} play ${sh(audio.downloadInfoUrl)} ${sh(current.id)} ${sh(current.title)} ${sh(currentArtist)} ${sh(currentCover)}"); ready = true }
+          if !sessionRunning || player.idle || player.eof { playRequest = playRequest + 1 }
           else { run("python -c ${sh(backend)} toggle") }
-        } Text { text: player.paused || player.idle ? "▶" : "Ⅱ"; fontSize: big ? 30 : 25; color: background; align: center } }
+        } Text { text: player.paused || player.idle || player.eof ? "▶" : "Ⅱ"; fontSize: big ? 30 : 25; color: background; align: center } }
         Box { size: big ? 56 : 48; radius: 28; background: alpha(foreground, 0.08); align: center; onTap: { haptic(); run("python -c ${sh(backend)} next") }
           Text { text: "⏭"; fontSize: big ? 29 : 25; align: center }
         }
-        Box { size: big ? 52 : 46; radius: 26; background: current.local ? alpha(green, 0.16) : alpha(foreground, 0.06); align: center; onTap: { haptic(); if !current.local && audio.downloadInfoUrl != null { message = run("python -c ${sh(backend)} download ${sh(audio.downloadInfoUrl)} ${sh(join((current.artists ?? []).map(a => a.name), ", ") + " - " + current.title)} ${sh(toJson(current))}") } }
+        Box { size: big ? 52 : 46; radius: 26; background: current.local ? alpha(green, 0.16) : alpha(foreground, 0.06); align: center; onTap: { haptic(); if !current.local && current.provider == "youtube" { message = english ? "Downloading…" : "Скачиваем…"; run("${sh(ytPython)} -c ${sh(backend)} launch-job ${sh(backend)} ${sh(toJson({action: "yt-download", args: [toJson(current)], slot: "message"}))}") } else if !current.local && audio.downloadInfoUrl != null { message = english ? "Downloading…" : "Скачиваем…"; run("python -c ${sh(backend)} launch-job ${sh(backend)} ${sh(toJson({action: "download", args: [audio.downloadInfoUrl, join((current.artists ?? []).map(a => a.name), ", ") + " - " + current.title, toJson(current)], slot: "message"}))}") } }
           Text { text: current.local ? "✓" : "↓"; fontSize: big ? 26 : 23; color: current.local ? green : foreground; align: center }
         }
       }
     }
   }
+  let widePlayer = screenWidth >= 760 && screenHeight >= 340
+  component PlayerArt() {
+        Box {
+          fill: true; align: center; background: linear(0, 0, 1, 1, [alpha(accent, 0.24), surface]); radius: 22; clip: true
+          if currentArt != null || currentCover != "" { Image { src: currentArt ?? currentCover; fill: true; fit: cover; label: (english ? "Cover for ${current.title}" : "Обложка ${current.title}") } }
+          else { Text { text: "♪"; fontSize: 120; color: alpha(accent, 0.75); align: center } }
+        }
+  }
+  component PlayerControls() {
+    Column { fill: width; gap: 16; justify: center
+        Column { gap: 5
+          Text { text: current.title; fontSize: 28; bold: true; align: center; maxLines: 2 }
+          Text { text: join((current.artists ?? []).map(a => a.name), ", "); fontSize: 18; color: accent; align: center; maxLines: 2 }
+          if current.local { Text { text: (english ? "Downloaded to this device" : "Скачано на устройство"); style: small; color: green; align: center } }
+        }
+        Transport { big: true }
+        if player.error != null && player.error != "" { Text { text: player.error; color: red; style: small; align: center } }
+    }
+  }
+  Row {
+    fill: true; justify: center
   Column {
-    padding: [16, 8]; gap: 12
+    width: min(screenWidth, 1120); fill: height
+    padding: [16, 8]; gap: screenHeight < 540 ? 6 : 12
     if playerView && current != null {
       Column {
-        weight: 1; gap: 20; padding: [8, 12]
+        weight: 1; gap: screenHeight < 540 ? 8 : 20; padding: [8, 12]
         Row {
           Text { text: "‹"; fontSize: 34; padding: 8; onTap: playerView = false }
           Text { text: (english ? "Now playing" : "Сейчас играет"); style: title; weight: 1; align: center }
@@ -650,12 +1440,12 @@ if __name__ == '__main__':
                 }
                 if currentDetails.albums[0].id != null {
                   Text { text: english ? "Open album" : "Открыть страницу альбома"; padding: [12, 14]; onTap: {
-                    trackMenu = false; collection = str(currentDetails.albums[0].id); owner = ""; heading = currentDetails.albums[0].title ?? current.title; artistId = ""; artistName = ""; playerView = false
+                    trackMenu = false; provider = currentDetails.provider == "youtube" ? "youtube" : "yandex"; collection = str(currentDetails.albums[0].id); owner = ""; heading = currentDetails.albums[0].title ?? current.title; artistId = ""; artistName = ""; playerView = false
                   } }
                 }
                 if currentDetails.artists[0].id != null {
                   Text { text: english ? "Open artist" : "Открыть исполнителя"; padding: [12, 14]; onTap: {
-                    trackMenu = false; artistId = str(currentDetails.artists[0].id); artistName = currentDetails.artists[0].name; collection = ""; playerView = false
+                    trackMenu = false; provider = currentDetails.provider == "youtube" ? "youtube" : "yandex"; artistId = str(currentDetails.artists[0].id); artistName = currentDetails.artists[0].name; collection = ""; playerView = false
                   } }
                 }
                 if currentDetails.albums[0].id == null && currentDetails.artists[0].id == null {
@@ -665,18 +1455,15 @@ if __name__ == '__main__':
             }
           }
         }
-        Box {
-          weight: 1; fill: width; align: center; background: linear(0, 0, 1, 1, [alpha(accent, 0.24), surface]); radius: 22; clip: true
-          if currentArt != null || currentCover != "" { Image { src: currentArt ?? currentCover; fill: true; fit: cover; label: (english ? "Cover for ${current.title}" : "Обложка ${current.title}") } }
-          else { Text { text: "♪"; fontSize: 120; color: alpha(accent, 0.75); align: center } }
+        if widePlayer {
+          Row { weight: 1; fill: width; gap: 28; align: center
+            PlayerArt { weight: 1; fill: height }
+            PlayerControls { weight: 1 }
+          }
+        } else {
+          PlayerArt { weight: 1; fill: width }
+          PlayerControls { }
         }
-        Column { gap: 5
-          Text { text: current.title; fontSize: 28; bold: true; align: center; maxLines: 2 }
-          Text { text: join((current.artists ?? []).map(a => a.name), ", "); fontSize: 18; color: accent; align: center; maxLines: 2 }
-          if current.local { Text { text: (english ? "Downloaded to this device" : "Скачано на устройство"); style: small; color: green; align: center } }
-        }
-        Transport { big: true }
-        if player.error != null && player.error != "" { Text { text: player.error; color: red; style: small; align: center } }
       }
     } else {
     Row {
@@ -684,44 +1471,59 @@ if __name__ == '__main__':
       Column { weight: 1; gap: 0
         Text { text: (english ? "CASSETTE" : "КАССЕТА"); fontSize: 28; bold: true; letterSpacing: 2 }
         Row { gap: 6; align: center
-          Text { text: uid == null ? (english ? "Yandex Music · OWL" : "Яндекс Музыка · OWL") : account.out.result.account.displayName; style: small; color: muted }
-          if uid != null { Text { text: "●"; fontSize: 8; color: account.ok ? green : red } }
+          Text { text: youtube ? "YouTube Music" : uid == null ? (english ? "Yandex Music · OWL" : "Яндекс Музыка · OWL") : account.out.result.account.displayName; style: small; color: muted }
+          if !youtube && uid != null { Text { text: "●"; fontSize: 8; color: account.ok ? green : red } }
         }
       }
       Box { size: 46; radius: 14; background: surface; align: center; onTap: { haptic(); tab = "Настройки"; collection = "" }
         Text { text: "⚙"; fontSize: 23; align: center }
       }
     }
-    if token == null || tab == "Настройки" { Row { gap: 8
+    Flow { gap: 8
+      for service in [{id: "yandex", name: "Яндекс Музыка"}, {id: "youtube", name: "YouTube Music"}] {
+        Text { text: service.name; padding: [12, 10]; radius: 10; background: provider == service.id ? alpha(accent, 0.2) : surface; color: provider == service.id ? accent : muted; onTap: {
+          if provider != service.id { provider = service.id; collection = ""; owner = ""; artistId = ""; artistName = ""; query = ""; tab = "Поиск"; message = "" }
+        } }
+      }
+    }
+    if token == null || tab == "Настройки" { Flow { gap: 8
       Text { text: "Language / Язык"; style: small; color: muted }
       Button { text: "English"; color: english ? accent : muted; onTap: { language = "en"; message = "" } }
       Button { text: "Русский"; color: english ? muted : accent; onTap: { language = "ru"; message = "" } }
     } }
-    if token == null {
+    if !youtube && token == null && tab != "Скачанное" && tab != "Очередь" && tab != "Настройки" {
       Column { weight: 1; scroll: true; gap: 18; padding: [4, 24]
         Text { text: (english ? "Your music.\nYour Cassette." : "Ваша музыка.\nВ вашей Кассете."); fontSize: 30; bold: true }
         Text { text: (english ? "Sign in with a Yandex Music OAuth token. The launcher stores it as an encrypted secret." : "Войдите с OAuth-токеном Яндекс Музыки. Он хранится зашифрованным средствами лаунчера."); color: muted }
         Button { text: (english ? "Open Yandex sign-in" : "Открыть вход Яндекса"); onTap: url("https://oauth.yandex.ru/authorize?response_type=token&client_id=23cabbbdc6cd418abb4b39c32c41195d") }
         Text { text: (english ? "After signing in, copy access_token from the address bar (before &), or paste the full URL." : "После входа скопируйте значение access_token из адресной строки (до &). Можно вставить и весь адрес."); style: small; color: muted }
+        Button { text: english ? "Browse downloads" : "Открыть скачанное"; onTap: { tab = "Скачанное"; collection = ""; artistId = "" } }
         Input { placeholder: (english ? "OAuth token or sign-in redirect URL" : "OAuth-токен или адрес после входа"); password: true; onSubmit: token = contains(value, "access_token=") ? split(split(value, "access_token=")[1], "&")[0] : trim(value) }
         Text { text: (english ? "Search · likes · playlists · albums\nMy Wave · queue · downloads" : "Поиск · любимое · плейлисты · альбомы\nМоя волна · очередь · скачивание"); color: accent }
       }
     } else {
       Flow { gap: 6
-        for name in ["Главная", "Поиск", "Любимое", "Плейлисты", "Волна", "Очередь", "Скачанное"] {
-          Text { text: english ? get(labels, name, name) : name; padding: [10, 8]; radius: 8; background: tab == name && artistId == "" ? alpha(accent, 0.2) : surface; color: tab == name && artistId == "" ? accent : muted; onTap: { tab = name; collection = ""; artistId = ""; artistName = ""; if name == "Волна" { waveRequest = waveRequest + 1 } } }
+        for name in youtube ? ["Поиск", "Очередь", "Скачанное"] : ["Главная", "Поиск", "Любимое", "Плейлисты", "Волна", "Очередь", "Скачанное"] {
+          Text { text: english ? get(labels, name, name) : name; padding: [10, 8]; radius: 8; background: tab == name && artistId == "" ? alpha(accent, 0.2) : surface; color: tab == name && artistId == "" ? accent : muted; onTap: { tab = name; collection = ""; artistId = ""; artistName = ""; if name == "Волна" && len(waveTracks) == 0 && !waveBusy { waveEmptyBatches = 0; waveRequest = waveRequest + 1 } } }
         }
       }
       if apiError != "" { Text { text: apiError; color: red } }
+      if batchIndex >= 0 {
+        Text { text: english ? "Downloading album: ${batchIndex + 1}/${len(batchTracks)} · keep Cassette open" : "Скачивание альбома: ${batchIndex + 1}/${len(batchTracks)} · оставьте Cassette открытым"; style: small; color: accent; maxLines: 2 }
+      }
       if message != "" { Text { text: message; style: small; color: accent; maxLines: 2; onTap: message = "" } }
       if tab == "Настройки" {
         Column { weight: 1; scroll: true; gap: 16
           Text { text: english ? get(labels, "Настройки") : "Настройки"; style: title }
+          if youtube {
+            Text { text: dependencyHealth == null ? (english ? "Checking YouTube dependencies…" : "Проверяем зависимости YouTube…") : dependencyHealth.youtube.ready ? (english ? "YouTube dependencies are ready" : "Зависимости YouTube готовы") : (english ? "YouTube dependencies unavailable. Check the isolated Python environment, yt-dlp, ytmusicapi, mpv, ffmpeg and Node.js." : "Зависимости YouTube недоступны. Проверьте отдельное окружение Python, yt-dlp, ytmusicapi, mpv, ffmpeg и Node.js."); color: dependencyHealth.youtube.ready ? green : muted; maxLines: 5 }
+          }
+          if youtube { Text { text: english ? "Public YouTube Music catalogue, no sign-in. Search songs, artists, albums and playlists. Audio availability depends on YouTube and your network." : "Открытый каталог YouTube Music без входа. Поиск треков, исполнителей, альбомов и плейлистов. Доступность аудио зависит от YouTube и сети."; color: muted; maxLines: 5 } }
           Text { text: (english ? "Quality: best available MP3.\nDownloads: ~/Music/Cassette\nMP3, M4A, OGG, OPUS, FLAC and WAV supported.\nAudio keeps playing after you close this screen." : "Качество: лучший доступный MP3.\nЗагрузки: ~/Music/Cassette\nПоддерживаются MP3, M4A, OGG, OPUS, FLAC и WAV.\nЗвук продолжает играть после закрытия окна."); color: muted }
           Button { text: (english ? "Downloaded tracks (${len(localTracks ?? [])})" : "Скачанные треки (${len(localTracks ?? [])})"); onTap: { tab = "Скачанное"; collection = "" } }
           Button { text: (english ? "Stop playback" : "Остановить музыку"); onTap: { sessionRunning = false; mediaSession(null); ready = false; wasPlaying = false; run("python -c ${sh(backend)} stop") } }
-          Button { text: (english ? "Sign out" : "Выйти из аккаунта"); onTap: { sessionRunning = false; mediaSession(null); run("python -c ${sh(backend)} stop"); token = null; queue = []; index = -1; loadedId = ""; tab = "Главная"; collection = ""; query = ""; ready = false; wasPlaying = false } }
-          Text { text: (english ? "Inspired by Rirusha/Cassette. This is an independent OWL app. Playback depends on your subscription and Yandex API availability." : "Создано по функциональности Rirusha/Cassette. Это отдельное OWL-приложение. Воспроизведение зависит от подписки и доступности API Яндекса."); style: small; color: muted }
+          if !youtube { Button { text: (english ? "Sign out" : "Выйти из аккаунта"); onTap: { waveDraining = waveBusy || waveDraining; mutationDraining = likePendingId != "" || mutationDraining; waveBusy = false; wave = null; waveTicket = waveTicket + 1; waveSession = ""; waveCreating = false; waveRestart = false; waveReplace = false; waveTracks = []; waveSeen = []; waveTarget = 20; waveEmptyBatches = 0; waveError = ""; waveWaiting = false; waveStartedKey = ""; waveEndedKey = ""; waveAnnounced = []; mutation = null; likePendingId = ""; likePendingAdd = false; likedPage = 0; owner = ""; heading = ""; artistId = ""; artistName = ""; artistSection = "tracks"; albumPage = 0; batchGeneration = batchGeneration + 1; batchIndex = -1; batchBusy = false; batchTracks = []; batchResult = null; playerView = false; trackMenu = false; deleteTrack = null; message = ""; sessionRunning = false; mediaSession(null); run("python -c ${sh(backend)} stop"); token = null; queue = []; index = -1; loadedId = ""; tab = "Главная"; collection = ""; query = ""; ready = false; wasPlaying = false } } }
+          Text { text: (english ? "Inspired by Rirusha/Cassette. This is an independent OWL app. Audio availability depends on the selected service and your network." : "Создано по функциональности Rirusha/Cassette. Это отдельное OWL-приложение. Доступность аудио зависит от выбранного сервиса и сети."); style: small; color: muted }
           Button { text: (english ? "Original project" : "Исходный проект"); onTap: url("https://github.com/Rirusha/Cassette") }
         }
       } else {
@@ -736,23 +1538,53 @@ if __name__ == '__main__':
           }
         }
         if collection != "" { Text { text: "‹ ${heading}"; style: title; onTap: collection = "" } }
-        if artistId != "" { Text { text: (english ? "‹ Artist" : "‹ Исполнитель"); color: accent; onTap: { artistId = ""; artistName = "" } } }
+        if artistId != "" && collection == "" { Text { text: (english ? "‹ Artist" : "‹ Исполнитель"); color: accent; onTap: { artistId = ""; artistName = "" } } }
+        if tab == "Волна" && artistId == "" && collection == "" {
+          Text { text: waveBusy ? (english ? "Choosing music… ${len(waveTracks)} tracks" : "Подбираем музыку… ${len(waveTracks)} треков") : (english ? "${len(waveTracks)} tracks · queue refills automatically" : "${len(waveTracks)} треков · очередь пополняется автоматически"); style: small; color: muted; maxLines: 2 }
+        }
         Column {
           weight: 1; lazy: true; gap: 2
-          if artistId != "" {
+          if artistId != "" && collection == "" {
             Column { gap: 12; padding: [4, 14]; align: center
               Box { size: 112; radius: 56; clip: true; align: center; background: linear(0, 0, 1, 1, [alpha(accent, 0.35), surface])
                 if artistInfo.out.result.artist.cover.uri != null { Image { src: "https://${replace(artistInfo.out.result.artist.cover.uri, "%%", "300x300")}"; fill: true; fit: cover; label: (english ? "Photo of ${artistName}" : "Фото ${artistName}") } }
                 else { Text { text: "♫"; fontSize: 48; color: accent; align: center } }
               }
               Text { text: artistInfo.out.result.artist.name ?? artistName; fontSize: 26; bold: true; align: center; maxLines: 2 }
-              Text { text: rowsLoading ? (english ? "Loading artist…" : "Загружаем карточку…") : (english ? "Popular tracks" : "Популярные треки"); style: small; color: muted; align: center }
+              Text { text: rowsLoading ? (english ? "Loading artist…" : "Загружаем карточку…") : artistSection == "albums" ? (english ? "Albums" : "Альбомы") : (english ? "Popular tracks" : "Популярные треки"); style: small; color: muted; align: center }
             }
           }
-          if tab == "Главная" && collection == "" && artistId == "" {
+          if artistId != "" && collection == "" {
+            Row { gap: 12
+              Button { text: english ? "Tracks" : "Треки"; color: artistSection == "tracks" ? accent : muted; onTap: artistSection = "tracks" }
+              Button { text: english ? "Albums" : "Альбомы"; color: artistSection == "albums" ? accent : muted; onTap: artistSection = "albums" }
+            }
+          }
+          if artistId != "" && collection == "" && artistSection == "albums" {
+            if rowsLoading { Text { text: english ? "Loading albums…" : "Загружаем альбомы…"; color: muted; padding: 16 } }
+            for a in artistAlbums.out.result.albums ?? [] {
+              Row { gap: 12; padding: [4, 10]; onTap: { collection = str(a.id); owner = ""; heading = a.title }
+                Box { size: 56; radius: 8; clip: true; background: surface; align: center
+                  if a.coverUri != null { Image { src: "https://${replace(a.coverUri, "%%", "100x100")}"; fill: true; fit: cover } }
+                  else { Text { text: "▣"; color: accent; align: center } }
+                }
+                Column { weight: 1; gap: 4
+                  Text { text: a.title; bold: true; maxLines: 2 }
+                  Text { text: a.trackCount == null ? str(a.year ?? "") : "${a.year ?? ""} · ${a.trackCount}"; style: small; color: muted }
+                }
+                Text { text: "›"; color: muted }
+              }
+            }
+            if !rowsLoading && artistAlbums.ok && len(artistAlbums.out.result.albums ?? []) == 0 { Text { text: english ? "No albums" : "Альбомов нет"; color: muted; padding: 16 } }
+            Row { gap: 12
+              if albumPage > 0 { Button { text: "←"; onTap: albumPage = albumPage - 1 } }
+              Text { text: str(albumPage + 1); color: muted; padding: 12 }
+              if len(artistAlbums.out.result.albums ?? []) == 20 { Button { text: "→"; onTap: albumPage = albumPage + 1 } }
+            }
+          } else if tab == "Главная" && collection == "" && artistId == "" {
             Column { gap: 16; padding: [0, 12]
               Text { text: (english ? "Listen now" : "Слушать сейчас"); style: title }
-              Column { padding: 22; radius: 16; background: linear(0, 0, 1, 1, [alpha(accent, 0.35), surface]); gap: 10; onTap: { tab = "Волна"; waveRequest = waveRequest + 1 }
+              Column { padding: 22; radius: 16; background: linear(0, 0, 1, 1, [alpha(accent, 0.35), surface]); gap: 10; onTap: { tab = "Волна"; if len(waveTracks) == 0 && !waveBusy { waveEmptyBatches = 0; waveRequest = waveRequest + 1 } }
                 Text { text: (english ? "≈  My Wave" : "≈  Моя волна"); fontSize: 26; bold: true }
                 Text { text: (english ? "Music picked for you" : "Музыка, которая подходит вам"); color: muted }
               }
@@ -795,11 +1627,27 @@ if __name__ == '__main__':
             }
           } else {
             if len(rows) > 0 {
+              if collection != "" && owner == "" {
+                Column { gap: 8; padding: [4, 12]
+                  if album.out.result.coverUri != null { Image { src: "https://${replace(album.out.result.coverUri, "%%", "300x300")}"; size: 144; radius: 12; fit: cover } }
+                  Text { text: "${album.out.result.year ?? ""} · ${len(rows)}"; color: muted; style: small }
+                  Button { text: english ? "↓ Download album" : "↓ Скачать альбом"; onTap: {
+                    if batchIndex < 0 { batchGeneration = batchGeneration + 1; batchResult = null; batchTracks = rows.filter(t => t.id != null && t.available != false); batchSaved = 0; batchFailed = len(rows) - len(batchTracks); batchIndex = 0 }
+                  } }
+                }
+              }
               Row { padding: [0, 6]
-                Button { text: (english ? "▶ Play" : "▶ Слушать"); onTap: { queue = rows; index = 0 } }
+                Button { text: (english ? "▶ Play" : "▶ Слушать"); onTap: { let retrySelection = str(current.id) == str(rows[0].id); queue = rows; index = 0; if retrySelection { playRequest = playRequest + 1 } } }
                 Button { text: (english ? "⤨ Shuffle" : "⤨ Перемешать"); onTap: { queue = shuffle(rows); index = 0; mixed = true } }
               }
-              for t in rows { Track { t: t; items: rows } }
+              for t in visibleRows { Track { t: t; items: rows } }
+              if len(rows) > 20 {
+                Row { gap: 12; align: center
+                  if rowPage > 0 { Button { text: english ? "← Previous" : "← Назад"; onTap: rowPage = rowPage - 1 } }
+                  Text { text: "${rowPage * 20 + 1}–${min((rowPage + 1) * 20, len(rows))} / ${len(rows)}"; style: small; color: muted }
+                  if rowPage < rowPageLimit { Button { text: english ? "Next →" : "Далее →"; onTap: rowPage = rowPage + 1 } }
+                }
+              }
               if tab == "Любимое" {
                 Row {
                   if likedPage > 0 { Button { text: (english ? "← Previous" : "← Раньше"); onTap: likedPage = likedPage - 1 } }
@@ -807,24 +1655,28 @@ if __name__ == '__main__':
                   if (likedPage + 1) * 150 < len(likes.out.result.library.tracks ?? []) { Button { text: (english ? "Next →" : "Дальше →"); onTap: likedPage = likedPage + 1 } }
                 }
               }
-              if tab == "Волна" { Button { text: waveRequest != 0 ? (english ? "Refreshing…" : "Обновляем…") : (english ? "Refresh My Wave" : "Обновить волну"); onTap: { if waveRequest == 0 { waveRequest = 1 } } } }
+              if tab == "Волна" && artistId == "" && collection == "" {
+                Button { text: waveBusy ? (english ? "Loading more…" : "Подбираем ещё…") : (english ? "Refresh My Wave" : "Обновить волну"); onTap: {
+                  if !waveBusy { waveRestart = true; waveReplace = true; waveTarget = 20; waveEmptyBatches = 0; waveRequest = waveRequest + 1 }
+                } }
+              }
             } else {
               Column { align: center; gap: 10; padding: [24, 28]
                 Text { text: rowsLoading ? "…" : "♫"; fontSize: 34; color: rowsLoading ? muted : accent; align: center }
                 Text { text: rowsLoading ? (english ? "Loading music…" : "Загружаем музыку…") : contentError != "" ? (english ? "Could not load data" : "Не удалось получить данные") : emptyHint; color: muted; align: center; maxLines: 2 }
-                if !rowsLoading && contentError == "" { Button { text: (english ? "Refresh" : "Обновить"); onTap: refresh() } }
+                if !rowsLoading && contentError == "" { Button { text: (english ? "Refresh" : "Обновить"); onTap: { if tab == "Волна" && !waveBusy { waveEmptyBatches = 0; waveRequest = waveRequest + 1 } else { refresh() } } } }
               }
             }
           }
           if contentError != "" {
             Column { align: center; gap: 8; padding: [12, 16]
               Text { text: contentError; color: red; align: center; maxLines: 3 }
-              Button { text: (english ? "Retry" : "Повторить"); onTap: refresh() }
+              Button { text: (english ? "Retry" : "Повторить"); onTap: { if tab == "Волна" && !waveBusy { waveEmptyBatches = 0; waveRequest = waveRequest + 1 } else { refresh() } } }
             }
           }
         }
       }
-      if current != null {
+      if current != null && sessionRunning {
         Column { padding: 12; gap: 8; background: surface; radius: 14
           Row { onTap: playerView = true
             Column { weight: 1; gap: 2
@@ -836,11 +1688,12 @@ if __name__ == '__main__':
           }
           Transport { }
           if player.error != null && player.error != "" { Text { text: player.error; color: red; style: small } }
-          if download != null && !download.ok { Text { text: (english ? "Audio unavailable: HTTP ${download.code}" : "Аудио недоступно: HTTP ${download.code}"); color: red; style: small } }
-          if download.ok && audio == null { Text { text: (english ? "No audio available. Check your subscription." : "Нет доступного аудио. Проверьте подписку."); color: red; style: small } }
+          if current.provider != "youtube" && downloadReplyId == str(current.id) && download != null && !download.ok { Text { text: (english ? "Audio unavailable: HTTP ${download.code}" : "Аудио недоступно: HTTP ${download.code}"); color: red; style: small } }
+          if current.provider != "youtube" && downloadReplyId == str(current.id) && download.ok && audio == null { Text { text: (english ? "No audio available. Check your subscription." : "Нет доступного аудио. Проверьте подписку."); color: red; style: small } }
         }
       }
     }
     }
+  }
   }
 }

@@ -1,0 +1,164 @@
+app "Browser" {
+  // Fixed SHA-256 resource package; installed only inside this entry's private directory.
+  let storeBootstrap = """
+# Template embedded in store OWL. Packages are fixed and SHA-256 verified.
+import fcntl
+import hashlib
+import io
+import os
+from pathlib import Path, PurePosixPath
+import tempfile
+import urllib.request
+import zipfile
+
+
+def install(url, digest, entry):
+    if not entry or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789-" for c in entry):
+        raise ValueError("Invalid store entry")
+    root = Path.home() / '.local/share/omalauncher-store' / entry
+    if any(p.is_symlink() for p in [root, *root.parents]):
+        raise ValueError('Symlink in resource destination')
+    root.mkdir(parents=True, exist_ok=True)
+    with (root / '.install.lock').open('w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        marker = root / '.installed'
+        if marker.exists() and marker.read_text() == digest:
+            return
+        with urllib.request.urlopen(url, timeout=60) as response:
+            payload = response.read(32 * 1024 * 1024 + 1)
+        if len(payload) > 32 * 1024 * 1024 or hashlib.sha256(payload).hexdigest() != digest:
+            raise ValueError('Store resource SHA-256 mismatch')
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            members = archive.infolist()
+            if sum(x.file_size for x in members) > 128 * 1024 * 1024:
+                raise ValueError('Store resource package too large')
+            for info in members:
+                path = PurePosixPath(info.filename)
+                if path.is_absolute() or '..' in path.parts or not path.parts or path.parts[0] not in ('widgets', 'support'):
+                    raise ValueError('Invalid store resource path')
+                target = root.joinpath(*path.parts)
+                # No symlinks in the destination chain or package extraction.
+                if any(p.is_symlink() for p in [target, *target.parents]):
+                    raise ValueError('Symlink in resource destination')
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as output:
+                    output.write(archive.read(info))
+                    temporary = Path(output.name)
+                os.replace(temporary, target)
+        marker.write_text(digest)
+
+install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/2fb64db8de506049363218954ee6e5f2b12b2ae3428c33e1900fb70a6d1e24f3.zip', '2fb64db8de506049363218954ee6e5f2b12b2ae3428c33e1900fb70a6d1e24f3', 'xonars-browser')
+"""
+  let storeInstall = "python -c ${sh(storeBootstrap)}"
+
+  meta { owl: 17; description: "Веб-страницы как нативный текст Owl в цветах темы · ресурсы при первом запуске"; version: "1.0.1"; category: "productivity" ; license: "MIT" }
+  title: ""
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect x=".5" y=".5" width="47" height="47" rx="9" fill="#19191d"/><rect x=".5" y=".5" width="47" height="47" rx="9" fill="currentColor" fill-opacity=".30" stroke="currentColor" stroke-opacity=".78"/><defs><g id="symbol"><circle cx="24" cy="24" r="19"/><ellipse cx="24" cy="24" rx="8" ry="19"/><path d="M6 17h36M6 31h36"/></g></defs><g transform="translate(4.38 4.38) scale(0.817)" fill="none" stroke="#faf8f3" stroke-linecap="round" stroke-linejoin="round" stroke-width="3.06"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g><g transform="translate(4.38 4.38) scale(0.817)" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="3.06" opacity=".16"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g></svg>"""
+  requires { pacman: ["python", "python-beautifulsoup4"] }
+  state address = "browser:home"
+  state draft = ""
+  state trail = []
+  state showLinks = false
+  state revision = 0
+  state fontSize = 18 persist
+  source page = cmd("python -c ${sh(storeBootstrap)} && python /root/.local/share/omalauncher-store/xonars-browser/widgets/browser/fetch.py ${sh(address)} ${int(revision)}") every 24h json timeout 25s
+  let loading = page == null || page.request != address || page.revision != str(revision)
+  back: showLinks || len(trail) > 0
+  onBack: {
+    if showLinks { showLinks = false } else {
+      address = last(trail)
+      trail = take(trail, len(trail) - 1)
+      draft = address == "browser:home" ? "" : address
+    }
+  }
+  Column {
+    fill: true
+    gap: 0
+    background: background
+    Column {
+      padding: [16, 12]
+      gap: 10
+      background: surface
+      Row {
+        Text { text: "◉"; color: accent; fontSize: 26 }
+        Text { text: "Browser"; color: foreground; fontSize: 22; bold: true; weight: 1 }
+        Text { text: "OWL / READER"; color: accent; fontSize: 10; letterSpacing: 1 }
+      }
+      Input {
+        text: draft
+        placeholder: "Адрес сайта · example.com"
+        underline: false
+        background: background
+        radius: 10 * corners
+        padding: [12, 8]
+        onChange: draft = value
+        onSubmit: {
+          if trim(value) != "" {
+            trail = take(trail + [address], 80)
+            address = trim(value)
+            revision = revision + 1
+            showLinks = false
+          }
+        }
+      }
+      Row {
+        gap: 14
+        Text { text: "⌂"; fontSize: 23; color: accent; padding: [8, 4]; onTap: { trail = take(trail + [address], 80); address = "browser:home"; draft = ""; showLinks = false } }
+        Text { text: "↻"; fontSize: 23; color: accent; padding: [8, 4]; onTap: revision = revision + 1 }
+        Text { text: showLinks ? "Текст" : "Ссылки"; color: accent; weight: 1; padding: [0, 8]; onTap: showLinks = !showLinks }
+        Text { text: "A−"; color: accent; padding: [4, 8]; onTap: fontSize = max(14, fontSize - 2) }
+        Text { text: "A+"; color: accent; padding: [4, 8]; onTap: fontSize = min(28, fontSize + 2) }
+        Text { text: "↗"; fontSize: 23; color: accent; padding: [8, 4]; visible: address != "browser:home"; onTap: url(page.url ?? (contains(address, "://") ? address : "https://" + address)) }
+      }
+    }
+    Box { height: 2; fill: width; background: accent }
+    if loading {
+      Column { padding: 24; gap: 16
+        Text { text: "Загружаю страницу…"; color: accent; fontSize: 20 }
+        Text { text: address; color: muted; maxLines: 3 }
+      }
+    } else if page.error != "" {
+      Column { padding: 24; gap: 16
+        Text { text: "Страница недоступна"; color: accent; fontSize: 24 }
+        Text { text: page.error; color: foreground }
+        Text { text: "Проверьте адрес или откройте сайт кнопкой ↗."; color: muted }
+      }
+    } else {
+      Column {
+        scroll: true
+        weight: 1
+        padding: [20, 16]
+        gap: 14
+        Text { text: page.title; color: accent; fontSize: 23; bold: true }
+        Text { text: address == "browser:home" ? "HTML → OWL · тема лаунчера" : page.url; color: muted; fontSize: 11; maxLines: 2 }
+        if showLinks {
+          Text { text: "Ссылки · ${len(page.links)}"; color: accent; fontSize: 16 }
+          for link in page.links key link.url {
+            Column {
+              gap: 4
+              padding: [12, 10]
+              background: surface
+              radius: 10 * corners
+              onTap: { trail = take(trail + [address], 80); address = link.url; draft = link.url; showLinks = false }
+              Text { text: link.text; color: accent; fontSize: fontSize }
+              Text { text: link.url; color: muted; fontSize: 11; maxLines: 2 }
+            }
+          }
+          if len(page.links) == 0 { Text { text: "На странице нет доступных ссылок."; color: muted } }
+        } else {
+          for block in page.blocks key "${address}:${revision}:${block.id}" {
+            Text {
+              text: block.text
+              spans: len(block.spans) > 0 ? block.spans.map(s => {text: s.text, color: s.link || startsWith(block.kind, "h") ? accent : foreground}) : [{text: block.text, color: startsWith(block.kind, "h") ? accent : foreground}]
+              color: startsWith(block.kind, "h") ? accent : foreground
+              fontSize: block.kind == "h1" ? fontSize + 10 : startsWith(block.kind, "h") ? fontSize + 4 : fontSize
+              bold: startsWith(block.kind, "h")
+              font: block.kind == "pre" ? "mono" : "sans"
+            }
+          }
+          if page.truncated { Text { text: "Показаны первые 180 блоков. Полная страница — по кнопке ↗."; color: muted; fontSize: 12 } }
+        }
+      }
+    }
+  }
+}

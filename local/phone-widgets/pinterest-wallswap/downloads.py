@@ -228,6 +228,9 @@ def worker():
 
 def snapshot():
     with locked() as data:
+        available = bool(executable())
+        if available and data.get('error') == 'gallery-dl не установлен':
+            data.pop('error', None)
         for job in data['jobs'].values():
             if job['status'] == 'completed':
                 manifest = pinterest.read(Path(job['directory']) / '.pinterest-board.json')
@@ -243,7 +246,7 @@ def snapshot():
                 if not alive:
                     job.update(status='error', error='Загрузка прервана. Нажмите «Повторить».', pid=None)
         result = dict(data)
-        result['available'] = bool(executable())
+        result['available'] = available
     if any(j['status'] == 'queued' for j in result['jobs'].values()):
         start_worker()
     return result

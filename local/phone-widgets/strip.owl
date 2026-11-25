@@ -1,0 +1,39 @@
+strip "Приложения" {
+  meta { owl: 24 }
+  source s = android.strip
+
+  if s.vertical {
+    Box {
+      width: 48
+      fill: height
+      align: center
+      Box {
+        size: 36; radius: 18
+        background: alpha(background, tileOpacity)
+        align: center
+        onTap: launcher("drawer")
+        Text { text: "‹"; font: sans; fontSize: 16; align: center }
+      }
+    }
+  } else {
+    Row {
+      height: 52
+      fill: width
+      align: center
+      justify: center
+      Box {
+        width: 132; height: 36; radius: 18
+        background: alpha(background, tileOpacity)
+        onTap: launcher("drawer")
+        Row {
+          fill: true; gap: 7; align: center; justify: center
+          Text { text: "Приложения"; font: sans; fontSize: 12; maxLines: 1 }
+          Canvas {
+            width: 7; height: 7
+            path([[1, 4.5], [3.5, 2], [6, 4.5]], stroke: foreground, width: 0.85)
+          }
+        }
+      }
+    }
+  }
+}

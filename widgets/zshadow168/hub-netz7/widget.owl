@@ -1,0 +1,303 @@
+// netz7 by z7shadow — the network tile: name, both IPs, gateway, DNS, live speed.
+widget "netz7 by z7shadow" {
+  size: 4x10
+  minSize: 4x5
+  meta { owl: 17; description: "Local and public IP, network name, gateway, DNS and live upload/download speed. Tap an IP to copy it; open the screen for every detail and to name your Wi-Fi network."; version: "2.1.1"; license: "MIT"; category: "system" }
+
+  requires { pacman: ["iproute2"] }
+
+  // Every interface with a global address, as JSON, in one call.
+  source links = cmd("ip -j addr show scope global") every 30s json
+  // The default route; Android keeps it in a table of its own, so ask all of them.
+  source routes = cmd("ip -j -4 route show default table all") every 30s json
+  // The DNS servers, read straight from the file.
+  source resolv = file("/etc/resolv.conf")
+  // Public IP, provider and location, fetched from Android.
+  source ext = http("https://ipinfo.io/json") every 10m timeout 10s json status
+  // Traffic counters, for the live speed.
+  source net = android.network every 5s
+  source now = clock every 1s
+
+  // Android doesn't let Linux read the SSID, so netz7 takes it from the screen
+  // instead, or from owl-send <this file> set ssid "MyWiFi"
+  state ssid = "" persist
+
+  state down = 0
+  state up = 0
+  state copied = ""
+  state copiedAt = 0
+  state extAt = 0
+
+  // The text a person reads, in English; `str.` picks the phone's language.
+  strings {
+    en {
+      localIp: "local ip"; publicIp: "public ip"; gateway: "gateway"; dns: "dns"
+      copy: "copy"; copied: "copied"; download: "download"; upload: "upload"
+      noLink: "no link"; noIp: "no ip"; offline: "offline"
+      wifi: "wi-fi"; provider: "provider"; vpn: "vpn"; vpnOn: "vpn on"
+      on: "on"; off: "off"
+      updatedNow: "updated just now"; updated: t => "updated ${t} ago"
+      wifiName: "wi-fi name"; wifiPlaceholder: "type your wi-fi name"
+      ssidHint: "Android doesn't let Linux read the SSID, so it is saved here. Leave it empty to show the provider instead."
+      thisNetwork: "this network"; mtu: "mtu"; received: "received"; sent: "sent"
+      speed: "speed"; ipv6: "ipv6"; name: "name"; location: "location"
+      speedLine: (d, u) => "${d}/s down · ${u}/s up"
+      lookupFailed: "The public lookup failed; tap refresh to try again."
+      refresh: "refresh"; copyPublicIp: "copy public ip"; wifiSettings: "wi-fi settings"
+      notRefreshed: "not refreshed yet"
+    }
+  }
+
+  // The interface to show: the one the default route uses, else a real one
+  // rather than a tunnel or a dummy.
+  let all = links ?? []
+  let phys = filter(all, a => !startsWith(a.ifname, "tun") && !startsWith(a.ifname, "wg") && !startsWith(a.ifname, "rmnet") && !startsWith(a.ifname, "dummy") && !startsWith(a.ifname, "veth"))
+  let routeEntry = find(routes ?? [], r => r.gateway != null && r.dev != "dummy0")
+  let routeDev = routeEntry == null ? null : routeEntry.dev
+  let vpn = any(all, a => startsWith(a.ifname, "tun") || startsWith(a.ifname, "wg"))
+  let iface = (routeDev != null && !startsWith(routeDev, "tun") && !startsWith(routeDev, "wg")) ? routeDev : (len(phys) > 0 ? phys[0].ifname : (len(all) > 0 ? all[0].ifname : null))
+  let link = iface == null ? null : find(all, a => a.ifname == iface)
+
+  let v4 = link == null ? null : find(link.addr_info ?? [], a => a.family == "inet")
+  let v6 = link == null ? null : find(link.addr_info ?? [], a => a.family == "inet6")
+  let ipv4 = v4 == null ? null : v4.local
+  let prefix = v4 == null ? null : v4.prefixlen
+  let cidr = ipv4 == null ? null : "${ipv4}/${prefix}"
+  let ipv6 = v6 == null ? null : "${v6.local}/${v6.prefixlen}"
+  let mtu = link == null ? null : link.mtu
+  let gw = routeEntry == null ? null : routeEntry.gateway
+
+  // Nameserver lines, without the word in front.
+  let dnsList = map(filter(lines(resolv ?? ""), l => startsWith(trim(l), "nameserver ")), l => words(trim(l))[1])
+  let dns = len(dnsList) > 0 ? join(dnsList, ", ") : null
+
+  let online = ext != null && ext.ok
+  let pub = ext == null ? null : ext.ok ? ext.out.ip : "offline"
+  // ipinfo puts an AS number in front of the provider; drop it.
+  let orgRaw = ext == null ? null : ext.out.org
+  let org = orgRaw == null ? null : trim(replace(orgRaw, match(orgRaw, "^(AS\\d+ )")[0] ?? "", ""))
+  // And the legal form at its end, so the tile shows the provider's name and
+  // not its paperwork: "DISH MEDIA NETWORK", not "… PUBLIC LIMITED".
+  let orgKey = upper(org ?? "")
+  let legal = endsWith(orgKey, " PUBLIC LIMITED") ? " PUBLIC LIMITED" : endsWith(orgKey, " PRIVATE LIMITED") ? " PRIVATE LIMITED" : endsWith(orgKey, " PVT LTD") ? " PVT LTD" : endsWith(orgKey, " LIMITED") ? " LIMITED" : endsWith(orgKey, " LTD") ? " LTD" : endsWith(orgKey, " INC") ? " INC" : endsWith(orgKey, " LLC") ? " LLC" : endsWith(orgKey, " CORP") ? " CORP" : endsWith(orgKey, " GMBH") ? " GMBH" : endsWith(orgKey, " PLC") ? " PLC" : ""
+  let ispShort = org == null ? null : trim(sub(org, 0, len(org) - len(legal)))
+  let isp = (ispShort ?? "") == "" ? org : ispShort
+  let city = online ? ext.out.city : null
+  let place = city == null ? null : join(filter([city, online ? ext.out.region : null, online ? ext.out.country : null], x => x != null && x != ""), ", ")
+  let netName = ssid != "" ? ssid : (pub == "offline" ? str.offline : (isp ?? "…"))
+  let wide = (tileWidth ?? 0) > 200
+  let nlen = len(netName ?? "")
+  let nameSize = wide ? (nlen <= 10 ? 40 : nlen <= 16 ? 32 : nlen <= 24 ? 28 : 24) : (nlen <= 10 ? 34 : nlen <= 16 ? 27 : nlen <= 24 ? 24 : 20)
+  let ipSize = wide ? 28 : 22
+  let ago = extAt == 0 ? null : fmtAgo(extAt, now)
+  let updated = ago == null ? null : ago == "now" ? str.updatedNow : str.updated(ago)
+
+  // The tall tile gets the graphs and details; the cover screen's short 4x2 one
+  // keeps just the name and the two addresses.
+  let tall = (tileHeight ?? 0) > 380
+  let compact = (tileHeight ?? 0) < 130
+  let downHist = history(down, 40)
+  let upHist = history(up, 40)
+  let dpeak = max(1, reduce(downHist, (m, v) => max(m, v), 0))
+  let upeak = max(1, reduce(upHist, (m, v) => max(m, v), 0))
+
+  // Bytes a second over the last two reads; rates start at zero.
+  on net {
+    if old != null && value.rx >= old.rx && value.tx >= old.tx && value.uptime > old.uptime {
+      down = (value.rx - old.rx) / (value.uptime - old.uptime)
+      up = (value.tx - old.tx) / (value.uptime - old.uptime)
+    }
+  }
+
+  // "copied" stays for three seconds, then goes.
+  at copiedAt {
+    if now == null || now >= copiedAt {
+      copied = ""
+      copiedAt = 0
+    }
+  }
+
+  on ext { if now != null { extAt = now } }
+
+  // The first time both the lookup and the clock have a value, start the timer.
+  when ext != null && now != null { extAt = now }
+
+  onTap: screen()
+
+  component Field(label, val, size = 15, tint = foreground) {
+    Column {
+      gap: 0
+      Text { text: label; style: label; color: muted; maxLines: 1 }
+      Text { text: val ?? "—"; fontSize: size; font: mono; bold: true; color: tint; maxLines: 1 }
+    }
+  }
+
+  component CopyField(label, val, what, size = 20, tint = foreground) {
+    Box {
+      onTap: {
+        if val != null {
+          copy(val)
+          copied = what
+          copiedAt = (now ?? 0) + 3
+          haptic()
+        }
+      }
+      Column {
+        gap: 1
+        Row {
+          Text { text: label; style: label; color: muted; weight: 1 }
+          Text { text: copied == what ? str.copied : str.copy; style: label; color: copied == what ? green : muted }
+        }
+        Text { text: val ?? "—"; fontSize: size; font: mono; bold: true; color: tint; maxLines: 1 }
+      }
+    }
+  }
+
+  component Heading(label) {
+    Column {
+      gap: 4
+      Text { text: label; style: label; color: accent }
+      Spacer { height: 1; fill: width; background: alpha(muted, 0.25) }
+    }
+  }
+
+  Column {
+    gap: 10
+    fill: true
+
+    if compact {
+      // The cover screen's 4x2: only the name and the two addresses.
+      Column {
+        gap: 1
+        Text { text: netName; fontSize: 18; bold: true; color: accent; maxLines: 1 }
+        Text { text: ipv4 ?? str.noIp; fontSize: 15; font: mono; bold: true; color: iface == null ? red : foreground; maxLines: 1 }
+        Text { text: pub ?? "—"; fontSize: 15; font: mono; bold: true; color: pub == "offline" ? red : foreground; maxLines: 1 }
+      }
+    } else {
+      // One header line instead of two: the interface on the left, what the
+      // name below is on the right.
+      Row {
+        align: center
+        gap: 6
+        Text { text: iface ?? str.noLink; style: small; font: mono; color: iface == null ? red : muted; maxLines: 1; weight: 1 }
+        Text { text: vpn ? str.vpn : (ssid != "" ? str.wifi : str.provider); style: label; color: vpn ? yellow : muted }
+      }
+
+      Text { text: netName; fontSize: nameSize; bold: true; color: accent; maxLines: tall ? 3 : 2; letterSpacing: -0.5 }
+
+      CopyField { label: str.localIp; val: ipv4; what: "local"; size: ipSize }
+
+      CopyField { label: str.publicIp; val: pub; what: "public"; size: ipSize; tint: pub == "offline" ? red : foreground }
+
+      if tall {
+        Spacer { height: 2 }
+
+        Column {
+          gap: 8
+          weight: 1
+          Row {
+            align: center
+            Text { text: str.download; style: label; color: muted; weight: 1 }
+            Text { text: "${fmtBytes(down)}/s"; style: small; font: mono; color: green }
+          }
+          Sparkline { values: downHist; min: 0; max: dpeak; color: green; area: alpha(green, 0.18); fill: width; weight: 1 }
+          Row {
+            align: center
+            Text { text: str.upload; style: label; color: muted; weight: 1 }
+            Text { text: "${fmtBytes(up)}/s"; style: small; font: mono; color: accent }
+          }
+          Sparkline { values: upHist; min: 0; max: upeak; color: accent; area: alpha(accent, 0.18); fill: width; weight: 1 }
+        }
+
+        Row {
+          gap: 12
+          Field { label: str.gateway; val: gw; size: 14; weight: 1 }
+          Field { label: str.dns; val: dns; size: 14; weight: 2 }
+        }
+      }
+
+      if updated != null {
+        Text { text: updated; style: small; color: muted }
+      }
+    }
+  }
+
+  screen {
+    title: "netz7"
+    Column {
+      scroll: true
+      padding: 16
+      gap: 16
+      onPull: refresh()
+
+      Column {
+        gap: 2
+        Text { text: netName; fontSize: 30; bold: true; color: accent; maxLines: 2 }
+        Row {
+          Text { text: iface == null ? str.noLink : (vpn ? "${iface} · ${str.vpnOn}" : iface); style: small; color: muted; weight: 1 }
+          Text { text: "netz7 by z7shadow"; style: small; color: muted }
+        }
+      }
+
+      Column {
+        gap: 6
+        Text { text: str.wifiName; style: label; color: muted }
+        Input { text: ssid; placeholder: str.wifiPlaceholder; onSubmit: ssid = trim(value) }
+        Text { text: str.ssidHint; style: small; color: muted }
+      }
+
+      Heading { label: str.thisNetwork }
+
+      CopyField { label: str.localIp; val: cidr; what: "local"; size: 20 }
+
+      CopyField { label: str.publicIp; val: pub; what: "public"; size: 20; tint: pub == "offline" ? red : foreground }
+
+      Grid {
+        columns: 2
+        gap: 12
+        Field { label: str.gateway; val: gw; size: 14 }
+        Field { label: str.dns; val: dns; size: 14 }
+        Field { label: str.mtu; val: mtu == null ? null : "${mtu}"; size: 14 }
+        Field { label: str.vpn; val: vpn ? str.on : str.off; size: 14; tint: vpn ? yellow : foreground }
+        Field { label: str.received; val: net == null ? null : fmtBytes(net.rx); size: 14 }
+        Field { label: str.sent; val: net == null ? null : fmtBytes(net.tx); size: 14 }
+      }
+
+      Field { label: str.speed; val: str.speedLine(fmtBytes(down), fmtBytes(up)); size: 14 }
+
+      Field { label: str.ipv6; val: ipv6; size: 13 }
+
+      Heading { label: str.provider }
+
+      Field { label: str.name; val: org; size: 14 }
+      Field { label: str.location; val: place; size: 14 }
+
+      if ext != null && !ext.ok {
+        Text { text: str.lookupFailed; style: small; color: red }
+      }
+
+      Flow {
+        gap: 8
+        Button {
+          text: str.refresh
+          color: accent
+          onTap: refresh()
+        }
+        Button {
+          text: copied == "public" ? str.copied : str.copyPublicIp
+          onTap: {
+            if pub != null {
+              copy(pub)
+              copied = "public"
+              copiedAt = (now ?? 0) + 3
+              haptic()
+            }
+          }
+        }
+        Button { text: str.wifiSettings; color: muted; onTap: settings("wifi") }
+      }
+
+      Text { text: updated ?? str.notRefreshed; style: small; color: muted }
+    }
+  }
+}

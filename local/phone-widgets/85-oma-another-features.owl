@@ -1,0 +1,18 @@
+widget "Oma Another Features" {
+  meta { owl: 10; version: "1.0"; description: "Количество возможностей OMA Another. Нажмите, чтобы открыть каталог отличий."; category: "tools" }
+  requires { pacman: [] }
+  page: 1
+  size: 3x2
+  minSize: 3x2
+  source catalog = file("~/.config/omalauncher/widgets/oma-another-features/catalog.json") json
+  let total = len(catalog.features ?? [])
+  onTap: open("o:84-oma-another-features-app.owl")
+  Column { gap: 3; justify: spaceBetween; fill: true
+    Text { text: "OMA ANOTHER"; font: sans; fontSize: 11; letterSpacing: 1; color: accent; bold: true; maxLines: 1 }
+    Row { gap: 10; align: center
+      Text { text: catalog == null ? "…" : str(total); font: sans; fontSize: 42; color: accent; bold: true }
+      Text { text: "уникальных\nфункций"; font: sans; fontSize: 13; weight: 1 }
+    }
+    Text { text: "Каталог возможностей →"; font: sans; fontSize: 11; color: muted; maxLines: 1 }
+  }
+}

@@ -1,7 +1,7 @@
 app "Шахматы" {
   // Adapted from widgets/vitalii-khomenko/chess, MIT, version 1.7.
   title: "Шахматы"
-  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M24 4v10m-5-5h10M18 18h12l3 9-4 9H19l-4-9 3-9ZM17 36h14l4 7H13l4-7Z"/></svg>"""
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect x=".5" y=".5" width="47" height="47" rx="9" fill="#19191d"/><rect x=".5" y=".5" width="47" height="47" rx="9" fill="currentColor" fill-opacity=".30" stroke="currentColor" stroke-opacity=".78"/><defs><g id="symbol"><path d="M24 4v10m-5-5h10M18 18h12l3 9-4 9H19l-4-9 3-9ZM17 36h14l4 7H13l4-7Z"/></g></defs><g transform="translate(4.85 5.24) scale(0.798)" fill="none" stroke="#faf8f3" stroke-linecap="round" stroke-linejoin="round" stroke-width="3.13"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g><g transform="translate(4.85 5.24) scale(0.798)" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="3.13" opacity=".16"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g></svg>"""
   meta { description: "Full chess in a terminal tile: all rules, picture board, tap and keyboard play, six computer levels or two players, hints, undo, clock, pause and a saved game. Node.js only."; version: "1.7"; license: "MIT"; category: "games"; owl: 8 }
   requires { pacman: ["nodejs"] }
 
