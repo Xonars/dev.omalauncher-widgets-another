@@ -1,0 +1,30 @@
+name: store-check
+on:
+  pull_request:
+    paths: ["apps/**", "widgets/**", "faces/**", "local/**", "tests/store/**", "tools/**", "resources/**", "store-collection.json", ".github/workflows/store-check.yml"]
+  push:
+    branches: [oma-update-releases]
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: Store tests and resources
+        run: |
+          python3 -m unittest discover -s tests/store -v
+          python3 tools/verify-local-store.py
+      - name: Compile and verify catalogue
+        run: |
+          java -jar tools/owl.jar index .
+          java -jar tools/owl.jar index . --faces
+          java -jar tools/owl.jar index . --apps
+          python3 tools/verify-local-store.py --catalogs

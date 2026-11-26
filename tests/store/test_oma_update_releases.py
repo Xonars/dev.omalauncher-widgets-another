@@ -31,6 +31,7 @@ class Releases(unittest.TestCase):
         self.assertEqual(chosen["id"], 42)
         self.assertEqual(chosen["sha256"], "a"*64)
         self.assertIsNone(ns["select_release"](self.release(self.asset(name="other.apk"))))
+        self.assertEqual(ns["select_release"](self.release(self.asset(name="app-foss-debug.apk")))["id"], 42)
 
     def test_invalid_metadata(self):
         for release in (self.release(self.asset(digest=None)), self.release(self.asset(size=0)),
@@ -65,6 +66,37 @@ class Releases(unittest.TestCase):
                             ns["verify"](path, asset)
             with self.assertRaisesRegex(RuntimeError, "SHA-256"):
                 ns["verify"](path, dict(asset, sha256="0"*64))
+
+    def test_redirect_does_not_forward_credentials(self):
+        import io
+        import urllib.error
+        from unittest.mock import Mock
+        redirect = urllib.error.HTTPError(
+            ns["API"] + "/releases/assets/42", 302, "Found",
+            {"Location": "https://release-assets.githubusercontent.com/download?sig=example"}, io.BytesIO())
+        opener = Mock()
+        opener.open.side_effect = [redirect, io.BytesIO(b"apk")]
+        with patch("urllib.request.build_opener", return_value=opener):
+            with ns["open_url"](ns["API"] + "/releases/assets/42", "test-token", True) as response:
+                self.assertEqual(response.read(), b"apk")
+        first, second = [call.args[0] for call in opener.open.call_args_list]
+        self.assertEqual(first.get_header("Authorization"), "Bearer test-token")
+        self.assertIsNone(second.get_header("Authorization"))
+
+    def test_install_rejects_same_version_and_downgrade(self):
+        import tempfile
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as folder:
+            cache = pathlib.Path(folder)
+            for installed in (70, 71):
+                selected = self.release(self.asset())
+                state = {"phase": "ready", "selected": ns["select_release"](selected)}
+                saved = Mock()
+                with patch.dict(ns, CACHE=cache, read=lambda: state, save=saved,
+                                verify=lambda *a: 70, installed=lambda: installed), patch("subprocess.run") as run:
+                    ns["worker"]("install")
+                    run.assert_not_called()
+                    self.assertEqual(saved.call_args.kwargs["phase"], "current")
 
 if __name__ == "__main__":
     unittest.main()

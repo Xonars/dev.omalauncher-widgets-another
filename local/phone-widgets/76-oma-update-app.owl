@@ -63,7 +63,8 @@ def token():
     except (OSError, subprocess.TimeoutExpired):
         pass
     try:
-        p = subprocess.run(["git", "credential", "fill"],
+        repo = Path.home() / "dev.omalauncher-another"
+        p = subprocess.run(["git", "credential", "fill"], cwd=repo if repo.is_dir() else None,
                            input="protocol=https\nhost=github.com\npath=Xonars/dev.omalauncher-another.git\n\n",
                            capture_output=True, text=True, timeout=8,
                            env=dict(os.environ, GIT_TERMINAL_PROMPT="0", GCM_INTERACTIVE="never"))
@@ -124,7 +125,7 @@ def select_release(release):
     candidates = []
     for a in release.get("assets", []):
         name = a.get("name", "")
-        if not re.fullmatch(r"(?:oma[-_ ]another|omalauncher[-_ ]another)[a-z0-9_. +()-]*\.apk", name, re.I):
+        if name.lower() not in ("app-foss-debug.apk", "app-debug.apk") and not re.fullmatch(r"(?:oma[-_ ]another|omalauncher[-_ ]another)[a-z0-9_. +()-]*\.apk", name, re.I):
             continue
         if re.search(r"(?:^|[-_. ])(?:ci|unsigned|x86|x86_64|armeabi|test)(?:[-_. ]|$)", name, re.I):
             continue
@@ -212,7 +213,7 @@ def download(selected, secret):
     current = latest(secret)
     if current != selected:
         raise RuntimeError("Релиз изменился. Проверьте GitHub заново.")
-    tmp = CACHE / "release.part"
+    tmp = CACHE / "release.part.apk"
     try:
         with open_url(API + "/releases/assets/" + str(selected["id"]), secret, True) as response, tmp.open("wb") as out:
             total = 0
@@ -254,7 +255,7 @@ def worker(action):
                 selected = old.get("selected")
                 if not selected or old.get("phase") not in ("available", "ready", "current", "error"):
                     raise RuntimeError("Сначала проверьте релиз")
-                save(phase="downloading", progress=0, received=0, message="Скачиваем и проверяем APK")
+                save(phase="downloading", progress=0, received=0, code=None, message="Скачиваем и проверяем APK")
                 code = download(selected, token())
                 version = installed()
                 save(phase="ready" if code > version else "current", code=code, installed=version,
@@ -292,10 +293,12 @@ subprocess.Popen([sys.executable, "-c", sys.argv[1], sys.argv[2]], stdin=subproc
 print("ok")
 """
   source release = file("/root/.cache/oma-updater/releases/state.json") json
+  source phoneVersion = cmd("omalauncher version") every 10s json
   state releaseRequest = ""
   state releaseRequestedAt = 0
   state releaseOutput = ""
-  let releaseBusy = releaseRequest != "" || (contains(["checking", "downloading", "installing"], release.phase ?? "") && now - (release.updated ?? 0) < 720)
+  let releaseApplied = (release.phase == "installing" || release.phase == "done" || release.phase == "ready") && release.code != null && phoneVersion.versionCode != null && phoneVersion.versionCode >= release.code
+  let releaseBusy = releaseRequest != "" || (!releaseApplied && contains(["checking", "downloading", "installing"], release.phase ?? "") && now - (release.updated ?? 0) < 720)
   when releaseRequest != "" && (now - releaseRequestedAt >= 5 || (release.updated ?? 0) >= releaseRequestedAt + 1) { releaseRequest = "" }
   on releaseOutput { if value != "" && value != "ok" { releaseRequest = ""; notify("OMA · релизы", "Не удалось запустить помощник") } }
 
@@ -402,13 +405,13 @@ print("ok")
     if view == "Обновление" {
       Column { padding: 14; gap: 8; background: surface; radius: 12; border: 1; borderColor: alpha(accent, 0.35)
         Text { text: "GitHub Releases · без сборки"; bold: true; color: accent }
-        Text { text: release.message ?? "Проверьте наличие готового APK в последнем стабильном релизе."; style: small; maxLines: 5 }
+        Text { text: releaseApplied ? "На телефоне уже установлена эта или более новая сборка." : (release.message ?? "Проверьте наличие готового APK в последнем стабильном релизе."); style: small; maxLines: 5 }
         if release.selected != null {
           Text { text: "Релиз · " + release.selected.tag; bold: true; maxLines: 2 }
           Text { text: release.selected.name; style: small; maxLines: 3 }
           Text { text: "${round(release.selected.size / 1048576)} МиБ"; style: small; color: muted }
         }
-        if release.installed != null { Text { text: "Установлен Build ${release.installed}"; style: small } }
+        if phoneVersion.versionCode != null || release.installed != null { Text { text: "Установлен Build ${phoneVersion.versionCode ?? release.installed}"; style: small } }
         if release.code != null { Text { text: "APK · Build ${release.code}"; style: small } }
         if release.phase == "downloading" && releaseBusy {
           Progress { value: release.progress ?? 0; max: 100; height: 5; color: accent }
@@ -421,7 +424,7 @@ print("ok")
             if release.selected != null && (release.phase == "available" || release.phase == "error" || release.phase == "ready") {
               Button { text: "Скачать APK"; onTap: { releaseRequest = "download"; releaseRequestedAt = now; releaseOutput = ""; releaseOutput = run("python -c ${sh(releaseLauncher)} ${sh(releaseHelper)} download") } }
             }
-            if release.phase == "ready" {
+            if release.phase == "ready" && !releaseApplied {
               Button { text: "Установить обновление"; onTap: { releaseRequest = "install"; releaseRequestedAt = now; releaseOutput = ""; releaseOutput = run("python -c ${sh(releaseLauncher)} ${sh(releaseHelper)} install") } }
             }
             if release.phase == "installing" { Button { text: "Проверить версию"; onTap: { releaseRequest = "check"; releaseRequestedAt = now; releaseOutput = ""; releaseOutput = run("python -c ${sh(releaseLauncher)} ${sh(releaseHelper)} check") } } }
