@@ -1,12 +1,126 @@
 widget "Темы и обои" {
-  meta { owl: 21; description: "Темы, палитры и каталог обоев" }
+  meta { owl: 21; description: "Темы, палитры и каталог обоев"; version: "1.0.2" }
   requires { pacman: ["python", "bash", "python-pillow", "coreutils"] }
   fps: 30
   size: 6x2
   minSize: 1x1
   // Каталог использует уменьшенные превью из локального кэша.
   source data = cmd("python3 ~/.config/omalauncher/widgets/theme-catalog/catalog.py list") every 5m json timeout 120s
-  source appearance = cmd("python3 ~/.config/omalauncher/widgets/theme-catalog/catalog.py status") every 5s json
+  // Phone workspace appearance; never edits the guest's global style.
+  let workspaceHelper = """
+import copy
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import tomllib
+
+home = Path.home() / '.config/omalauncher/home'
+style = home.parent / 'style/style.toml'
+bases = [Path.home() / '.local/share/omarchy/themes', Path.home() / '.config/omarchy/themes']
+nl = chr(10)
+
+def active():
+    response = subprocess.run(['omalauncher', 'workspace', 'list'], capture_output=True, text=True, timeout=4, check=True)
+    data = json.loads(response.stdout)
+    value = data['activeId']
+    if type(value) not in (int, float) or not 0 <= value <= 1000000 or int(value) != value:
+        raise ValueError('Недопустимый ID пространства')
+    if not any(w.get('id') == value for w in data['workspaces']):
+        raise ValueError('Рабочее пространство недоступно')
+    return int(value)
+
+def layout_path(value):
+    return home / ('layout.toml' if value == 0 else 'workspaces/%d.toml' % value)
+
+def read_layout(value):
+    path = layout_path(value)
+    text = path.read_text()
+    data = tomllib.loads(text)
+    if data.get('version') != 1 or data.get('membership') != 'explicit':
+        raise ValueError('Неподдерживаемый формат рабочего пространства')
+    return path, text, data
+
+def status():
+    value = active()
+    _, _, data = read_layout(value)
+    defaults = tomllib.loads(style.read_text()) if style.exists() else {}
+    appearance = data.get('appearance', {})
+    default_theme = defaults.get('theme') or 'tokyo-night'
+    theme = appearance.get('theme', default_theme) or 'tokyo-night'
+    background = appearance.get('background', defaults.get('background') if theme == default_theme else None) or None
+    if active() != value:
+        raise ValueError('Рабочее пространство изменилось')
+    return dict(workspace=value, theme=theme, background=background)
+
+def edit(value, theme, background=''):
+    if not theme or Path(theme).name != theme or theme in ('.', '..') or not any((base / theme).is_dir() for base in bases):
+        raise ValueError('Тема недоступна')
+    if background:
+        roots = [base / theme / 'backgrounds' for base in bases]
+        roots.append(Path.home() / '.config/omarchy/backgrounds' / theme)
+        if Path(background).name != background or Path(background).suffix.lower() not in ('.png', '.jpg', '.jpeg', '.webp') or not any((root / background).is_file() for root in roots):
+            raise ValueError('Обои недоступны')
+    if active() != value:
+        raise ValueError('Рабочее пространство изменилось. Повторите выбор.')
+    path, original, parsed = read_layout(value)
+    expected = copy.deepcopy(parsed)
+    expected.setdefault('appearance', {}).update(theme=theme, background=background)
+    if expected == parsed:
+        return
+    # The launcher writes [appearance] with scalar theme/background keys.
+    # Keep every other byte-line and verify the complete parsed document before replacing.
+    lines = original.splitlines(keepends=True)
+    heads = [i for i, line in enumerate(lines) if line.strip().split('#', 1)[0].strip() == '[appearance]']
+    entries = ['theme = ' + json.dumps(theme, ensure_ascii=False) + nl,
+               'background = ' + json.dumps(background, ensure_ascii=False) + nl]
+    if not heads:
+        updated = original + ('' if original.endswith(nl) else nl) + nl + '[appearance]' + nl + ''.join(entries)
+    else:
+        start = heads[0] + 1
+        end = next((i for i in range(start, len(lines)) if lines[i].lstrip().startswith('[')), len(lines))
+        body = [line for line in lines[start:end] if line.split('=', 1)[0].strip() not in ('theme', 'background')]
+        updated = ''.join(lines[:start] + entries + body + lines[end:])
+    if tomllib.loads(updated) != expected:
+        raise ValueError('Формат TOML изменился; файл сохранён без изменений')
+    temp = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=path.parent, prefix='.theme-', delete=False) as output:
+            temp = Path(output.name)
+            output.write(updated)
+            output.flush()
+            os.fsync(output.fileno())
+        os.chmod(temp, path.stat().st_mode & 0o777)
+        if active() != value or path.read_text() != original:
+            raise ValueError('Пространство или раскладка изменились. Повторите выбор.')
+        os.replace(temp, path)
+    finally:
+        if temp is not None:
+            temp.unlink(missing_ok=True)
+
+def main():
+    mode = sys.argv[1]
+    try:
+        if mode == 'status':
+            print(json.dumps(status(), ensure_ascii=False))
+        elif mode == 'set':
+            value = float(sys.argv[2])
+            if not 0 <= value <= 1000000 or int(value) != value:
+                raise ValueError('Недопустимый ID пространства')
+            edit(int(value), *sys.argv[3:])
+            print('')
+    except Exception as error:
+        if mode == 'status':
+            print(json.dumps(dict(workspace=None, theme=None, background=None, error=str(error)), ensure_ascii=False))
+        else:
+            print(str(error))
+
+if __name__ == '__main__':
+    main()
+"""
+  source appearance = cmd("python -c ${sh(workspaceHelper)} status") every 2s json timeout 12s
   state query = ""
   // Keep the old phone state for migration; both modes now read one shared file.
   state favorites = [] persist
@@ -28,6 +142,7 @@ widget "Темы и обои" {
   state message = ""
   state titleTravel = 0
   let themes = data.themes ?? []
+  let workspaceId = appearance.workspace
   let current = appearance.theme
   let tileDisplayWidth = tileWidth ?? 200
   // На узкой или низкой плитке стрелки остаются по бокам.
@@ -78,6 +193,7 @@ widget "Темы и обои" {
   let wallPages = max(1, ceil(len(walls) / wallPageSize))
   let currentWallPage = min(wallPage, wallPages - 1)
   let visibleWalls = walls.drop(currentWallPage * wallPageSize).take(wallPageSize)
+  on workspaceId { pendingTheme = null; changeDeadline = 0; previewName = null; message = "" }
   on query { themePage = 0 }
   on section { themePage = 0 }
   on previewName { wallPage = 0 }
@@ -86,13 +202,14 @@ widget "Темы и обои" {
   onTap: { previewName = current; refresh(); screen() }
 
   component ThemeArrow(direction, targetTheme) {
-    let available = pendingTheme == null && targetTheme != null && targetTheme != current
+    let available = workspaceId != null && pendingTheme == null && targetTheme != null && targetTheme != current
     Box {
       height: 44; align: center
       onTap: {
         if available {
           haptic(); pendingTheme = targetTheme; changeDeadline = now + 20
-          message = run("timeout 15s python3 ~/.config/omalauncher/widgets/theme-catalog/catalog.py set ${sh(targetTheme)}")
+          message = run("timeout 15s python -c ${sh(workspaceHelper)} set ${sh(toJson(workspaceId))} ${sh(targetTheme)}")
+          refresh()
         }
       }
       Text { text: direction; align: center; fontSize: narrowTile ? 24 : 32; color: available ? foreground : muted }
@@ -217,9 +334,10 @@ widget "Темы и обои" {
         Button {
           text: pendingTheme != null ? "Смена…" : (current == previewName ? "Тема применена" : "Применить тему")
           onTap: {
-            if pendingTheme == null && current != previewName {
+            if workspaceId != null && pendingTheme == null && current != previewName {
               pendingTheme = previewName; changeDeadline = now + 20
-              message = run("timeout 15s python3 ~/.config/omalauncher/widgets/theme-catalog/catalog.py set ${sh(previewName)}")
+              message = run("timeout 15s python -c ${sh(workspaceHelper)} set ${sh(toJson(workspaceId))} ${sh(previewName)}")
+          refresh()
             }
           }
         }
@@ -241,7 +359,7 @@ widget "Темы и обои" {
               padding: 6; gap: 6; radius: 10 * corners
               background: alpha(surface, 0.65)
               border: selected ? 2 : 1; borderColor: selected ? accent : border
-              onTap: { haptic(); message = run("timeout 15s python3 ~/.config/omalauncher/widgets/theme-catalog/catalog.py set ${sh(w.theme)} ${sh(w.name)}") }
+              onTap: { if workspaceId != null { haptic(); message = run("timeout 15s python -c ${sh(workspaceHelper)} set ${sh(toJson(workspaceId))} ${sh(w.theme)} ${sh(w.name)}"); refresh() } }
               if w.preview != null {
                 Image { src: w.preview; height: previewHeight; fill: width; fit: cover; clip: true; radius: 6 * corners; label: w.name }
               } else {

@@ -60,7 +60,7 @@ VERSION_FLOORS = {'market-app-perminder-klair-solitaire.owl': '1.2.2',
  'quiet-reader.owl': '1.3.3',
  'market-justqrius-matrix-terminal.owl': '1.2.2',
  '65-cava-terminal.owl': '1.2.2',
- '83-themes.owl': '1.0.2'}
+ '83-themes.owl': '1.0.3'}
 def bumped_version(value):
  parts=[int(x) for x in re.match(r'[0-9.]+',value)[0].strip('.').split('.')][:3]
  parts += [0]*(3-len(parts))
