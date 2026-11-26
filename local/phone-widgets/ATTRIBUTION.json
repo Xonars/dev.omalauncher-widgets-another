@@ -668,5 +668,15 @@
     "local_maintainer": "Xonars",
     "license": "MIT",
     "note": "Локальная разработка Xonars."
+  },
+  {
+    "file": "oma-release.owl",
+    "kind": "app",
+    "name": "OMA · релиз",
+    "original_author": "Xonars",
+    "source": "https://github.com/Xonars/dev.omalauncher-widgets-another",
+    "local_maintainer": "Xonars",
+    "license": "MIT",
+    "note": "Локальная разработка; проверка готовности релиза."
   }
 ]

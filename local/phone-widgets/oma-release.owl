@@ -1,0 +1,118 @@
+app "OMA · релиз" {
+  meta { owl: 10; description: "Проверка CI и подготовка выпуска APK OMA Another"; version: "1.0.0"; license: "MIT"; category: "dev" }
+  title: "OMA · релиз"
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19 24 8l19 11v22H5zM5 19l19 10 19-10M24 29v12M24 3v16m-6-6 6 6 6-6"/><path d="m30 34 3 3 6-6"/></svg>"""
+  requires { pacman: ["python", "github-cli"] }
+  let inspector = """
+import base64
+import json
+import re
+import subprocess
+import sys
+
+REPO = "Xonars/dev.omalauncher-another"
+API = "repos/" + REPO
+
+def gh(*args):
+    p = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=12)
+    if p.returncode:
+        raise RuntimeError("GitHub недоступен. Проверьте gh auth status и сеть.")
+    return json.loads(p.stdout)
+
+def api(path):
+    return gh("api", API + path)
+
+def source_version(text):
+    codes = re.findall(r"^\s*versionCode\s*=\s*(\d+)\s*$", text, re.M)
+    names = re.findall(r'^\s*versionName\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"\s*$', text, re.M)
+    if len(codes) != 1 or len(names) != 1 or int(codes[0]) < 1:
+        raise RuntimeError("Не удалось определить версию Gradle.")
+    return names[0], int(codes[0])
+
+def published_build(rows):
+    builds = []
+    for row in rows:
+        if row["isDraft"] or row["isPrerelease"]:
+            continue
+        m = re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+-build([0-9]+)", row["tagName"])
+        if not m:
+            raise RuntimeError("Неизвестный формат стабильного релиза.")
+        builds.append(int(m[1]))
+    return max(builds, default=0)
+
+def inspect():
+    sha = api("/branches/main")["commit"]["sha"]
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise RuntimeError("Некорректный HEAD main.")
+    raw = api("/contents/app/build.gradle.kts?ref=" + sha)
+    version, code = source_version(base64.b64decode(raw["content"]).decode())
+    rows = gh("release", "list", "-R", REPO, "--limit", "100", "--json", "tagName,isDraft,isPrerelease")
+    if len(rows) >= 100:
+        raise RuntimeError("История релизов требует ручной проверки.")
+    latest = published_build(rows)
+    result = dict(sha=sha, version=version, code=code, latest=latest, tag=f"v{version}-build{code}")
+    if code <= latest:
+        return dict(result, phase="current", message="Этот Build уже выпущен или устарел.")
+    runs = api("/actions/workflows/ci.yml/runs?branch=main&event=push&per_page=20")["workflow_runs"]
+    matching = [x for x in runs if x.get("head_sha") == sha and x.get("head_branch") == "main"
+                and x.get("event") == "push" and x.get("path") == ".github/workflows/ci.yml"
+                and x.get("head_repository", {}).get("full_name") == REPO
+                and x.get("repository", {}).get("full_name") == REPO]
+    if not matching or matching[0]["status"] != "completed" or matching[0]["conclusion"] != "success":
+        return dict(result, phase="waiting", message="Для текущего main ещё нет успешного CI.")
+    run = matching[0]["id"]
+    assets = api(f"/actions/runs/{run}/artifacts?per_page=100")["artifacts"]
+    choices = [a for a in assets if a["name"] == "oma-another-ci-apk" and not a["expired"]]
+    if len(choices) != 1:
+        return dict(result, phase="waiting", run=str(run), message="Нет единственного доступного артефакта APK.")
+    a = choices[0]
+    digest = a.get("digest") or ""
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest) or not 0 < a["size_in_bytes"] <= 512*1024*1024:
+        raise RuntimeError("Некорректные метаданные CI-артефакта.")
+    return dict(result, phase="available", run=str(run), artifact=str(a["id"]),
+                digest=digest[7:], size=a["size_in_bytes"],
+                message="CI пройден. APK готов к ручному выпуску.")
+
+if __name__ == "__main__":
+    try:
+        print(json.dumps(inspect(), ensure_ascii=False))
+    except Exception as e:
+        print(json.dumps(dict(phase="error", message=str(e) if type(e) is RuntimeError else
+                              "Проверка не завершена. Проверьте GitHub CLI и сеть."), ensure_ascii=False))
+"""
+  source ci = cmd("python -c ${sh(inspector)}") json timeout 90s
+  source phone = cmd("omalauncher version") json
+  Column { scroll: true; padding: 12; gap: 14
+    Column { background: surface; radius: 12; padding: 14; gap: 8
+      Text { text: "GITHUB ACTIONS · MAIN"; style: small; color: accent; bold: true }
+      Text { text: ci.message ?? "Проверяем сборку…"; style: title; maxLines: 4 }
+      Text { text: "На телефоне · Build ${phone.versionCode ?? '?'}"; style: small }
+      if ci.sha != null {
+        Text { text: "Исходники · ${ci.version} / Build ${ci.code}"; bold: true }
+        Text { text: "Опубликовано · Build ${ci.latest}"; style: small }
+        Text { text: "HEAD · ${ci.sha}"; style: small; maxLines: 2; color: muted }
+      }
+      Button { text: "Проверить сборку"; onTap: refresh() }
+      if ci.run != null { Button { text: "Открыть CI"; onTap: url("https://github.com/Xonars/dev.omalauncher-another/actions/runs/" + ci.run) } }
+    }
+    Column { background: surface; radius: 12; padding: 14; gap: 8
+      Text { text: "1 · Артефакт"; bold: true; color: accent }
+      if ci.phase == "available" {
+        Text { text: "✓ CI пройден · ${fmtBytes(ci.size)}"; color: green }
+        Text { text: "SHA-256 ZIP · " + ci.digest; style: small; maxLines: 4 }
+        Button { text: "Копировать команду скачивания"; onTap: copy("mkdir -p ~/APK/oma-release-" + ci.sha + " && cd ~/APK/oma-release-" + ci.sha + " && gh api repos/Xonars/dev.omalauncher-another/actions/artifacts/" + ci.artifact + "/zip > ci.zip && printf '%s  ci.zip\\n' " + ci.digest + " | sha256sum -c - && unzip -n ci.zip") }
+      }
+      Text { text: "APK из CI не предназначен для установки. Нужна подпись оригинальным ключом."; style: small; maxLines: 4 }
+    }
+    Column { background: surface; radius: 12; padding: 14; gap: 8
+      Text { text: "2 · Подпись и публикация"; bold: true; color: accent }
+      Text { text: "Подпись выполняется вручную в терминале. Приложение не открывает ключ и не создаёт релизы автоматически."; style: small; maxLines: 5 }
+      if ci.phase == "available" {
+        Text { text: "Тег · " + ci.tag; bold: true }
+        Button { text: "Открыть инструкцию"; onTap: url("https://github.com/Xonars/dev.omalauncher-widgets-another/blob/main/apps/xonars/oma-release/README.md") }
+        Button { text: "Открыть GitHub Releases"; onTap: url("https://github.com/Xonars/dev.omalauncher-another/releases/new") }
+      }
+    }
+    Text { text: "Установка обновления выполняется в OMA Update. Ключ остаётся на телефоне."; style: small; color: muted; maxLines: 4 }
+  }
+}

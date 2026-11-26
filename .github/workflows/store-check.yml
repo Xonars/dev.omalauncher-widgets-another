@@ -3,7 +3,7 @@ on:
   pull_request:
     paths: ["apps/**", "widgets/**", "faces/**", "local/**", "tests/store/**", "tools/**", "resources/**", "store-collection.json", ".github/workflows/store-check.yml"]
   push:
-    branches: [oma-update-releases]
+    branches: [oma-update-releases, oma-release]
 permissions:
   contents: read
 jobs:

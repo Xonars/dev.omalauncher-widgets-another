@@ -370,5 +370,11 @@
     "path": "apps/xonars/telegram/app.owl",
     "author": "xonars",
     "resources": "resources/08766a9fe9c556752882ca49543195ed7c42a0cda741667c819a0b57af8e6c48.zip"
+  },
+  {
+    "source": "oma-release.owl",
+    "path": "apps/xonars/oma-release/app.owl",
+    "author": "xonars",
+    "resources": null
   }
 ]
