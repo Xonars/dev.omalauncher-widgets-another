@@ -51,7 +51,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/f006
 """
   let storeInstall = "python -c ${sh(storeBootstrap)}"
 
-  meta { owl: 10 ; description: "OMA · обновление — локальная версия из коллекции Xonars"; version: "1.0.2"; license: "MIT"; category: "system" }
+  meta { owl: 10 ; description: "OMA · обновление — локальная версия из коллекции Xonars"; version: "1.1.1"; license: "MIT"; category: "system" }
   title: "OMA · обновление"
   back: view != "Обновление"
   onBack: view = "Обновление"
@@ -63,6 +63,293 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/f006
   source job = file("/root/.cache/oma-updater/status.json") json
   source health = cmd("python -c ${sh(storeBootstrap)} && python /root/.local/share/omalauncher-store/xonars-oma-update/support/oma-updater/updater.py status") every 5s json
   source log = cmd("tail -c 4500 /root/.cache/oma-updater/build.log 2>/dev/null") every 2s
+
+
+  let releaseHelper = """
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+API = "https://api.github.com/repos/Xonars/dev.omalauncher-another"
+APP = "dev.omalauncher.another"
+CERT = "42d3ac1683f9eade8ecba1e4bc8137c4e39c8eab199b83803a5e4efb9ec6f1cf"
+MAX_APK = 512 * 1024 * 1024
+CACHE = Path.home() / ".cache/oma-updater/releases"
+STATE = CACHE / "state.json"
+APK = CACHE / "release.apk"
+os.umask(0o077)
+
+def read():
+    try:
+        return json.loads(STATE.read_text())
+    except (OSError, ValueError):
+        return {}
+
+def save(**kw):
+    state = read()
+    state.update(kw, updated=int(time.time()))
+    with tempfile.NamedTemporaryFile(dir=CACHE, mode="w", delete=False) as tmp:
+        json.dump(state, tmp, ensure_ascii=False)
+    os.replace(tmp.name, STATE)
+
+def token():
+    for name in ("GH_TOKEN", "GITHUB_TOKEN"):
+        if os.environ.get(name):
+            return os.environ[name].strip()
+    try:
+        p = subprocess.run(["gh", "auth", "token", "--hostname", "github.com"],
+                           capture_output=True, text=True, timeout=8)
+        if p.returncode == 0 and p.stdout.strip():
+            return p.stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    try:
+        p = subprocess.run(["git", "credential", "fill"],
+                           input="protocol=https\nhost=github.com\npath=Xonars/dev.omalauncher-another.git\n\n",
+                           capture_output=True, text=True, timeout=8,
+                           env=dict(os.environ, GIT_TERMINAL_PROMPT="0", GCM_INTERACTIVE="never"))
+        if p.returncode == 0:
+            for line in p.stdout.splitlines():
+                if line.startswith("password="):
+                    return line.partition("=")[2].strip()
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return ""
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+def open_url(url, secret, binary=False):
+    opener = urllib.request.build_opener(NoRedirect())
+    for _ in range(6):
+        p = urllib.parse.urlsplit(url)
+        if p.scheme != "https" or p.username or p.password or p.port not in (None, 443):
+            raise RuntimeError("Небезопасный адрес GitHub")
+        host = p.hostname
+        if host not in ("api.github.com", "github.com", "release-assets.githubusercontent.com",
+                        "objects.githubusercontent.com", "github-releases.githubusercontent.com"):
+            raise RuntimeError("Неожиданный сервер загрузки GitHub")
+        headers = {"User-Agent": "OMA-Another-Update", "Accept": "application/octet-stream" if binary else "application/vnd.github+json"}
+        if host == "api.github.com":
+            headers["X-GitHub-Api-Version"] = "2022-11-28"
+            if secret:
+                headers["Authorization"] = "Bearer " + secret
+        try:
+            return opener.open(urllib.request.Request(url, headers=headers), timeout=25)
+        except urllib.error.HTTPError as e:
+            if e.code in (301, 302, 303, 307, 308) and e.headers.get("Location"):
+                url = urllib.parse.urljoin(url, e.headers["Location"])
+                e.close()
+                continue
+            code = e.code
+            e.close()
+            raise HttpFailure(code) from None
+    raise RuntimeError("Слишком много перенаправлений GitHub")
+
+class HttpFailure(RuntimeError):
+    def __init__(self, code):
+        self.code = code
+        super().__init__("GitHub HTTP " + str(code))
+
+def api(path, secret):
+    with open_url(API + path, secret) as response:
+        data = response.read(2 * 1024 * 1024 + 1)
+    if len(data) > 2 * 1024 * 1024:
+        raise RuntimeError("Слишком большой ответ GitHub")
+    return json.loads(data)
+
+def select_release(release):
+    if release.get("draft") or release.get("prerelease"):
+        raise RuntimeError("Нужен опубликованный стабильный релиз")
+    candidates = []
+    for a in release.get("assets", []):
+        name = a.get("name", "")
+        if not re.fullmatch(r"(?:oma[-_ ]another|omalauncher[-_ ]another)[a-z0-9_. +()-]*\.apk", name, re.I):
+            continue
+        if re.search(r"(?:^|[-_. ])(?:ci|unsigned|x86|x86_64|armeabi|test)(?:[-_. ]|$)", name, re.I):
+            continue
+        if a.get("state") != "uploaded":
+            continue
+        candidates.append(a)
+    if not candidates:
+        return None
+    if len(candidates) != 1:
+        raise RuntimeError("В релизе несколько подходящих APK. Оставьте один APK OMA Another.")
+    a = candidates[0]
+    digest = a.get("digest") or ""
+    if not re.fullmatch(r"sha256:[0-9a-fA-F]{64}", digest):
+        raise RuntimeError("GitHub не предоставил SHA-256 APK")
+    if type(a.get("id")) is not int or a["id"] <= 0 or type(a.get("size")) is not int or not 0 < a["size"] <= MAX_APK:
+        raise RuntimeError("Некорректный размер или ID APK")
+    return dict(id=a["id"], name=a["name"], size=a["size"], sha256=digest[7:].lower(),
+                tag=str(release.get("tag_name", ""))[:120], published=str(release.get("published_at", ""))[:40])
+
+def latest(secret):
+    try:
+        return select_release(api("/releases/latest", secret))
+    except HttpFailure as e:
+        if e.code == 404:
+            try:
+                api("", secret)
+            except HttpFailure as auth:
+                if auth.code in (401, 403, 404):
+                    raise RuntimeError("Нет доступа к закрытому репозиторию. Выполните gh auth login или настройте Git credentials.") from None
+                raise
+            return None
+        if e.code in (401, 403):
+            raise RuntimeError("GitHub отказал в доступе. Проверьте авторизацию и права чтения репозитория.") from None
+        raise
+
+def installed():
+    try:
+        p = subprocess.run(["omalauncher", "version"], capture_output=True, text=True, timeout=10, check=True)
+        info = json.loads(p.stdout)
+        code = info["versionCode"]
+        if type(code) not in (int, float) or code < 1 or int(code) != code:
+            raise ValueError()
+        return int(code)
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        raise RuntimeError("Не удалось узнать versionCode установленного OMA") from None
+
+def tools():
+    roots = [Path(os.environ[k]) for k in ("ANDROID_HOME", "ANDROID_SDK_ROOT") if os.environ.get(k)]
+    roots.append(Path.home() / "android-sdk")
+    for root in roots:
+        d = root / "build-tools/37.0.0"
+        if all((d / n).is_file() for n in ("aapt2", "apksigner")):
+            return d
+    raise RuntimeError("Для проверки APK нужны установленные aapt2 и apksigner (Android Build Tools 37.0.0). Сборка не требуется.")
+
+def verify(path, selected):
+    if path.stat().st_size != selected["size"]:
+        raise RuntimeError("Размер APK не совпадает")
+    with path.open("rb") as f:
+        if hashlib.file_digest(f, "sha256").hexdigest() != selected["sha256"]:
+            raise RuntimeError("SHA-256 APK не совпадает")
+    d = tools()
+    try:
+        badging = subprocess.check_output([str(d / "aapt2"), "dump", "badging", str(path)], text=True, stderr=subprocess.DEVNULL, timeout=40)
+        certs = subprocess.check_output([str(d / "apksigner"), "verify", "--print-certs", str(path)], text=True, stderr=subprocess.DEVNULL, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        raise RuntimeError("APK не прошёл проверку Android Build Tools") from None
+    m = re.search(r"^package: name='([^']+)' versionCode='([0-9]+)'", badging, re.M)
+    if not m or m[1] != APP:
+        raise RuntimeError("APK не принадлежит OMA Another")
+    actual = set()
+    for line in certs.splitlines():
+        if " certificate SHA-256 digest:" not in line or line.startswith(("Source Stamp Signer ", "Source Stamp Signer:")):
+            continue
+        m_cert = re.fullmatch(r"(?:Signer #[0-9]+|Signer \([^)]*(?:\([^)]*\)[^)]*)?\)|V(?:1|2|3(?:\.[01])?|4) Signer(?: #[0-9]+)?:(?: \([^)]*(?:\([^)]*\)[^)]*)?\))?) certificate SHA-256 digest: ([0-9a-fA-F]{64})", line)
+        if not m_cert:
+            raise RuntimeError("Неизвестный формат сертификата APK")
+        actual.add(m_cert[1].lower())
+    if actual != {CERT}:
+        raise RuntimeError("APK подписан не ключом OMA Another. CI APK устанавливать нельзя.")
+    code = int(m[2])
+    return code
+
+def download(selected, secret):
+    current = latest(secret)
+    if current != selected:
+        raise RuntimeError("Релиз изменился. Проверьте GitHub заново.")
+    tmp = CACHE / "release.part"
+    try:
+        with open_url(API + "/releases/assets/" + str(selected["id"]), secret, True) as response, tmp.open("wb") as out:
+            total = 0
+            previous = -1
+            while True:
+                chunk = response.read(256 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > selected["size"]:
+                    raise RuntimeError("Размер скачивания превышает заявленный")
+                out.write(chunk)
+                percent = total * 100 // selected["size"]
+                if percent != previous:
+                    save(progress=percent, received=total)
+                    previous = percent
+        code = verify(tmp, selected)
+        os.replace(tmp, APK)
+        return code
+    finally:
+        tmp.unlink(missing_ok=True)
+
+def worker(action):
+    CACHE.mkdir(parents=True, exist_ok=True)
+    with (CACHE / "operation.lock").open("w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return
+        old = read()
+        try:
+            if action == "check":
+                save(phase="checking", message="Проверяем GitHub Releases", progress=0, selected=None, code=None)
+                version = installed()
+                selected = latest(token())
+                save(phase="available" if selected else "empty", selected=selected, installed=version,
+                     message="APK найден. Версия будет проверена после скачивания." if selected else "В последнем стабильном релизе нет APK OMA Another.")
+            elif action == "download":
+                selected = old.get("selected")
+                if not selected or old.get("phase") not in ("available", "ready", "current", "error"):
+                    raise RuntimeError("Сначала проверьте релиз")
+                save(phase="downloading", progress=0, received=0, message="Скачиваем и проверяем APK")
+                code = download(selected, token())
+                version = installed()
+                save(phase="ready" if code > version else "current", code=code, installed=version,
+                     message="APK проверен. Можно установить." if code > version else "Этот APK не новее установленной версии.")
+            elif action == "install":
+                selected = old.get("selected")
+                if not selected or old.get("phase") != "ready":
+                    raise RuntimeError("Сначала скачайте и проверьте APK")
+                save(phase="installing", message="Проверяем APK перед установкой")
+                code = verify(APK, selected)
+                if code <= installed():
+                    save(phase="current", code=code, message="Этот APK не новее установленной версии.")
+                    return
+                if not shutil.which("omalauncher-install"):
+                    raise RuntimeError("Штатный установщик OMA недоступен")
+                save(phase="installing", code=code, message="Подтвердите обновление в Android")
+                p = subprocess.run(["omalauncher-install", str(APK), "OMA Another GitHub Release"], capture_output=True, timeout=680)
+                if p.returncode:
+                    raise RuntimeError("Установка не подтверждена или завершилась ошибкой. Проверьте версию OMA.")
+                save(phase="done", message="Android подтвердил установку")
+            else:
+                raise RuntimeError("Неизвестное действие")
+        except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as exc:
+            # Do not print raw URL, credential helper output or signed redirect query strings.
+            message = str(exc) if type(exc) is RuntimeError or isinstance(exc, HttpFailure) else "Операция не завершена. Проверьте сеть, свободное место и версию OMA."
+            save(phase="error", message=message)
+
+if __name__ == "__main__":
+    worker(sys.argv[1])
+"""
+  let releaseLauncher = """
+import subprocess
+import sys
+subprocess.Popen([sys.executable, "-c", sys.argv[1], sys.argv[2]], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+print("ok")
+"""
+  source release = file("/root/.cache/oma-updater/releases/state.json") json
+  state releaseRequest = ""
+  state releaseRequestedAt = 0
+  state releaseOutput = ""
+  let releaseBusy = releaseRequest != "" || (contains(["checking", "downloading", "installing"], release.phase ?? "") && now - (release.updated ?? 0) < 720)
+  when releaseRequest != "" && (now - releaseRequestedAt >= 5 || (release.updated ?? 0) >= releaseRequestedAt + 1) { releaseRequest = "" }
+  on releaseOutput { if value != "" && value != "ok" { releaseRequest = ""; notify("OMA · релизы", "Не удалось запустить помощник") } }
 
   state view = "Обновление"
   state continuing = false
@@ -165,6 +452,36 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/f006
       }
     }
     if view == "Обновление" {
+      Column { padding: 14; gap: 8; background: surface; radius: 12; border: 1; borderColor: alpha(accent, 0.35)
+        Text { text: "GitHub Releases · без сборки"; bold: true; color: accent }
+        Text { text: release.message ?? "Проверьте наличие готового APK в последнем стабильном релизе."; style: small; maxLines: 5 }
+        if release.selected != null {
+          Text { text: "Релиз · " + release.selected.tag; bold: true; maxLines: 2 }
+          Text { text: release.selected.name; style: small; maxLines: 3 }
+          Text { text: "${round(release.selected.size / 1048576)} МиБ"; style: small; color: muted }
+        }
+        if release.installed != null { Text { text: "Установлен Build ${release.installed}"; style: small } }
+        if release.code != null { Text { text: "APK · Build ${release.code}"; style: small } }
+        if release.phase == "downloading" && releaseBusy {
+          Progress { value: release.progress ?? 0; max: 100; height: 5; color: accent }
+          Text { text: "Скачивание · ${release.progress ?? 0}%"; style: small }
+        }
+        if releaseBusy { Text { text: "Операция выполняется…"; color: accent; style: small } }
+        if !releaseBusy && !busy && !openingDownload {
+          Row { gap: 8; wrap: true
+            Button { text: "Проверить релиз"; onTap: { releaseRequest = "check"; releaseRequestedAt = now; releaseOutput = ""; releaseOutput = run("python -c ${sh(releaseLauncher)} ${sh(releaseHelper)} check") } }
+            if release.selected != null && (release.phase == "available" || release.phase == "error" || release.phase == "ready") {
+              Button { text: "Скачать APK"; onTap: { releaseRequest = "download"; releaseRequestedAt = now; releaseOutput = ""; releaseOutput = run("python -c ${sh(releaseLauncher)} ${sh(releaseHelper)} download") } }
+            }
+            if release.phase == "ready" {
+              Button { text: "Установить обновление"; onTap: { releaseRequest = "install"; releaseRequestedAt = now; releaseOutput = ""; releaseOutput = run("python -c ${sh(releaseLauncher)} ${sh(releaseHelper)} install") } }
+            }
+            if release.phase == "installing" { Button { text: "Проверить версию"; onTap: { releaseRequest = "check"; releaseRequestedAt = now; releaseOutput = ""; releaseOutput = run("python -c ${sh(releaseLauncher)} ${sh(releaseHelper)} check") } } }
+          }
+        }
+        Text { text: "Проверяются SHA-256, пакет, подпись и номер сборки. Установка только с подтверждением Android."; style: small; color: muted; maxLines: 4 }
+      }
+      Text { text: "Локальная сборка из исходников"; style: title }
       Column { padding: 16; gap: 10; background: alpha(accent, 0.08); radius: 12; border: 1; borderColor: alpha(accent, 0.35)
         Text { text: busy ? "В РАБОТЕ" : failed ? "НУЖНО ВНИМАНИЕ" : "ОБНОВЛЕНИЕ OMA"; style: small; color: failed ? red : accent; bold: true }
         Text { text: headline; style: title; maxLines: 3 }
@@ -186,7 +503,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/f006
               actionOutput = ""
               actionOutput = run("python -c ${sh(storeBootstrap)} && python /root/.local/share/omalauncher-store/xonars-oma-update/support/oma-updater/updater.py check 2>&1 && printf ok")
             } }
-            if !agentPending { Button { text: failed ? "Повторить сборку" : available || !apkReady ? "Собрать новую версию" : "Пересобрать APK"; onTap: {
+            if !agentPending && !releaseBusy { Button { text: failed ? "Повторить сборку" : available || !apkReady ? "Собрать новую версию" : "Пересобрать APK"; onTap: {
               previousUpdate = status.updated
               requestedAt = now
               requestedAction = "build"
@@ -216,7 +533,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/f006
           if (health.checks.failures ?? 0) > 0 {
             Text { text: "В сохранённой сборке есть ошибки тестов: ${health.checks.failures}. Учитывайте это перед установкой."; color: yellow; style: small; maxLines: 4 }
           }
-          if !openingDownload && installation.phase != "waiting" {
+          if !openingDownload && !releaseBusy && installation.phase != "waiting" {
             Button { text: "Установить на телефон"; onTap: {
               downloadResult = ""
               openingDownload = true
