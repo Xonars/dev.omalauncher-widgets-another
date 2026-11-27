@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "assets": [
+    {
+      "key": "ghost",
+      "file": "assets/atmosphere/ghost.webp",
+      "sha256": "24cb731d76ebf60e889f3ff08b54cdfe998bfa037fd8fa180be5561e775d1315",
+      "width": 540,
+      "height": 720
+    },
+    {
+      "key": "detective",
+      "file": "assets/atmosphere/detective.webp",
+      "sha256": "8abf5abd321a4f0b4cc1aa306d6fcb4028adcd79753651004e4390e3ba97efad",
+      "width": 540,
+      "height": 720
+    },
+    {
+      "key": "killer",
+      "file": "assets/atmosphere/killer.webp",
+      "sha256": "9f92beeb8336b27169b25266f1d594360b42dc0d2feb2f81b48852cd92ccac99",
+      "width": 540,
+      "height": 720
+    },
+    {
+      "key": "accomplice",
+      "file": "assets/atmosphere/accomplice.webp",
+      "sha256": "8356face81205a9c7af16dfca793d1a056d2852db989d4f4b4f26fc27a4bb324",
+      "width": 540,
+      "height": 720
+    },
+    {
+      "key": "witness",
+      "file": "assets/atmosphere/witness.webp",
+      "sha256": "8884fedb98d7a23592af3c104531905bd929d73101dff536936fb8a7265c7ff5",
+      "width": 540,
+      "height": 720
+    },
+    {
+      "key": "expert",
+      "file": "assets/atmosphere/expert.webp",
+      "sha256": "b0f4eb8d875534bd0300216de02d37def5b2ca24cc6f922e0fe919ec47de2273",
+      "width": 540,
+      "height": 720
+    },
+    {
+      "key": "back",
+      "file": "assets/atmosphere/back.webp",
+      "sha256": "48a5b350a8d5b33392d1b9e21045b6424b8225ac60d5c4c656d22a45175adc1f",
+      "width": 540,
+      "height": 720
+    },
+    {
+      "key": "table",
+      "file": "assets/atmosphere/table.webp",
+      "sha256": "d3fb6c78ca97498eda8a0948ee14dbf5b4d7c79bdaa631f63dcaaf28166014ae",
+      "width": 540,
+      "height": 959
+    }
+  ]
+}
