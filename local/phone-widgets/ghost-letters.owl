@@ -1,5 +1,5 @@
 app "Письма призрака" {
-  meta { owl: 18; description: "Карточное расследование с тайной перепиской"; version: "2.14.1"; category: "games" }
+  meta { owl: 18; description: "Карточное расследование с тайной перепиской"; version: "3.0.0"; category: "games" }
   title: "Письма призрака"
   icon: appIcon
   requires { pacman: ["python"] }
@@ -7,7 +7,7 @@ app "Письма призрака" {
   state mode = "classic"
   state illustrated = true
   state atmospheric = true
-  state dynamicFlow = true
+  state dynamicFlow = false
   state homeOpen = true
   state setupOpen = false
   state libraryReceipt = ""
@@ -52,6 +52,7 @@ app "Письма призрака" {
   state detectiveHandOpen = true
   state boardPanelOpen = true
   state replySection = ""
+  state replyMode = "version"
   state choices = {}
   state ballotPage = null
   state ghostNotes = {}
@@ -137,9 +138,11 @@ app "Письма призрака" {
       notebookPersisted = ""
       notebookPending = ""
       notebookError = false
-      detectiveHandOpen = phase == "mail" || phase == "intro"
-      boardPanelOpen = phase != "note" && phase != "statement" && phase != "discussion"
+      detectiveHandOpen = phase == "mail"
+      boardPanelOpen = true
+      lettersPanelOpen = true
       replySection = ""
+      replyMode = game.groups.any(g => g.key == "0") ? "version" : "letter"
       handAction = "send"
       ballotPage = null
       ghostNotes = {}
@@ -301,10 +304,10 @@ app "Письма призрака" {
         fill: width; gap: 3; padding: 4; radius: 7; border: 1
         borderColor: marked ? tone : (entry.correct || entry.voted || markText != "" ? personalTone : alpha(tone, 0.38))
         background: mix(panel, tone, marked ? 0.28 : 0.075)
-        Image { src: entry.artwork; fill: width; height: boardColumn ? 42 : (mini ? 72 : (showDesk ? 85 : 100)); radius: 4; fit: contain; label: entry.label; offset: [0, marked ? -2 : 0]; animate offset: 180ms }
+        Image { src: entry.artwork; fill: width; height: boardColumn ? (layoutWidth >= 400 ? 45 : 38) : (mini ? 72 : (showDesk ? 85 : 100)); radius: 4; fit: contain; label: entry.label; offset: [0, marked ? -2 : 0]; animate offset: 180ms }
         Box {
-          height: boardColumn ? 30 : (mini ? 30 : 34); fill: width; align: center
-          Text { text: boardColumn && markText != "" ? (personal == "likely" ? "✓ ${entry.label}" : "× ${entry.label}") : entry.label; font: sans; fontSize: boardColumn ? 12 : (mini ? 11 : 13); fontWeight: 700; align: center; maxLines: 2; color: boardColumn && markText != "" ? personalTone : parchment }
+          height: boardColumn ? 25 : (mini ? 30 : 34); fill: width; align: center
+          Text { text: boardColumn && markText != "" ? (personal == "likely" ? "✓ ${entry.label}" : "× ${entry.label}") : entry.label; font: sans; fontSize: boardColumn ? 11 : (mini ? 11 : 13); fontWeight: 700; align: center; maxLines: 2; color: boardColumn && markText != "" ? personalTone : parchment }
         }
         if marked || detail != "" {
           Text { text: marked ? (detail != "" ? "✓ ${detail}" : "✓ Выбрано") : detail; color: tone; font: sans; fontSize: 10; fontWeight: 650; align: center; maxLines: 2 }
@@ -364,36 +367,55 @@ app "Письма призрака" {
     }
   }
 
-  component Table(rows, annotate = true, editable = false) {
-    let verticalCategories = illustrated && !showDesk && layoutWidth >= 320 && len(rows) == 3
-    Grid {
-      columns: verticalCategories ? 3 : 1
-      gap: 5
+  // One card surface for viewing, private intent, public statements and voting.
+  component Table(rows, annotate = true, editable = false, interactive = false) {
+    let compactBoard = illustrated && len(rows) == 3
+    let testGroup = game.groups.find(g => g.key == "test" || g.key == "lead")
+    Column {
+      fill: width; gap: 3
+      if interactive && phase == "mail" {
+        Row {
+          align: center; gap: 5
+          Text { text: intentCard == null ? "Улика для письма · необязательно" : "Личный замысел: ${intentCard.label}"; color: gold; font: sans; fontSize: 11; weight: 1; maxLines: 2 }
+          if intentCard != null { Box { padding: 5; onTap: intentCard = null; Text { text: "×"; color: gold; fontSize: 16 } } }
+        }
+      }
       for category in rows key category.key {
         let tone = get(categoryColors, category.key, gold)
+        let categoryGroup = game.groups.find(g => g.key == category.key)
         Column {
-          fill: width; gap: 4
-          padding: 3; border: 1; borderColor: alpha(tone, 0.32); radius: 8
-          background: linear(0, 0, 1, 1, [mix(shell, tone, 0.09), shell])
-          if verticalCategories {
-            Text { text: category.label; color: tone; font: sans; fontSize: 14; fontWeight: 700; align: center; maxLines: 1 }
-          } else {
-            CategoryLabel { label: category.label; tint: tone }
-          }
+          fill: width; gap: 3
+          Text { text: category.label; color: tone; font: sans; fontSize: 12; fontWeight: 700 }
           Grid {
-            columns: verticalCategories ? 1 : smallCardColumns
+            columns: compactBoard ? (showDesk || layoutWidth < 320 ? 2 : 4) : 2
             gap: 4
             for clue in category.cards key clue.value {
               let k = "${int(clue.value)}"
               let flag = editable ? get(notebookMarks, k, "neutral") : (annotate && canNotebook ? get(game.notebook.marks, k, "neutral") : "neutral")
+              let testAllowed = testGroup != null && testGroup.options.any(o => o.value == clue.value)
+              let testPicks = get(choices, testGroup.key, []) ?? []
+              let categoryAllowed = categoryGroup != null && categoryGroup.options.any(o => o.value == clue.value)
+              let selectingTest = interactive && phase == "note" && replyMode == "letter"
+              let selectingCategory = interactive && categoryAllowed && (phase == "truth" || (phase == "note" && replyMode == "version") || (ballot && activeBallot.key == category.key))
+              let selected = interactive && ((phase == "mail" && intentCard.value == clue.value) || (selectingTest && testPicks.any(v => v == clue.value)) || (selectingCategory && get(choices, category.key, null) == clue.value))
+              let spoken = interactive && phase == "statement" && ((game.statement.clues ?? []).any(c => c.value == clue.value) || (game.statement.tests ?? []).any(c => c.value == clue.value))
               Box {
                 fill: width
                 onLongPress: { if illustrated && clue.artwork != null { previewCard = clue } }
                 onTap: {
                   if editable && canNotebook { notebookMarks = set(notebookMarks, k, flag == "neutral" ? "likely" : (flag == "likely" ? "unlikely" : "neutral")) }
-                  else if illustrated && clue.artwork != null { previewCard = clue }
+                  else if interactive && queued != token && !fastDiscussion {
+                    if phase == "mail" { intentCard = intentCard.value == clue.value ? null : clue }
+                    else if selectingTest && testAllowed {
+                      let updated = testPicks.any(v => v == clue.value) ? testPicks.filter(v => v != clue.value) : testPicks + [clue.value]
+                      choices = len(updated) > 0 ? set(choices, testGroup.key, updated) : remove(choices, testGroup.key)
+                    } else if selectingCategory {
+                      choices = get(choices, category.key, null) == clue.value ? remove(choices, category.key) : set(choices, category.key, clue.value)
+                      ballotConfirm = false
+                    } else if illustrated && clue.artwork != null { previewCard = clue }
+                  } else if illustrated && clue.artwork != null { previewCard = clue }
                 }
-                TableCard { entry: clue; tint: tone; boardColumn: verticalCategories; personal: flag }
+                TableCard { entry: clue; tint: tone; boardColumn: compactBoard; personal: flag; marked: selected || spoken }
               }
             }
           }
@@ -565,51 +587,55 @@ app "Письма призрака" {
     }
   }
 
+  component ReplyModes(groups) {
+    Row {
+      gap: 4
+      for tab in [{key: "version", label: "Версия"}, {key: "letter", label: "Письмо"}, {key: "suspect", label: "Подозрение"}].filter(t => (t.key != "version" || groups.any(g => g.key == "0")) && (t.key != "suspect" || groups.any(g => g.key == "person"))) key tab.key {
+        Box {
+          weight: 1; height: 36; align: center; radius: 6; background: replyMode == tab.key ? gold : panel
+          onTap: { replyMode = tab.key; replySection = "" }
+          Text { text: tab.label; color: replyMode == tab.key ? ink : parchment; font: sans; fontSize: 12; fontWeight: 700 }
+        }
+      }
+    }
+    Text { text: replyMode == "version" ? "Выбери версию на столе" : (replyMode == "letter" ? "Отметь на столе проверяемые улики" : "Назови подозреваемого и причину"); color: gold; font: sans; fontSize: 12; maxLines: 2 }
+  }
+
   component ReplyEditor(groups) {
     Column {
-      fill: width; gap: 8; padding: 9; radius: 9; border: 1; borderColor: gold; background: mix(panel, gold, 0.06)
-      RuleLabel { heading: "ТВОЯ ОЧЕРЕДЬ · РЕПЛИКА" }
-      Text { text: "Раскрой нужное поле. Можно оставить его пустым."; color: dim; font: sans; fontSize: 12 }
-      for section in groups key section.key {
-        let tone = get(categoryColors, section.key, gold)
+      fill: width; gap: 6; padding: 7; radius: 8; background: panel
+      for section in groups.filter(g => (replyMode == "letter" && g.key == "claim") || (replyMode == "version" && g.key == "stance") || (replyMode == "suspect" && (g.key == "person" || (g.key == "reason" && choices.person != null)))) key section.key {
         let selected = get(choices, section.key, null)
-        let checked = section.multiple ? (selected ?? []) : []
-        if section.key != "reason" || choices.person != null {
-          Column {
-            gap: 4
+        Text { text: section.label; color: gold; font: sans; fontSize: 12; fontWeight: 700 }
+        Flow {
+          gap: 4
+          for option in section.options key option.value {
             Row {
-              fill: width; gap: 5; padding: 5; align: center; radius: 5; background: alpha(tone, 0.08)
-              onTap: replySection = replySection == section.key ? "" : section.key
-              Column {
-                weight: 1; gap: 2
-                Text { text: section.label; font: sans; color: tone; fontSize: 12; fontWeight: 700; maxLines: 2 }
-                Text { text: section.multiple ? (len(checked) == 0 ? "Не выбрано" : join(section.options.filter(o => checked.any(v => v == o.value)).map(o => o.label), ", ")) : (section.options.find(o => o.value == selected).label ?? "Не выбрано"); color: parchment; font: sans; fontSize: 12; maxLines: 2 }
-              }
-              Text { text: replySection == section.key ? "⌃" : "⌄"; color: tone; fontSize: 15 }
-            }
-            if replySection == section.key { Flow {
-              gap: 4
-              for option in section.options key option.value {
-                let picked = section.multiple ? checked.any(x => x == option.value) : selected == option.value
-                Row {
-                  gap: 3; align: center; padding: [6, 5]; radius: 5; border: 1
-                  borderColor: picked ? tone : rule; background: mix(panel, tone, picked ? 0.26 : 0.04)
-                  onLongPress: { if illustrated && option.artwork != null && queued != token { previewCard = option } }
-                  onTap: {
-                    if queued != token {
-                      if section.multiple {
-                        let updated = checked.any(x => x == option.value) ? checked.filter(x => x != option.value) : checked + [option.value]
-                        choices = len(updated) > 0 ? set(choices, section.key, updated) : remove(choices, section.key)
-                      } else if selected == option.value { choices = remove(choices, section.key) }
-                      else { choices = set(choices, section.key, option.value) }
-                      if section.key == "person" { choices = remove(choices, "reason") }
-                    }
-                  }
-                  if illustrated && option.artwork != null { Image { src: option.artwork; size: 23; radius: 3; fit: contain; label: option.label } }
-                  Text { text: option.label; color: parchment; font: sans; fontSize: 12; maxLines: 2 }
+              gap: 4; align: center; padding: [8, 6]; radius: 6; border: 1
+              borderColor: selected == option.value ? gold : rule
+              background: selected == option.value ? plum : shell
+              onLongPress: { if illustrated && option.artwork != null && queued != token { previewCard = option } }
+              onTap: {
+                if queued != token {
+                  choices = selected == option.value ? remove(choices, section.key) : set(choices, section.key, option.value)
+                  if section.key == "person" { choices = remove(choices, "reason") }
                 }
               }
-            } }
+              if illustrated && option.artwork != null { Image { src: option.artwork; size: 27; radius: 3; fit: contain; label: option.label } }
+              Text { text: option.label; color: parchment; font: sans; fontSize: 12; maxLines: 2 }
+            }
+          }
+        }
+      }
+      RuleLabel { heading: "ТВОЯ РЕПЛИКА · ПРЕДПРОСМОТР" }
+      Column {
+        gap: 3; padding: 7; radius: 6; background: shell
+        if !groups.any(g => get(choices, g.key, null) != null) { Copy { body: "Пока без версии. Можно пропустить реплику." } }
+        for section in groups key section.key {
+          let selected = get(choices, section.key, null)
+          if selected != null {
+            let labels = section.multiple ? join(section.options.filter(o => selected.any(v => v == o.value)).map(o => o.label), ", ") : section.options.find(o => o.value == selected).label
+            Text { text: "${section.label}: ${labels}"; color: get(categoryColors, section.key, parchment); font: sans; fontSize: 12 }
           }
         }
       }
@@ -622,7 +648,7 @@ app "Письма призрака" {
       background: mix(panel, gold, 0.055)
       Row {
         align: center; gap: 5; onTap: detectiveHandOpen = !detectiveHandOpen
-        Text { text: "Улики детектива · ${len(hand)}"; color: gold; font: sans; fontSize: 14; fontWeight: 700; weight: 1 }
+        Text { text: "Твоя рука · ${len(hand)}"; color: gold; font: sans; fontSize: 14; fontWeight: 700; weight: 1 }
         Text { text: detectiveHandOpen ? "⌃" : "⌄"; color: gold; fontSize: 16 }
       }
       if detectiveHandOpen {
@@ -672,7 +698,10 @@ app "Письма призрака" {
             }
           }
         }
-        if editable { TurnAction {} }
+        if editable {
+          if intentCard != null { Text { text: "Проверяешь: ${intentCard.label} · только тебе"; color: dim; font: sans; fontSize: 11 } }
+          TurnAction {}
+        }
       }
     }
   }
@@ -735,10 +764,10 @@ app "Письма призрака" {
       }
       if opinion == null { Copy { body: "Пропускает ход." } }
       if opinion.speech != null && opinion.speech != "" {
-        if get(fullSpeech, player, false) {
+        if spotlight || get(fullSpeech, player, false) {
           Copy { body: opinion.speech; shade: parchment }
         }
-        if opinion.speech != "" {
+        if !spotlight && opinion.speech != "" {
           Box {
             fill: width; padding: 5; radius: 5; background: alpha(gold, 0.06)
             onTap: fullSpeech = set(fullSpeech, player, !get(fullSpeech, player, false))
@@ -846,6 +875,40 @@ app "Письма призрака" {
               color: current || complete ? tone : dim; font: sans; fontSize: 12; fontWeight: 700; align: center
             }
           }
+        }
+      }
+    }
+  }
+
+  component TablePlayers(players) {
+    Grid {
+      columns: len(players) <= 6 ? len(players) : 6
+      gap: 3
+      for player in players key player.value {
+        let person = (game.investigation.people ?? []).find(p => p.pid == player.value)
+        let speaking = phase == "statement" && game.speaker == player.name
+        let me = solo && game.notebook.pid == player.value
+        let spoken = (game.notes ?? []).any(n => n.player == player.name)
+        Column {
+          fill: width; gap: 1; padding: 3; radius: 6; border: 1; borderColor: speaking || me ? gold : rule
+          background: speaking ? plum : panel
+          onTap: {
+            if person != null && queued == "" && !fastDiscussion {
+              investigationPerson = person.pid; investigationRound = null; notebookTab = "people"; reviewRound = null
+              if canNotebook {
+                notebookMarks = game.notebook.marks ?? {}
+                notebookSuspects = game.notebook.suspects ?? {}
+                notebookText = game.notebook.text ?? ""
+                notebookPersisted = toJson({marks: notebookMarks, suspects: notebookSuspects, text: notebookText})
+                notebookError = false
+              }
+              evidence = "notebook"
+            }
+          }
+          Text { text: sub(player.name, 0, 1); color: gold; font: serif; fontSize: 19; align: center }
+          Text { text: player.name; color: parchment; font: sans; fontSize: 10; align: center; maxLines: 1 }
+          Text { text: speaking ? "Говорит" : (me ? "Ты" : (spoken ? "✓" : "○")); color: speaking ? gold : dim; font: sans; fontSize: 10; align: center; maxLines: 1 }
+          if player.suspicions > 0 { Text { text: "↑ ${player.suspicions}"; color: ash; font: sans; fontSize: 10; align: center } }
         }
       }
     }
@@ -1017,12 +1080,12 @@ app "Письма призрака" {
   component StageTracker(stage) {
     Row {
       gap: 4
-      for step in [{label: "Письма", glyph: "✉", index: 0}, {label: "Призрак", glyph: "◇", index: 1}, {label: "Версии", glyph: "≋", index: 2}, {label: "Итоги", glyph: "✓", index: 3}] key step.label {
+      for step in [{label: "Письма", glyph: "✉", index: 0}, {label: "Призрак", glyph: "◇", index: 1}, {label: "Разговор", glyph: "≋", index: 2}, {label: "Итоги", glyph: "○", index: 3}] key step.label {
         Column {
           weight: 1; gap: 1; padding: 3; radius: 6
           background: stage == step.index ? alpha(gold, 0.14) : alpha(panel, 0.7)
           border: 1; borderColor: stage == step.index ? gold : rule
-          Text { text: "${step.index < stage ? "✓" : step.glyph} ${step.label}"; color: step.index < stage ? moss : (stage == step.index ? gold : dim); font: sans; fontSize: 11; align: center; maxLines: 1 }
+          Text { text: "${step.index < stage ? "✓" : (step.index == stage ? step.glyph : "○")} ${step.label}"; color: step.index < stage ? moss : (stage == step.index ? gold : dim); font: sans; fontSize: 11; align: center; maxLines: 1 }
         }
       }
     }
@@ -1142,7 +1205,7 @@ app "Письма призрака" {
         if data.me != null {
           Text { text: "Вас подозревают · ${data.me.count}"; color: data.me.count > 0 ? ash : dim; font: serif; fontSize: 20 }
           for accusation in data.me.incoming key accusation.pid {
-            Text { text: "${accusation.source} → вы · Р${accusation.round}"; color: parchment; fontSize: 12 }
+            Text { text: "${accusation.source} → вы · Р${accusation.round}: ${accusation.reason}"; color: parchment; fontSize: 12 }
           }
         }
         Box {
@@ -1164,6 +1227,8 @@ app "Письма призрака" {
         }
       }
       CategoryLabel { label: "Кто кого подозревает"; tint: ash }
+      Flow {
+        gap: 4
       for person in data.people key person.pid {
         Row {
           align: center; gap: 6; padding: 9; radius: 8; border: 1
@@ -1181,6 +1246,7 @@ app "Письма призрака" {
           }
           Suspicion { count: person.count }
         }
+      }
       }
       let selected = data.people.find(p => p.pid == investigationPerson) ?? data.me ?? first(data.people)
       if selected != null {
@@ -1595,8 +1661,8 @@ app "Письма призрака" {
           padding: 8
           background: alpha(gold, 0.035)
           radius: 10; border: 1; borderColor: rule
-          DeskBoard { rows: game.board }
-          Roster { players: game.roster }
+          Table { rows: game.board; interactive: shownPage == "" && phase != "result" }
+          if phase == "result" { Roster { players: game.roster } }
         }
       }
       Column {
@@ -1960,9 +2026,10 @@ app "Письма призрака" {
             if (game.flow.stage ?? -1) >= 0 { StageTracker { stage: game.flow.stage } }
             Row {
               align: center; gap: 5
-              Text { text: phaseLabel; color: dim; font: sans; fontSize: 11; weight: 1; maxLines: 1 }
+              Text { text: phase == "statement" ? "Говорит · ${game.speaker}" : (phase == "note" ? "Твоя очередь · реплика" : phaseLabel); color: dim; font: sans; fontSize: 11; weight: 1; maxLines: 1 }
               Text { text: "${len(game.roster)} за столом"; color: gold; font: sans; fontSize: 11 }
             }
+            if shownPage == "" { TablePlayers { players: game.roster } }
           }
           // A new turn starts at the top of its own scroll view.
           for sheet in [game] key "${token}/${shownPage}/${activeBallot.key ?? ""}" {
@@ -1991,17 +2058,10 @@ app "Письма призрака" {
                   for opinion in sheet.notes key opinion.player { Opinion { player: opinion.player; opinion: opinion } }
                 }
               } else {
+                if sheet.phase == "note" { ReplyModes { groups: sheet.groups } }
                 if !showDesk && len(sheet.board ?? []) > 0 && sheet.phase != "result" && sheet.phase != "role" {
-                  DiscardPile { hand: sheet.detective_hand ?? []; count: sheet.discard_count ?? 0; editable: sheet.phase == "mail" }
                   LettersPanel { letters: sheet.letters }
-                  if sheet.phase == "note" || sheet.phase == "statement" || sheet.phase == "discussion" {
-                    Row {
-                      align: center; gap: 5; padding: 5; onTap: boardPanelOpen = !boardPanelOpen
-                      Text { text: "Улики преступления"; color: gold; font: sans; fontSize: 13; weight: 1 }
-                      Text { text: boardPanelOpen ? "⌃" : "⌄"; color: gold; fontSize: 15 }
-                    }
-                    if boardPanelOpen { Table { rows: sheet.board } }
-                  } else { Table { rows: sheet.board } }
+                  Table { rows: sheet.board; interactive: true }
                 }
                 if sheet.phase == "note" { ReplyEditor { groups: sheet.groups } }
                 if sheet.phase == "statement" {
@@ -2044,10 +2104,10 @@ app "Письма призрака" {
                       }
                     }
                   }
-                } else {
-                  SceneTitle { heading: sheet.phase == "discussion" ? "Версии за столом" : sheet.title; description: ballot || sheet.phase == "discussion" || sheet.phase == "mail" ? "" : sheet.brief }
+                } else if phase != "mail" && phase != "note" && phase != "statement" {
+                  SceneTitle { heading: ballot ? "Обвинительное заключение" : (sheet.phase == "discussion" ? "Версии за столом" : sheet.title); description: ballot || sheet.phase == "discussion" ? "" : sheet.brief }
                 }
-                if privateTurn && sheet.phase != "role" {
+                if privateTurn && sheet.phase != "role" && (sheet.phase != "mail" && sheet.phase != "note" || len(sheet.actor.knowledge ?? []) > 0 || len(sheet.actor.recheck ?? []) > 0) {
                   Column {
                     gap: 5; padding: 11; radius: 10; border: 1; borderColor: rule; background: panel
                     RuleLabel { heading: sheet.actor.role == "Призрак" ? sheet.actor.label : "${sheet.actor.label} · ${sheet.actor.role}" }
@@ -2178,29 +2238,7 @@ app "Письма призрака" {
                 if phase == "mail" {
                   let hand = sheet.groups.find(g => g.key == "send")
                   if showDesk { CategoryLabel { label: "Почта · выбери карту"; tint: gold } }
-                  Row {
-                    gap: 6; padding: 7; radius: 7; background: panel; align: center
-                    onTap: intentOpen = !intentOpen
-                    Text { text: intentCard == null ? "Какую улику проверяешь? (необязательно)" : "Личный замысел: ${intentCard.label}"; color: parchment; font: sans; fontSize: 12; weight: 1; maxLines: 2 }
-                    Text { text: intentOpen ? "−" : "+"; color: gold; fontSize: 16 }
-                  }
-                  if intentOpen {
-                    Copy { body: "Никто не увидит эту отметку до завершения дела. Она нужна для анализа, не влияет на правила." }
-                    for category in sheet.board key category.key {
-                      CategoryLabel { label: category.label; tint: get(categoryColors, category.key, gold) }
-                      Grid {
-                        columns: smallCardColumns; gap: 4
-                        for clue in category.cards key clue.value {
-                          Box {
-                            fill: width
-                            onTap: { intentCard = intentCard.value == clue.value ? null : clue; intentOpen = false }
-                            onLongPress: { if illustrated && clue.artwork != null { previewCard = clue } }
-                            TableCard { entry: clue; marked: intentCard.value == clue.value }
-                          }
-                        }
-                      }
-                    }
-                  }
+                  if showDesk && intentCard != null { Copy { body: "Личный замысел: ${intentCard.label}" } }
                   if showDesk {
                   Row {
                     gap: 5
@@ -2256,7 +2294,7 @@ app "Письма призрака" {
                   }
                   }
                 }
-                let shownGroups = phase == "note" ? [] : (ballot ? [activeBallot] : (phase == "mail" ? sheet.groups.filter(g => g.key != "send" && g.key != "send2" && g.key != "discard") : sheet.groups))
+                let shownGroups = phase == "note" || phase == "truth" ? [] : (ballot ? [activeBallot].filter(g => g.key == "suspect") : (phase == "mail" ? sheet.groups.filter(g => g.key != "send" && g.key != "send2" && g.key != "discard") : sheet.groups))
                 for section in shownGroups key section.key {
                   let tone = get(categoryColors, section.key, (section.key == "echo" ? moss :
                                 (section.key == "silence" || section.key == "person" || section.key == "suspect" ? ash : (section.key == "seal" ? violet : gold))))
@@ -2343,7 +2381,7 @@ app "Письма призрака" {
               }
             }
           }
-          if !showDesk && shownPage == "" && phase != "note" && len(game.detective_hand ?? []) > 0 {
+          if !showDesk && shownPage == "" && phase == "mail" && len(game.detective_hand ?? []) > 0 {
             DetectiveHand { hand: game.detective_hand; editable: phase == "mail" }
           }
           if conflicting && shownPage == "" {
