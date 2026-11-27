@@ -753,30 +753,6 @@ app "Письма призрака" {
     }
   }
 
-  component LiveStatement(player, opinion, progress) {
-    Column {
-      fill: width; gap: 5; padding: 9; radius: 8; background: panel; border: 1; borderColor: gold
-      Row {
-        align: center; gap: 5
-        Box { size: 30; radius: 15; align: center; background: plum; Text { text: sub(player ?? "?", 0, 1); color: gold; font: serif; fontSize: 18 } }
-        Text { text: player; color: parchment; font: sans; fontSize: 15; fontWeight: 700; weight: 1 }
-        Text { text: progress; color: dim; font: sans; fontSize: 11 }
-      }
-      if opinion != null && opinion.speech != null && opinion.speech != "" {
-        Copy { body: opinion.speech; shade: parchment }
-        if opinion.suspect != null {
-          Text { text: "Подозревает → ${opinion.suspect}${opinion.reason != "" ? ": " + opinion.reason : ""}"; color: ash; font: sans; fontSize: 12 }
-        }
-        if get(fullSpeech, "details-" + player, false) { Opinion { player: player; opinion: opinion } }
-        Box {
-          fill: width; padding: 4
-          onTap: fullSpeech = set(fullSpeech, "details-" + player, !get(fullSpeech, "details-" + player, false))
-          Text { text: get(fullSpeech, "details-" + player, false) ? "Скрыть детали" : "Карты и аргументы ›"; color: gold; font: sans; fontSize: 12 }
-        }
-      } else { Opinion { player: player; opinion: opinion; spotlight: true } }
-    }
-  }
-
   component Opinion(player, opinion, spotlight = false) {
     Column {
       fill: width; gap: 8; padding: 12; radius: 12; border: 1
@@ -875,6 +851,30 @@ app "Письма призрака" {
           }
         }
       }
+    }
+  }
+
+  component LiveStatement(player, opinion, progress) {
+    Column {
+      fill: width; gap: 5; padding: 9; radius: 8; background: panel; border: 1; borderColor: gold
+      Row {
+        align: center; gap: 5
+        Box { size: 30; radius: 15; align: center; background: plum; Text { text: sub(player ?? "?", 0, 1); color: gold; font: serif; fontSize: 18 } }
+        Text { text: player; color: parchment; font: sans; fontSize: 15; fontWeight: 700; weight: 1 }
+        Text { text: progress; color: dim; font: sans; fontSize: 11 }
+      }
+      if opinion != null && opinion.speech != null && opinion.speech != "" {
+        Copy { body: opinion.speech; shade: parchment }
+        if opinion.suspect != null {
+          Text { text: "Подозревает → ${opinion.suspect}${opinion.reason != "" ? ": " + opinion.reason : ""}"; color: ash; font: sans; fontSize: 12 }
+        }
+        if get(fullSpeech, "details-" + player, false) { Opinion { player: player; opinion: opinion } }
+        Box {
+          fill: width; padding: 4
+          onTap: fullSpeech = set(fullSpeech, "details-" + player, !get(fullSpeech, "details-" + player, false))
+          Text { text: get(fullSpeech, "details-" + player, false) ? "Скрыть детали" : "Карты и аргументы ›"; color: gold; font: sans; fontSize: 12 }
+        }
+      } else { Opinion { player: player; opinion: opinion; spotlight: true } }
     }
   }
 
