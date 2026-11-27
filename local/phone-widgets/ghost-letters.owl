@@ -1,5 +1,5 @@
 app "Письма призрака" {
-  meta { owl: 18; description: "Карточное расследование с тайной перепиской"; version: "2.6.0"; category: "games" }
+  meta { owl: 18; description: "Карточное расследование с тайной перепиской"; version: "2.7.0"; category: "games" }
   title: "Письма призрака"
   icon: appIcon
   requires { pacman: ["python"] }
@@ -7,6 +7,20 @@ app "Письма призрака" {
   state mode = "classic"
   state illustrated = true
   state atmospheric = true
+  state dynamicFlow = true
+  state homeOpen = true
+  state setupOpen = false
+  state libraryReceipt = ""
+  state libraryData = null
+  state archivedCase = null
+  state libraryBusy = false
+  state libraryError = ""
+  state libraryFilter = {}
+  state archivePage = "summary"
+  state collectionQuery = ""
+  state intentCard = null
+  state intentOpen = false
+  state ballotConfirm = false
   state previewCard = null
   state fastDiscussion = false
   state fullSpeech = {}
@@ -46,7 +60,7 @@ app "Письма призрака" {
   let layoutHeight = screenHeight ?? 0
   let wideDesk = layoutWidth >= 640 && (layoutWidth >= 900 || layoutWidth > layoutHeight)
   let roomyDesk = layoutWidth >= 900 && layoutHeight >= 480
-  let showDesk = wideDesk && layoutWidth >= 850 && len(game.board ?? []) > 0
+  let showDesk = wideDesk && layoutWidth >= 850 && len(game.board ?? []) > 0 && !homeOpen && overlay == ""
   let shownPage = showDesk && (evidence == "board" || evidence == "letters") ? "" : evidence
   let privateTurn = game.actor != null
   let solo = game.local_count == 1
@@ -93,6 +107,9 @@ app "Письма призрака" {
       previewCard = null
       fullSpeech = {}
       privateDetails = false
+      intentCard = null
+      intentOpen = false
+      ballotConfirm = false
       choices = {}
       let claims = game.groups.find(g => g.key == "claim")
       if phase == "note" && len(claims.options ?? []) == 1 {
@@ -118,30 +135,50 @@ app "Письма призрака" {
       if answer.game != null {
         caseView = answer.game
         if notebookSaving { evidence = "" }
+        if answer.game.phase == "setup" { homeOpen = true; setupOpen = false }
       }
       else { problem = answer.error ?? "Ход не сохранён. Попробуй ещё раз." }
       notebookSaving = false
       queued = ""
-      if fastDiscussion {
-        if answer.game != null && answer.game.phase == "statement" && answer.game.actor == null && answer.game.local_count == 1 {
-          let nextToken = "${answer.game.id}:${answer.game.rev}"
-          queued = nextToken
-          receipt = run("${script} advance ${sh(nextToken)}")
-        } else { fastDiscussion = false }
+      if answer.game != null && answer.game.local_count == 1 && answer.game.actor == null && !homeOpen &&
+          ((dynamicFlow && answer.game.phase == "intro") || ((dynamicFlow || fastDiscussion) && answer.game.phase == "statement")) {
+        let nextToken = "${answer.game.id}:${answer.game.rev}"
+        queued = nextToken
+        receipt = run("${script} advance ${sh(nextToken)}")
+      } else { fastDiscussion = false }
+    }
+  }
+
+  on libraryReceipt {
+    if value != "" {
+      let answer = parseJson(value)
+      libraryBusy = false
+      if answer.error != null { libraryError = answer.error }
+      else if answer.export != null {
+        run("omalauncher share ${sh(answer.export)}")
+      } else if answer.case != null {
+        archivedCase = answer
+        archivePage = "summary"
+        reviewRound = null
+      } else {
+        libraryData = answer
       }
     }
   }
 
   // Back covers a private hand before the app can be left.
-  back: fastDiscussion || previewCard != null || overlay != "" || (privateTurn && !solo && !covered) || shownPage != ""
+  back: fastDiscussion || previewCard != null || overlay != "" || intentOpen || ballotConfirm || (privateTurn && !solo && !covered) || shownPage != "" || (!homeOpen && !setup && !privateTurn)
   onBack: {
     if fastDiscussion { fastDiscussion = false }
     else if previewCard != null { previewCard = null }
-    else if overlay != "" { overlay = "" }
-    else {
+    else if archivedCase != null { archivedCase = null; reviewRound = null }
+    else if overlay != "" { overlay = ""; libraryError = "" }
+    else if intentOpen { intentOpen = false }
+    else if ballotConfirm { ballotConfirm = false }
+    else if shownPage != "" || (privateTurn && !solo && !covered) {
       evidence = ""
       revealed = ""
-    }
+    } else { homeOpen = true }
   }
 
   component RuleLabel(heading) {
@@ -698,6 +735,68 @@ app "Письма призрака" {
     }
   }
 
+  component StageTracker(stage) {
+    Row {
+      gap: 4
+      for step in [{label: "Письма", glyph: "✉", index: 0}, {label: "Призрак", glyph: "◇", index: 1}, {label: "Версии", glyph: "≋", index: 2}, {label: "Итоги", glyph: "✓", index: 3}] key step.label {
+        Column {
+          weight: 1; gap: 2; padding: 4; radius: 6
+          background: stage == step.index ? alpha(gold, 0.14) : alpha(panel, 0.7)
+          border: 1; borderColor: stage == step.index ? gold : rule
+          Text { text: step.index < stage ? "✓" : step.glyph; color: step.index < stage ? moss : (stage == step.index ? gold : dim); fontSize: 15; align: center }
+          Text { text: step.label; color: stage == step.index ? gold : dim; font: sans; fontSize: 11; align: center }
+        }
+      }
+    }
+  }
+
+  component RoundSummary(flow, roster) {
+    Column {
+      gap: 8
+      Grid {
+        columns: 3; gap: 5
+        for item in [{label: "Получено", value: flow.received}, {label: "Открыто всего", value: flow.opened}, {label: "В архиве", value: flow.archived}] key item.label {
+          Column {
+            gap: 3; padding: 7; radius: 7; background: panel
+            Text { text: item.value == null ? "—" : "${item.value}"; color: gold; font: serif; fontSize: 23; align: center }
+            Text { text: item.label; color: dim; font: sans; fontSize: 10; align: center; maxLines: 2 }
+          }
+        }
+      }
+      CategoryLabel { label: "Поддержанные версии" }
+      for leader in flow.leaders ?? [] key leader.label {
+        Column {
+          gap: 3
+          Text { text: leader.label; color: gold; font: sans; fontSize: 12 }
+          if len(leader.cards) == 0 { Copy { body: "Пока нет публичной версии." } }
+          for item in leader.cards key item.card.value {
+            Row {
+              gap: 6; align: center; padding: 5; radius: 7; background: panel
+              if illustrated && item.card.artwork != null { Image { src: item.card.artwork; size: 35; fit: contain; radius: 4; label: item.card.label } }
+              Text { text: item.card.label; color: parchment; weight: 1; font: sans; fontSize: 13; maxLines: 2 }
+              Text { text: "${item.votes}"; color: gold; font: serif; fontSize: 18 }
+            }
+          }
+        }
+      }
+      if !game.cooperative {
+        CategoryLabel { label: "Публичные подозрения" }
+        for player in roster.filter(p => p.value != 0) key player.value {
+          Row {
+            gap: 5; align: center
+            Text { text: player.name; color: parchment; font: sans; fontSize: 12; width: 67; maxLines: 1 }
+            Box {
+              weight: 1; height: 7; radius: 4; background: rule
+              Row { gap: 0; for i in range(len(roster)-1) { Box { weight: 1; height: 7; radius: 2; background: i < (player.suspicions ?? 0) ? ash : rule } } }
+            }
+            Text { text: "${player.suspicions ?? 0}"; color: dim; font: sans; fontSize: 12 }
+          }
+        }
+      }
+      Copy { body: "Это публичные мнения участников, а не подтверждение истины." }
+    }
+  }
+
   component Verdict(rows) {
     Column {
       gap: 7
@@ -920,6 +1019,32 @@ app "Письма призрака" {
     }
   }
 
+  component StatsPanel(stats) {
+    Column {
+      gap: 9
+      Grid {
+        columns: 2; gap: 6
+        for item in [{label: "Партий", value: "${stats.total}"}, {label: "Победы участников", value: stats.attempts > 0 ? "${int(100 * stats.wins / stats.attempts)}%" : "—"}, {label: "Верные улики стола", value: stats.clues > 0 ? "${int(100 * stats.correct / stats.clues)}%" : "—"}, {label: "Среднее время", value: stats.average_seconds != null ? "${int(stats.average_seconds / 60)} мин" : "—"}, {label: "Дело раскрыто", value: "${stats.solved} / ${stats.total}"}, {label: "Раунды без подсказок", value: "${stats.empty_rounds} / ${stats.rounds}"}] key item.label {
+          Column {
+            gap: 3; padding: 9; radius: 9; border: 1; borderColor: rule; background: panel
+            Text { text: item.value; color: gold; font: serif; fontSize: 25; align: center }
+            Text { text: item.label; color: dim; font: sans; fontSize: 11; align: center; maxLines: 2 }
+          }
+        }
+      }
+      Copy { body: "Время включает паузы; победы считаются по локальным участникам, улики — по общему голосованию стола." }
+      CategoryLabel { label: "Результаты по ролям" }
+      for role in stats.roles key role.key {
+        Row {
+          gap: 8; padding: 7; radius: 6; background: panel; align: center
+          Text { text: role.label; color: parchment; weight: 1; font: sans; fontSize: 13 }
+          Text { text: "${role.wins} / ${role.total}"; color: gold; font: sans; fontSize: 13 }
+          Text { text: role.total > 0 ? "${int(role.wins * 100 / role.total)}%" : "—"; color: moss; width: 44; align: center; font: sans; fontSize: 12 }
+        }
+      }
+    }
+  }
+
   component Envelope() {
     if atmospheric && art.back != null {
       Image { src: art.back; fill: width; height: 170; fit: contain; label: "Запечатанное досье" }
@@ -962,6 +1087,15 @@ app "Письма призрака" {
     gap: 10
     Row {
       align: center
+      if !homeOpen && !loading && !failed {
+        Box {
+          width: 36; height: 36; radius: 8; align: center; background: panel; border: 1; borderColor: rule
+          onTap: {
+            if queued == "" && !fastDiscussion { homeOpen = true; setupOpen = false; previewCard = null; evidence = ""; overlay = ""; revealed = "" }
+          }
+          Text { text: "⌂"; color: gold; fontSize: 21; align: center }
+        }
+      }
       Text {
         text: setup || loading || failed ? "✉  ПОЧТОВЫЙ ЯЩИК" : "${game.mode}"
         color: gold; fontWeight: 700; fontSize: 12; letterSpacing: 0.6; weight: 1
@@ -1018,6 +1152,117 @@ app "Письма призрака" {
             if previewCard.mark != null { RuleLabel { heading: previewCard.mark } }
           }
           Box { fill: width; onTap: previewCard = null; Action { label: "Закрыть карту"; hot: false } }
+        } else if overlay == "library" || overlay == "stats" || overlay == "collection" {
+          Column {
+            weight: 1; scroll: true; gap: 10
+            if archivedCase != null {
+              SceneTitle { heading: "Дело № ${archivedCase.summary.short}"; description: archivedCase.summary.date }
+              let record = archivedCase.case
+              Row {
+                gap: 4
+                for tab in [{key: "summary",label: "Итоги"},{key: "board",label: "Стол"},{key: "letters",label: "Письма"},{key: "history",label: "Версии"},{key: "audit",label: "Почта"},{key: "debrief",label: "Разбор"}] key tab.key {
+                  Box {
+                    weight: 1; height: 36; radius: 6; align: center; background: archivePage == tab.key ? plum : panel
+                    onTap: { archivePage = tab.key; reviewRound = null }
+                    Text { text: tab.label; color: parchment; font: sans; fontSize: 11; align: center }
+                  }
+                }
+              }
+              if archivePage == "summary" {
+                SceneTitle { heading: record.title; description: record.brief }
+                Verdict { rows: record.verdict }
+                Lines { rows: record.outcome }
+                Roster { players: record.roster }
+                for tally,i in record.tallies { CategoryLabel { label: "Голосование ${i+1}" }; Lines { rows: tally } }
+              } else if archivePage == "board" { Table { rows: record.board } }
+              else if archivePage == "letters" { Post { letters: record.letters } }
+              else if archivePage == "history" { DiscussionHistory { rounds: record.history; letters: record.letters } }
+              else if archivePage == "audit" { MailAudit { rounds: record.mail_audit } }
+              else if archivePage == "debrief" { Debrief { rounds: record.debrief; human: record.ghost_is_human } }
+            } else if overlay == "collection" {
+              SceneTitle { heading: "Коллекция карт"; description: "Все 131 иллюстрация. Удерживай карту для просмотра." }
+              Input { text: collectionQuery; placeholder: "Найти карту"; onChange: collectionQuery = value }
+              Grid {
+                columns: smallCardColumns; gap: 5
+                for card in (libraryData.cards ?? []).filter(c => collectionQuery == "" || lower(c.label).contains(lower(collectionQuery))) key card.value {
+                  Box {
+                    fill: width
+                    onTap: { if card.artwork != null { previewCard = card } }
+                    TableCard { entry: card }
+                  }
+                }
+              }
+            } else {
+              SceneTitle { heading: overlay == "stats" ? "Статистика" : "Архив расследований"; description: "Только завершённые дела · локальные данные" }
+              CategoryLabel { label: "Фильтры" }
+              Grid {
+                columns: 2; gap: 5
+                for filter in [{key: "difficulty", label: "Сложность", values: ["","easy","normal","hard"]}, {key: "mode", label: "Режим", values: ["","classic","coop","killer","accomplice","witness","expert"]}, {key: "role", label: "Роль", values: ["","detective","ghost","killer","accomplice","witness","expert"]}, {key: "players",label: "Участников", values: [0,2,3,4,5,6,7,8,9,10,11,12]}] key filter.key {
+                  let current = get(libraryFilter, filter.key, first(filter.values))
+                  Box {
+                    fill: width; height: 42; radius: 6; border: 1; borderColor: rule; background: panel; align: center
+                    onTap: {
+                      if !libraryBusy {
+                        let next = get({"difficulty": {"": "easy", "easy": "normal", "normal": "hard", "hard": ""}, "mode": {"": "classic", "classic": "coop", "coop": "killer", "killer": "accomplice", "accomplice": "witness", "witness": "expert", "expert": ""}, "role": {"": "detective", "detective": "ghost", "ghost": "killer", "killer": "accomplice", "accomplice": "witness", "witness": "expert", "expert": ""}}, filter.key, {})
+                        libraryFilter = set(libraryFilter, filter.key, filter.key == "players" ? (current == 0 ? 2 : (current >= 12 ? 0 : current + 1)) : get(next, current, ""))
+                        libraryBusy = true
+                        libraryReceipt = ""
+                        libraryReceipt = run("${script} archive - ${sh(toJson(libraryFilter))}")
+                      }
+                    }
+                    Text { text: "${filter.label}: ${get({"": "Все", "0": "Все", "easy": "Лёгкая", "normal": "Обычная", "hard": "Сложная", "classic": "Классика", "coop": "Кооператив", "detective": "Детектив", "ghost": "Призрак", "killer": "Убийца", "accomplice": "Сообщник", "witness": "Свидетель", "expert": "Эксперт"}, "${current}", "${current}")}"; color: parchment; font: sans; fontSize: 12; align: center; maxLines: 2 }
+                  }
+                }
+              }
+              if libraryBusy { Copy { body: "Загружаем дела…" } }
+              else if libraryData.stats != null {
+                if overlay == "stats" { StatsPanel { stats: libraryData.stats } }
+                else {
+                  CategoryLabel { label: "Дел: ${len(libraryData.cases)}" }
+                  if len(libraryData.cases) == 0 { Copy { body: "Архив пока пуст. Заверши первую партию." } }
+                  for item in libraryData.cases key item.id {
+                    Row {
+                      gap: 8; padding: 10; radius: 8; border: 1; borderColor: rule; background: panel; align: center
+                      onTap: {
+                        if !libraryBusy {
+                          libraryBusy = true; libraryReceipt = ""
+                          libraryReceipt = run("${script} case ${sh(item.id)}")
+                        }
+                      }
+                      Column {
+                        weight: 1; gap: 3
+                        Text { text: "Дело № ${item.short}"; color: parchment; font: serif; fontSize: 18 }
+                        Text { text: "${item.date} · ${item.players} участников · ${item.mode_label}"; color: dim; font: sans; fontSize: 11; maxLines: 2 }
+                        for person,i in item.people { Text { text: "${person.label} · ${person.won ? "Победа" : "Поражение"}"; color: person.won ? moss : ash; font: sans; fontSize: 12 } }
+                        if item.partial { Copy { body: "Неполный технический журнал" } }
+                      }
+                      Text { text: "${item.successes}/3  ›"; color: gold; fontSize: 17 }
+                    }
+                  }
+                }
+                Box {
+                  fill: width
+                  onTap: {
+                    if !libraryBusy {
+                      libraryBusy = true; libraryReceipt = ""
+                      libraryReceipt = run("${script} export")
+                    }
+                  }
+                  Action { label: "Экспорт всех дел для анализа"; hot: false; allowed: !libraryBusy }
+                }
+                Copy { body: "ZIP сохраняется в Downloads и открывает Android-панель отправки. Личные заметки исключены." }
+              }
+              if libraryError != "" { Copy { body: libraryError; shade: ash } }
+            }
+          }
+          Box {
+            fill: width
+            onTap: {
+              if archivedCase != null { archivedCase = null; reviewRound = null }
+              else { overlay = ""; libraryError = "" }
+            }
+            Action { label: archivedCase != null ? "К архиву" : "Назад"; hot: false }
+          }
         } else if overlay == "settings" {
           Column {
             weight: 1; scroll: true; gap: 12
@@ -1038,6 +1283,13 @@ app "Письма призрака" {
               Text { text: "Художественное оформление"; color: parchment; font: sans; fontSize: 13; weight: 1 }
               Text { text: atmospheric ? "Вкл" : "Выкл"; color: gold; font: sans; fontSize: 13 }
             }
+            Row {
+              gap: 8; padding: 9; radius: 8; background: panel; border: 1; borderColor: rule
+              onTap: dynamicFlow = !dynamicFlow
+              Text { text: "Ход одиночной игры"; color: parchment; weight: 1; font: sans; fontSize: 13 }
+              Text { text: dynamicFlow ? "Динамический" : "Пошаговый"; color: gold; font: sans; fontSize: 12 }
+            }
+            Copy { body: "Динамический режим пропускает начало отправки и реплики ботов, но сохраняет раскрытие писем и личные ходы." }
             Copy { body: "Удерживай иллюстрированную карту, чтобы рассмотреть её крупнее." }
           }
           Box { fill: width; onTap: overlay = ""; Action { label: "Вернуться"; hot: false } }
@@ -1080,6 +1332,47 @@ app "Письма призрака" {
               description: failed ? "Проверь, что Linux запущен, и попробуй снова." : ""
             }
             if failed { Box { fill: width; onTap: refresh(); Action { label: "Повторить" } } }
+          }
+        } else if homeOpen && !setupOpen {
+          Column {
+            weight: 1; scroll: true; gap: 10
+            SealedMail {}
+            Text { text: "Письма призрака"; font: serif; fontSize: 32; color: parchment; align: center }
+            Text { text: "Тайна · Ассоциации · Расследование"; color: dim; font: sans; fontSize: 12; align: center }
+            if !setup {
+              Box {
+                fill: width
+                onTap: {
+                  homeOpen = false; revealed = ""; evidence = ""
+                  if dynamicFlow && solo && game.actor == null && (phase == "intro" || phase == "statement") && queued != token {
+                    queued = token; receipt = ""; receipt = run("${script} advance ${sh(token)}")
+                  }
+                }
+                Action { label: phase == "result" ? "Итоги текущего дела" : "Продолжить расследование" }
+              }
+            }
+            Box {
+              fill: width
+              onTap: { if setup { setupOpen = true; homeOpen = false } else { overlay = "reset" } }
+              Action { label: "Новое расследование"; hot: setup }
+            }
+            for item in [{key: "library", label: "Архив расследований"}, {key: "stats", label: "Статистика"}, {key: "collection", label: "Коллекция карт"}, {key: "help",label: "Правила игры"},{key: "settings",label: "Настройки"}] key item.key {
+              Box {
+                fill: width
+                onTap: {
+                  if !libraryBusy {
+                    overlay = item.key
+                    libraryData = null; archivedCase = null; libraryError = ""; libraryFilter = {}; collectionQuery = ""
+                    if item.key == "library" || item.key == "stats" || item.key == "collection" {
+                      libraryBusy = true; libraryReceipt = ""
+                      libraryReceipt = run("${script} ${item.key == "collection" ? "collection" : "archive"}")
+                    }
+                  }
+                }
+                Action { label: item.label; hot: false }
+              }
+            }
+            Text { text: "2.7 · Investigation Flow & Analytics"; color: dim; font: sans; fontSize: 11; align: center }
           }
         } else if setup {
           Column {
@@ -1170,9 +1463,11 @@ app "Письма призрака" {
               fontSize: 12
             }
           }
+          Box { fill: width; onTap: { setupOpen = false; homeOpen = true }; Action { label: "В меню"; hot: false } }
           Box {
             fill: width
             onTap: {
+              homeOpen = false; setupOpen = false
               problem = ""
               receipt = ""
               receipt = run("${script} start - ${sh(toJson(config))}")
@@ -1200,6 +1495,7 @@ app "Письма призрака" {
               align: center
               RoundTracker { current: game.round; total: game.rounds }
             }
+            if (game.flow.stage ?? -1) >= 0 { StageTracker { stage: game.flow.stage } }
             Row {
               align: center; gap: 5
               Text { text: phaseLabel; color: dim; font: sans; fontSize: 11; weight: 1; maxLines: 1 }
@@ -1231,7 +1527,7 @@ app "Письма призрака" {
                 }
               } else {
                 if sheet.phase == "statement" {
-                  RuleLabel { heading: "ОБСУЖДЕНИЕ · ${len(sheet.notes)} / ${len(sheet.roster) - 1}" }
+                  RuleLabel { heading: "ОБСУЖДЕНИЕ · ${sheet.flow.spoken} / ${sheet.flow.speakers}" }
                   Opinion { player: sheet.speaker; opinion: sheet.statement; spotlight: true }
                   if !showDesk && len(sheet.letters) > 0 { Post { letters: sheet.letters.take(1) } }
                   if solo && len(sheet.notes) < len(sheet.roster) - 1 {
@@ -1362,7 +1658,8 @@ app "Письма призрака" {
                   Post { letters: sheet.letters.take(1) }
                 }
                 if sheet.phase == "discussion" {
-                  if !showDesk { Roster { players: sheet.roster } }
+                  RoundSummary { flow: sheet.flow; roster: sheet.roster }
+                  CategoryLabel { label: "Реплики участников" }
                   Grid {
                     columns: showDesk && layoutWidth >= 1200 ? 2 : 1
                     gap: 8
@@ -1373,6 +1670,7 @@ app "Письма призрака" {
                   if len(sheet.notes) == 0 { Copy { body: "Никто не предложил версию." } }
                 }
                 if ballot {
+                  RuleLabel { heading: "ГОЛОСОВАНИЕ · ${sheet.flow.vote_step} ИЗ ${sheet.flow.vote_total}" }
                   BallotTabs { sections: ballotSections; active: activeBallot.key }
                   if activeBallot.options.any(c => len(c.supporters) > 0) {
                     Text { text: "Под вариантами — кто их поддержал в обсуждении."; color: dim; font: sans; fontSize: 12 }
@@ -1385,6 +1683,29 @@ app "Письма призрака" {
                 if phase == "mail" {
                   let hand = sheet.groups.find(g => g.key == "send")
                   CategoryLabel { label: "Почта · выбери карту"; tint: gold }
+                  Row {
+                    gap: 6; padding: 7; radius: 7; background: panel; align: center
+                    onTap: intentOpen = !intentOpen
+                    Text { text: intentCard == null ? "Какую улику проверяешь? (необязательно)" : "Личный замысел: ${intentCard.label}"; color: parchment; font: sans; fontSize: 12; weight: 1; maxLines: 2 }
+                    Text { text: intentOpen ? "−" : "+"; color: gold; fontSize: 16 }
+                  }
+                  if intentOpen {
+                    Copy { body: "Никто не увидит эту отметку до завершения дела. Она нужна для анализа, не влияет на правила." }
+                    for category in sheet.board key category.key {
+                      CategoryLabel { label: category.label; tint: get(categoryColors, category.key, gold) }
+                      Grid {
+                        columns: smallCardColumns; gap: 4
+                        for clue in category.cards key clue.value {
+                          Box {
+                            fill: width
+                            onTap: { intentCard = intentCard.value == clue.value ? null : clue; intentOpen = false }
+                            onLongPress: { if illustrated && clue.artwork != null { previewCard = clue } }
+                            TableCard { entry: clue; marked: intentCard.value == clue.value }
+                          }
+                        }
+                      }
+                    }
+                  }
                   Row {
                     gap: 5
                     for slot in sheet.groups.filter(g => g.key == "send" || g.key == "send2" || g.key == "discard") key slot.key {
@@ -1464,6 +1785,7 @@ app "Письма призрака" {
                           radius: 9
                           onLongPress: { if illustrated && option.artwork != null && queued != token { previewCard = option } }
                           onTap: {
+                            ballotConfirm = false
                             if canExplain { ghostNotes = remove(ghostNotes, section.key) }
                             if section.multiple {
                               let updated = checked.any(x => x == option.value) ? checked.filter(x => x != option.value) : checked + [option.value]
@@ -1554,26 +1876,40 @@ app "Письма призрака" {
             }
           } else {
             let ready = (ballot ? (!missing || ballotReady) : !missing) && !conflicting && queued != token && !fastDiscussion
+            if ballot && !missing && ballotConfirm && shownPage == "" {
+              Column {
+                gap: 5; padding: 8; radius: 8; border: 1; borderColor: gold; background: panel
+                CategoryLabel { label: "Подтверди этот голос" }
+                for section in ballotSections key section.key {
+                  let chosen = section.options.find(c => c.value == get(choices, section.key, null))
+                  if chosen != null { ReferenceCard { entry: chosen; tint: gold } }
+                }
+                Box { fill: width; onTap: ballotConfirm = false; Action { label: "Изменить выбор"; hot: false } }
+              }
+            }
             Box {
               fill: width
               onTap: {
                 if ready && ballot && missing {
                   ballotPage = first(pendingBallot).key
+                } else if ready && ballot && !ballotConfirm {
+                  ballotConfirm = true
                 } else if ready {
                   queued = token
                   problem = ""
                   receipt = ""
                   if privateTurn {
                     revealed = ""
-                    receipt = run("${script} submit ${sh(token)} ${sh(toJson(set(choices, "comments", ghostNotes)))}")
+                    receipt = run("${script} submit ${sh(token)} ${sh(toJson(set(set(choices, "comments", ghostNotes), "intent", intentCard.value)))}")
                   } else { receipt = run("${script} advance ${sh(token)}") }
                 }
               }
               Action {
                 label: queued == token ? "Сохраняем ход…" :
                        (ballot && missing ? (ballotReady ? "Далее · ${first(pendingBallot).label}" : "Выбери вариант") :
+                       (ballot && !missing ? (ballotConfirm ? "Подтвердить голос" : "Проверить голос") :
                        (phase == "opening" && choices.seal == null ? "Пропустить первое письмо" :
-                       (phase == "note" && !game.groups.any(g => get(choices, g.key, null) != null) ? "Пропустить" : game.action)))
+                       (phase == "note" && !game.groups.any(g => get(choices, g.key, null) != null) ? "Пропустить" : game.action))))
                 allowed: ready
               }
             }
