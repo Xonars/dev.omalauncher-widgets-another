@@ -619,6 +619,35 @@ class GhostLettersRules(unittest.TestCase):
         self.assertLess(revised["constructive_revision"], 0)
         self.assertLess(sum(revised.values()), sum(persistent.values()))
 
+    def test_ghost_test_does_not_erase_prior_public_version(self):
+        g = Game.new("classic", 6, 1, False, difficulty="normal", seed=42)
+        owner = g.d["local"][0]
+        wrong, tested = g.d["board"][0][:2]
+        g.d["round"] = 3
+        g.d["history"] = [
+            dict(pid=owner, round=1, leads={"0": wrong}, suspect=None, claim=None, tests=[]),
+            dict(pid=owner, round=2, leads={}, suspect=None, claim=None, tests=[tested])]
+        self.assertEqual(g.ghost_context()["human"][0][0]["card"], wrong)
+
+    def test_public_self_contradiction_and_dossier(self):
+        from unittest.mock import patch
+        g = Game.new("classic", 6, 1, False, difficulty="normal", seed=42)
+        a, b = 1, 2
+        good, bad = g.d["board"][0][:2]
+        g.d["round"] = 2
+        g.d["history"] = [
+            dict(pid=b, round=1, leads={"0": bad}, suspect=None, claim=None, tests=[]),
+            dict(pid=a, round=2, leads={"0": bad}, suspect=b, claim=None, tests=[],
+                 reason=f'Версия «{mod.CARDS[bad]["name"]}» расходилась с письмами.')]
+        g.set_phase("discussion")
+        with patch.object(mod, "evidence_score", side_effect=lambda k,c,i: float(c == good)):
+            knowledge = g.player_knowledge(0)
+            self.assertEqual(len(g.public_contradictions(knowledge, a)), 1)
+            dossier = next(p for p in g.investigation_view()["people"] if p["pid"] == a)
+            self.assertEqual(len(dossier["arguments_against"]), 1)
+            g.d["truth"] = [row[-1] for row in g.d["board"]]
+            self.assertEqual(dossier, next(p for p in g.investigation_view()["people"] if p["pid"] == a))
+
     def test_investigation_ui_available_in_both_owl_entries(self):
         for path in (ROOT / "local/phone-widgets/ghost-letters.owl",
                      ROOT / "apps/xonars/ghost-letters/app.owl"):

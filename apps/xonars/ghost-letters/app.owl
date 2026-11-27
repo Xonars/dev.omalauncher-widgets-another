@@ -51,7 +51,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
 """
   let storeInstall = "python -c ${sh(storeBootstrap)}"
 
-  meta { owl: 18; description: "Карточное расследование с тайной перепиской · ресурсы при первом запуске"; version: "2.13.0"; category: "games" ; license: "MIT" }
+  meta { owl: 18; description: "Карточное расследование с тайной перепиской · ресурсы при первом запуске"; version: "2.14.0"; category: "games" ; license: "MIT" }
   title: "Письма призрака"
   icon: appIcon
   requires { pacman: ["python"] }
@@ -315,19 +315,19 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
         fill: width; gap: 3; padding: 4; radius: 7; border: 1
         borderColor: marked ? tone : (entry.correct || entry.voted || markText != "" ? personalTone : alpha(tone, 0.38))
         background: mix(panel, tone, marked ? 0.28 : 0.075)
-        Image { src: entry.artwork; fill: width; height: mini ? 65 : (showDesk ? 85 : 100); radius: 4; fit: contain; label: entry.label; offset: [0, marked ? -2 : 0]; animate offset: 180ms }
+        Image { src: entry.artwork; fill: width; height: mini ? 72 : (showDesk ? 85 : 100); radius: 4; fit: contain; label: entry.label; offset: [0, marked ? -2 : 0]; animate offset: 180ms }
         Box {
-          height: 32; fill: width; align: center
+          height: mini ? 25 : 32; fill: width; align: center
           Text { text: entry.label; font: sans; fontSize: mini ? 11 : 13; fontWeight: 700; align: center; maxLines: 2; color: parchment }
         }
-        Box {
-          height: 29; fill: width; align: center
+        if marked || detail != "" || markText != "" { Box {
+          height: mini ? 20 : 29; fill: width; align: center
           Column {
             gap: 1
             Text { text: marked ? (detail != "" ? "✓ ${detail}" : "✓ Выбрано") : detail; color: tone; font: sans; fontSize: 10; fontWeight: 650; align: center; maxLines: markText != "" ? 1 : 2 }
             if markText != "" { Text { text: markText; color: personalTone; font: sans; fontSize: 10; align: center; maxLines: 1 } }
           }
-        }
+        } }
         if len(entry.supporters ?? []) > 0 {
           Flow {
             gap: 3
@@ -388,8 +388,8 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
       for category in rows {
         let tone = get(categoryColors, category.key, gold)
         Column {
-          gap: 7
-          padding: 6; border: 1; borderColor: alpha(tone, 0.32); radius: 10
+          gap: 4
+          padding: 5; border: 1; borderColor: alpha(tone, 0.32); radius: 10
           background: linear(0, 0, 1, 1, [mix(shell, tone, 0.09), shell])
           CategoryLabel { label: category.label; tint: tone }
           Grid {
@@ -647,7 +647,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
               Text { text: player.name; font: sans; color: parchment; fontSize: 12; fontWeight: 700; weight: 1; maxLines: 2 }
             }
             Text { text: player.role != "" ? player.role : player.seat; color: dim; font: sans; fontSize: 11; maxLines: 2 }
-            if player.suspicions != null {
+            if player.suspicions != null && player.suspicions > 0 {
               Text { text: "Подозрения · ${player.suspicions}"; color: player.suspicions > 0 ? ash : dim; font: sans; fontSize: 10; maxLines: 2 }
             }
             if player.won != null { Text { text: player.won ? "✓ Победа" : "× Поражение"; color: player.won ? moss : ash; fontSize: 11 } }
@@ -974,6 +974,13 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
           }
         }
         if len(selected.incoming) > 1 { Copy { body: "Повторение одного аргумента не делает его независимым доказательством." } }
+        CategoryLabel { label: "Аргументы против"; tint: ash }
+        if len(selected.arguments_against ?? []) == 0 { Copy { body: "Нет выявленных повторных расхождений или противоречий." } }
+        for item in (selected.arguments_against ?? []) { Copy { body: "Р${item.round} · ${item.text}"; shade: ash } }
+        CategoryLabel { label: "Аргументы в пользу"; tint: moss }
+        if len(selected.arguments_for ?? []) == 0 { Copy { body: "Пока нет отмеченных обоснованных пересмотров." } }
+        for item in (selected.arguments_for ?? []) { Copy { body: "Р${item.round} · ${item.text}"; shade: moss } }
+        Copy { body: "Аргументы основаны на публичных письмах и версиях. Это не оценка виновности." }
         CategoryLabel { label: "История версий · ${selected.name}" }
         Flow {
           gap: 5
@@ -1167,7 +1174,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
     let tone = actor.role == "Призрак" ? violet : (actor.role == "Убийца" || actor.role == "Сообщник" ? ash : gold)
     let roleArt = get(art, get({"Призрак": "ghost", "Детектив": "detective", "Убийца": "killer", "Сообщник": "accomplice", "Свидетель": "witness", "Эксперт": "expert"}, actor.role, ""), null)
     Column {
-      fill: width; gap: 12; padding: 18; radius: 13; border: 1; borderColor: alpha(tone, 0.7)
+      fill: width; gap: 8; padding: 12; radius: 13; border: 1; borderColor: alpha(tone, 0.7)
       background: linear(0, 0, 1, 1, [mix(panel, tone, 0.16), shell])
       Text { text: "✦  СЕКРЕТНОЕ ДОСЬЕ  ✦"; color: tone; font: sans; fontSize: 12; align: center; letterSpacing: 1 }
       if atmospheric && roleArt != null {
@@ -1184,10 +1191,10 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
         }
       }
       }
-      Text { text: actor.role; color: parchment; font: serif; fontSize: atmospheric && roleArt != null ? 21 : 34; align: center; maxLines: 2 }
+      if !atmospheric || roleArt == null { Text { text: actor.role; color: parchment; font: serif; fontSize: 34; align: center; maxLines: 2 } }
       Text { text: actor.label; color: tone; font: sans; fontSize: 14; align: center }
       Box { height: 1; fill: width; background: alpha(tone, 0.4) }
-      Copy { body: actor.brief; shade: parchment }
+      Copy { body: actor.role == "Детектив" ? "Цель: раскрыть мотив, место и способ, затем найти убийцу." : actor.brief; shade: parchment }
       Lines { rows: actor.knowledge }
       Text { text: "Не показывай эту карту другим участникам."; color: dim; font: sans; fontSize: 12; align: center }
     }
@@ -1547,7 +1554,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
                 Action { label: item.label; hot: false }
               }
             }
-            Text { text: "2.7 · Investigation Flow & Analytics"; color: dim; font: sans; fontSize: 11; align: center }
+            Text { text: "2.14 · Investigation Intelligence"; color: dim; font: sans; fontSize: 11; align: center }
           }
         } else if setup {
           Column {
