@@ -234,6 +234,95 @@ class GhostLettersRules(unittest.TestCase):
         for key, path in public.items():
             self.assertEqual(Path(path), SOURCE / "assets/atmosphere" / (key + ".webp"))
 
+    def test_analytics_does_not_change_seeded_games(self):
+        import random
+        for mode,total,ghost in (("classic",5,False),("classic",10,False),("coop",2,True),("coop",4,False)):
+            for seed in (1,7):
+                first=Game.new(mode,total,1,ghost,seed=seed)
+                second=Game(json.loads(json.dumps(first.d)))
+                second.enable_analytics()
+                rng=random.Random(seed)
+                for step in range(500):
+                    self.assertEqual(first.d,{k:v for k,v in second.d.items() if k!="analytics"})
+                    self.assertNotIn("analytics",mod.public_view(second))
+                    if first.phase=="result":
+                        break
+                    if first.actor is None:
+                        first.advance()
+                        second.advance()
+                        continue
+                    picks={}
+                    for group in first.groups():
+                        if group["required"]:
+                            options=[o["value"] for o in group["options"]]
+                            if group["key"]=="send2":
+                                options.remove(picks["send"])
+                            picks[group["key"]]=rng.choice(options)
+                    if first.phase=="mail":
+                        picks["intent"]=first.d["board"][0][0]
+                    first.submit(picks.copy())
+                    second.submit(picks.copy())
+                else:
+                    self.fail("Game did not finish")
+                events=second.d["analytics"]["events"]
+                self.assertEqual([e["seq"] for e in events],list(range(1,len(events)+1)))
+                self.assertTrue(any(e["kind"]=="vote_result" for e in events))
+                for event in events:
+                    knowledge=event.get("knowledge",{})
+                    if knowledge.get("role")=="detective":
+                        self.assertFalse(knowledge["truth"])
+                        self.assertIsNone(knowledge["killer"])
+
+    def test_completed_archive_and_export_privacy(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            g=Game.new("classic",5,1,False,seed=4)
+            g.enable_analytics()
+            mod.archive_game(g,root/"games")
+            self.assertEqual(mod.archived_games(root/"games"),[])
+            g.d["truth"]=[row[0] for row in g.d["board"]]
+            g.d["decided"]={str(i):cid for i,cid in enumerate(g.d["truth"])}
+            g.d["successes"]=3
+            g.d["solved"]=True
+            g.d["notebooks"]={"1":{"text":"PRIVATE-NOTE"}}
+            g.d["letters"]=[dict(round=0,echo=[g.d["board"][1][1]],silence=[],seal=None,missing=0,comments={"echo":"PRIVATE-COMMENT"})]
+            g.end()
+            mod.archive_game(g,root/"games")
+            mod.archive_game(g,root/"games")
+            records=mod.archived_games(root/"games")
+            self.assertEqual(len(records),1)
+            self.assertNotIn("notebooks",records[0])
+            self.assertEqual(mod.statistics(records)["correct"],3)
+            self.assertEqual(mod.filter_records(records,{"players":12}),[])
+            path=mod.export_analysis(records,root/"export")
+            with zipfile.ZipFile(path) as z:
+                self.assertIsNone(z.testzip())
+                self.assertEqual(json.loads(z.read("manifest.json"))["games"],1)
+                payload=z.read("games/"+g.d["id"]+".json")
+                self.assertNotIn(b"PRIVATE-NOTE",payload)
+                self.assertNotIn(b"PRIVATE-COMMENT",payload)
+                self.assertEqual(json.loads(payload)["capture"]["schema"],1)
+                events=[json.loads(line) for line in z.read("events/"+g.d["id"]+".jsonl").splitlines()]
+                self.assertTrue(any(e["kind"]=="result" for e in events))
+
+    def test_dynamic_flow_stops_at_public_reveal_or_local_input(self):
+        for ghost in (False,True):
+            g=Game.new("classic",5,1,ghost,seed=3)
+            g.d["truth"]=[row[0] for row in g.d["board"]]
+            for pid in range(5):
+                g.refill(pid)
+            g.start_round()
+            mod.advance_automatically(g)
+            self.assertIn(g.phase,("mail","sort","reveal"))
+            self.assertNotEqual(g.phase,"intro")
+            if g.phase in ("mail","sort"):
+                self.assertIsNotNone(g.actor)
+        g=Game.new("classic",5,2,False,seed=3)
+        g.set_phase("intro")
+        mod.advance_automatically(g)
+        self.assertEqual(g.phase,"intro")
+
     def test_package_matches_source(self):
         row = next(x for x in json.loads((ROOT / "store-collection.json").read_text()) if x["source"] == "ghost-letters.owl")
         with zipfile.ZipFile(ROOT / row["resources"]) as z:
