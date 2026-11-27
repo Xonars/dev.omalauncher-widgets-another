@@ -199,6 +199,56 @@ class GhostLettersRules(unittest.TestCase):
             else:
                 self.assertIsNone(silence)
 
+    def test_ghost_listens_to_public_versions(self):
+        for difficulty in ("normal", "hard"):
+            g = Game.new("classic", 6, 1, False, difficulty=difficulty, seed=9)
+            g.d["truth"] = [row[0] for row in g.d["board"]]
+            g.d["round"] = 2
+            before = g.ghost_priorities(g.ghost_context())
+            wrong = g.d["board"][2][1]
+            for pid in range(1, 6):
+                g.d["history"].append(dict(pid=pid, round=1, leads={"0": g.d["truth"][0],
+                    "1": g.d["truth"][1], "2": wrong}, suspect=None, claim=None, tests=[]))
+            context = g.ghost_context()
+            weights = g.ghost_priorities(context)
+            self.assertGreater(weights[2], before[2])
+            self.assertGreater(weights[2], weights[0])
+            self.assertEqual(context["public"][2][wrong], 1.0)
+            # The ghost only uses the public record, not private hands or unpublished plans.
+            for pid in range(1, 6):
+                g.d["players"][pid]["hand"] = [pid]
+            self.assertEqual(context, g.ghost_context())
+
+    def test_ghost_projection_and_easy_policy(self):
+        for difficulty in ("easy", "normal", "hard"):
+            g = Game.new("classic", 6, 1, False, difficulty=difficulty, seed=157814185689306)
+            g.d["truth"] = [row[0] for row in g.d["board"]]
+            for pid in range(6):
+                g.refill(pid)
+            hand = g.d["players"][0]["hand"][:]
+            context = g.ghost_context()
+            cid = hand[0]
+            before = [dict(row) for row in context["scores"]]
+            g.ghost_apply_hint(context, cid)
+            for i, row in enumerate(g.d["board"]):
+                for c in row:
+                    self.assertAlmostEqual(context["scores"][i][c],
+                        before[i][c] + mod.hint_signal(g.d["board"], c, i, cid))
+            g.enable_analytics()
+            g.choose_ghost_letters([], hand)
+            event = g.d["analytics"]["events"][-1]
+            self.assertEqual(event["kind"], "bot_ghost")
+            self.assertEqual("priorities" in event["decisions"][0], difficulty != "easy")
+
+    def test_suspicion_is_explainable(self):
+        g = Game.new("classic", 6, 1, False, seed=17)
+        pid = g.role_id("detective")
+        target = next(i for i in range(1, 6) if i != pid)
+        factors = g.suspicion_factors(pid, target)
+        self.assertAlmostEqual(sum(factors.values()), g.suspicion(pid, target))
+        self.assertIn("evidence_conflict", factors)
+        self.assertIn("claim_conflict", factors)
+
     def test_knowledge_deduplicates_completed_discussion(self):
         g = Game.new("classic", 5, 1, False, seed=2)
         pid = g.role_id("detective")
