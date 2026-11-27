@@ -10,9 +10,10 @@ trap 'rm -rf -- "$workspace"' EXIT
 git -C "$repo" cat-file -e "$oracle_ref^{commit}"
 git -C "$repo" archive "$oracle_ref" tools/owl.jar widgets faces |
     tar -x -C "$workspace" --wildcards '*.owl' 'tools/owl.jar'
+cp -a "$workspace/widgets" "$workspace/fixture-widgets"
 cp -a "$repo/runtimes" "$workspace/runtimes"
 cp -a "$repo/widgets/." "$workspace/widgets/"
 if [[ -d "$repo/faces" ]]; then cp -a "$repo/faces/." "$workspace/faces/"; fi
 
 printf 'Quickshell OWL 17 oracle and fixtures: %s\n' "$oracle_ref"
-"$workspace/runtimes/quickshell/test/run.sh"
+OWL_FIXTURE_WIDGETS="$workspace/fixture-widgets" "$workspace/runtimes/quickshell/test/run.sh"
