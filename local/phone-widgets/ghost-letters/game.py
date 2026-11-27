@@ -1298,11 +1298,20 @@ def save(path, data):
         Path(tmp).unlink(missing_ok=True)
 
 
+def atmosphere_view():
+    # Static public assets only: never encode the active role in the resource map.
+    keys = ("ghost", "detective", "killer", "accomplice", "witness", "expert", "back", "table")
+    paths = {key: HERE / "assets" / "atmosphere" / f"{key}.webp" for key in keys}
+    return {key: str(path) for key, path in paths.items() if path.is_file()}
+
+
 def public_view(game):
+    atmosphere = atmosphere_view()
     if game is None:
-        return dict(phase="setup", modes=[dict(key=key, label=label) for key, label in MODES.items()],
+        return dict(phase="setup", atmosphere=atmosphere, modes=[dict(key=key, label=label) for key, label in MODES.items()],
                     difficulties=[dict(key=key, label=config[0]) for key, config in DIFFICULTIES.items()])
     view = game.view()
+    view["atmosphere"] = atmosphere
     if game.phase == "result":
         detectives = game.d["winner"] == "detectives"
         view["title"] = "Детективы победили" if detectives else ("Дело не раскрыто" if game.cooperative else "Убийца победил")

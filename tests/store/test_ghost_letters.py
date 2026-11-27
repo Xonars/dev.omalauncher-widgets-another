@@ -225,6 +225,15 @@ class GhostLettersRules(unittest.TestCase):
                 before = source.split(action, 1)[0].rsplit("onTap:", 1)[0]
                 self.assertIn(preview, before.split("onLongPress:", 1)[-1])
 
+    def test_atmospheric_assets_are_public_and_complete(self):
+        keys = {"ghost", "detective", "killer", "accomplice", "witness", "expert", "back", "table"}
+        public = mod.public_view(None)["atmosphere"]
+        self.assertEqual(set(public), keys)
+        g = Game.new("classic", 5, 1, False, seed=2)
+        self.assertEqual(mod.public_view(g)["atmosphere"], public)
+        for key, path in public.items():
+            self.assertEqual(Path(path), SOURCE / "assets/atmosphere" / (key + ".webp"))
+
     def test_package_matches_source(self):
         row = next(x for x in json.loads((ROOT / "store-collection.json").read_text()) if x["source"] == "ghost-letters.owl")
         with zipfile.ZipFile(ROOT / row["resources"]) as z:
@@ -232,7 +241,8 @@ class GhostLettersRules(unittest.TestCase):
                 self.assertEqual(z.read("widgets/ghost-letters/" + name), (SOURCE / name).read_bytes())
             assets = [f"assets/cards/{i:03d}.webp" for i in range(131)]
             self.assertEqual(len(list((SOURCE / "assets/cards").glob("*.webp"))), 131)
-            for name in assets + ["assets/manifest.json"]:
+            assets += [f"assets/atmosphere/{key}.webp" for key in ("ghost", "detective", "killer", "accomplice", "witness", "expert", "back", "table")]
+            for name in assets + ["assets/manifest.json", "assets/atmosphere/manifest.json"]:
                 data = (SOURCE / name).read_bytes()
                 self.assertEqual(z.read("widgets/ghost-letters/" + name), data)
                 if name.endswith(".webp"):
