@@ -208,6 +208,23 @@ class GhostLettersRules(unittest.TestCase):
         g.d["notes"] = [n.copy()]
         self.assertEqual(len(g.player_knowledge(pid)["notes"]),1)
 
+    def test_card_gestures_have_one_owner(self):
+        # Structural regression: the card renderer must not intercept gestures.
+        # Actual Android dispatch still needs an on-device test.
+        for path in (ROOT / "local/phone-widgets/ghost-letters.owl",
+                     ROOT / "apps/xonars/ghost-letters/app.owl"):
+            source = path.read_text()
+            face = source.split("  component PlayingCard(", 1)[1].split("  component CategoryLabel(", 1)[0]
+            self.assertNotIn("onTap:", face)
+            self.assertNotIn("onLongPress:", face)
+            for action, preview in (
+                ("let current = get(choices, handAction, null)", "previewCard = option"),
+                ("if canExplain { ghostNotes = remove(ghostNotes, section.key) }", "previewCard = option"),
+                ("notebookMarks = set(notebookMarks, k,", "previewCard = clue"),
+            ):
+                before = source.split(action, 1)[0].rsplit("onTap:", 1)[0]
+                self.assertIn(preview, before.split("onLongPress:", 1)[-1])
+
     def test_package_matches_source(self):
         row = next(x for x in json.loads((ROOT / "store-collection.json").read_text()) if x["source"] == "ghost-letters.owl")
         with zipfile.ZipFile(ROOT / row["resources"]) as z:
