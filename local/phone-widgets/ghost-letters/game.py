@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from functools import lru_cache
 import fcntl
 import json
+import math
 import os
 from pathlib import Path
 import random
@@ -23,8 +24,8 @@ import uuid
 HERE = Path(__file__).resolve().parent
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "ghost-letters"
 ANALYTICS_SCHEMA = 1
-GAME_VERSION = "3.1.0"
-BOT_VERSION = "3.7.0"
+GAME_VERSION = "3.2.0"
+BOT_VERSION = "4.0.0"
 CATEGORIES = ("Мотив", "Место", "Способ")
 STANCES = ("Пока не уверен", "Предварительная версия", "Уверенная версия")
 DEFENSES = ("Я проверял гипотезу", "Я пересмотрел версию", "Я сохраняю свою версию")
@@ -90,7 +91,62 @@ FUNCTIONAL_LINKS = {
     frozenset(("Ручка", "Блокнот")): (4.0, "записи ручкой в блокноте"),
     frozenset(("Берег", "Маяк")): (4.0, "маяк на берегу"),
     frozenset(("Фонарь", "Маяк")): (4.0, "световой ориентир"),
+    frozenset(("Кисточка", "Картина")): (4.0, "картина написана кистью"),
+    frozenset(("Краска", "Картина")): (4.0, "картина написана красками"),
+    frozenset(("Камера", "Картина")): (3.4, "создание изображения"),
+    frozenset(("Экран", "Картина")): (3.5, "изображение на экране"),
+    frozenset(("Зеркало", "Картина")): (3.1, "видимое изображение"),
+    frozenset(("Ключ", "Замок")): (4.0, "ключ открывает замок"),
+    frozenset(("Проволока", "Катушка")): (4.0, "намотанная проволока"),
+    frozenset(("Канат", "Катушка")): (3.4, "намотанный канат"),
+    frozenset(("Кровать", "Подушка")): (4.0, "подушка на кровати"),
+    frozenset(("Чай", "Чайник")): (4.0, "чай заваривают в чайнике"),
+    frozenset(("Чай", "Стакан")): (3.6, "чай в стакане"),
+    frozenset(("Семена", "Корень")): (3.8, "растение вырастает из семени"),
+    frozenset(("Лейка", "Цветок")): (4.0, "цветок поливают лейкой"),
+    frozenset(("Лейка", "Горшок")): (3.7, "полив растения в горшке"),
+    frozenset(("Лопата", "Семена")): (3.4, "подготовка земли для посева"),
+    frozenset(("Кремль", "Стена")): (4.0, "кремлёвская стена"),
+    frozenset(("Кремль", "Корона")): (3.5, "символы исторической власти"),
+    frozenset(("Кремль", "Медаль")): (3.3, "государственные награды"),
+    frozenset(("Билет", "Поезд")): (4.0, "билет на поезд"),
+    frozenset(("Билет", "Самолёт")): (4.0, "билет на самолёт"),
+    frozenset(("Семафор", "Поезд")): (4.0, "сигнал железной дороги"),
+    frozenset(("Луна", "Телескоп")): (4.0, "наблюдение Луны"),
+    frozenset(("Звезда", "Телескоп")): (4.0, "наблюдение звёзд"),
+    frozenset(("Лодка", "Якорь")): (4.0, "якорь удерживает судно"),
+    frozenset(("Канат", "Якорь")): (3.8, "якорный канат"),
+    frozenset(("Гроза", "Дождь")): (4.0, "дождь во время грозы"),
+    frozenset(("Зонт", "Дождь")): (4.0, "защита от дождя"),
+    frozenset(("Свеча", "Спичечный коробок")): (4.0, "зажечь свечу спичкой"),
+    frozenset(("Мел", "Доска")): (4.0, "писать мелом на доске"),
+    frozenset(("Квитанция", "Доллар")): (3.6, "документ об оплате"),
+    frozenset(("Монета", "Кошелёк")): (4.0, "деньги в кошельке"),
+    frozenset(("Доллар", "Кошелёк")): (4.0, "деньги в кошельке"),
+    frozenset(("Рояль", "Камертон")): (4.0, "настройка музыкального инструмента"),
+    frozenset(("Микрофон", "Экран")): (3.2, "аудиовизуальная связь"),
+    frozenset(("Пуговица", "Пальто")): (4.0, "застёжка пальто"),
+    frozenset(("Пальто", "Вешалка")): (4.0, "верхняя одежда на вешалке"),
 }
+
+# Correlated deck labels describe one association, not independent evidence.
+TAG_FAMILIES = {
+    "дом и быт": "дом", "документы": "архив", "сцена и искусство": "театр",
+    "власть и статус": "власть", "тайна и скрытие": "тайна",
+    "вода и берег": "вода", "ткань и одежда": "ткань",
+    "металлический предмет": "металл", "деньги и обмен": "деньги",
+    "праздник и подарки": "праздник", "садовые работы": "сад",
+    "школа": "учёба", "путешествие по городу": "город",
+}
+TAG_FREQUENCY = Counter(tag for card in CARDS for tag in card["tags"])
+MAX_TAG_FREQUENCY = max(TAG_FREQUENCY.values())
+
+
+def association_weight(tag, strength):
+    # Keep the established 0–4 scale; ubiquitous tags are weak context.
+    frequency = TAG_FREQUENCY[tag]
+    return strength * (1.0 - 0.18 * (frequency - 1) / max(1, MAX_TAG_FREQUENCY - 1))
+
 
 @lru_cache(maxsize=None)
 def association(left, right):
@@ -98,12 +154,18 @@ def association(left, right):
     if direct:
         return direct
     a, b = CARDS[left]["tags"], CARDS[right]["tags"]
-    links = sorted(((min(a[tag], b[tag]), tag) for tag in a.keys() & b.keys()),
-                   key=lambda pair: (-pair[0], pair[1]))
+    families = {}
+    for tag in sorted(a.keys() & b.keys()):
+        weight = association_weight(tag, min(a[tag], b[tag]))
+        family = TAG_FAMILIES.get(tag, tag)
+        candidate = (weight, tag)
+        if family not in families or candidate > families[family]:
+            families[family] = candidate
+    links = sorted(families.values(), key=lambda pair: (-pair[0], pair[1]))
     if not links:
         return 0.0, None
     strength, label = links[0]
-    return min(4.0, strength + 0.25 * sum(weight for weight, _ in links[1:3])), label
+    return min(4.0, strength + 0.20 * sum(weight for weight, _ in links[1:3])), label
 
 
 def affinity(left, right):
@@ -129,7 +191,9 @@ def evidence_score(knowledge, cid, category):
     for entry in knowledge["letters"]:
         age = max(0, knowledge["round"] - entry["round"])
         for hint, sign in entry["hints"]:
-            score += sign * (0.91 ** age) * hint_signal(board, cid, category, hint)
+            # Revealed evidence does not become less true simply because time passes.
+            decay = 0.91 ** age if knowledge.get("difficulty") == "easy" else 1.0
+            score += sign * decay * hint_signal(board, cid, category, hint)
     # Unopened mail is inconclusive, not negative evidence.
     return score
 
@@ -145,9 +209,20 @@ def public_opinions(knowledge, category):
     opinions = {}
     for note in sorted(knowledge["notes"], key=lambda n: n["round"]):
         cid = note["leads"].get(str(category))
-        if cid in knowledge["board"][category] and note["pid"] != knowledge["pid"]:
+        if (cid in knowledge["board"][category] and note["pid"] != knowledge["pid"]
+                and note.get("stance", 1) != 0):
             opinions[note["pid"]] = cid
     return opinions
+
+
+def row_gap(scores, truth):
+    return scores[truth] - max(v for c, v in scores.items() if c != truth)
+
+
+def log_odds(scores, truth):
+    rivals = [v for c, v in scores.items() if c != truth]
+    peak = max(rivals)
+    return scores[truth] - peak - math.log(sum(math.exp(v - peak) for v in rivals))
 
 
 def sabotage_focus(knowledge):
@@ -462,22 +537,14 @@ class Game:
                 max(hint_signal(board, other, i, cid) for other in board[i] if other != truth)
                 for i, truth in enumerate(self.d["truth"])]
 
+    def coverage_from_scores(self, scores):
+        return [row_gap(row, truth) for row, truth in zip(scores, self.d["truth"])]
+
     def ghost_coverage(self):
-        coverage = [0.0, 0.0, 0.0]
-        for entry in self.d["letters"]:
-            positive = entry["echo"] + entry.get("extra", []) + ([] if entry["seal"] is None else [entry["seal"]])
-            for sign, cards in ((1, positive), (-1, entry["silence"])):
-                for cid in cards:
-                    margins = self.ghost_margins(cid)
-                    if sign < 0:
-                        # For a negative clue, recompute the best surviving decoy.
-                        margins = [min(hint_signal(self.d["board"], other, i, cid)
-                                       for other in self.d["board"][i] if other != truth) -
-                                   hint_signal(self.d["board"], truth, i, cid)
-                                   for i, truth in enumerate(self.d["truth"])]
-                    for i, margin in enumerate(margins):
-                        coverage[i] += margin
-        return coverage
+        knowledge = self.player_knowledge(0)
+        scores = [{c: evidence_score(knowledge, c, i) for c in row}
+                  for i, row in enumerate(knowledge["board"])]
+        return self.coverage_from_scores(scores)
 
     def ghost_gain(self, cid, coverage, negative=False):
         board = self.d["board"]
@@ -503,8 +570,8 @@ class Game:
         for note in sorted(knowledge["notes"], key=lambda n: n["round"]):
             for key, cid in note["leads"].items():
                 i = int(key)
-                if cid in rows[i]:
-                    opinions[i][note["pid"]] = (cid, note["round"], 0.25 if note.get("stance") == 0 else 1.0)
+                if cid in rows[i] and note.get("stance", 1) != 0:
+                    opinions[i][note["pid"]] = (cid, note["round"], 1.0)
             # A test identifies a category to clarify, never an endorsed card.
             for i, row in enumerate(rows):
                 if note["round"] >= knowledge["round"] - 1 and any(cid in row for cid in note["tests"]):
@@ -582,13 +649,23 @@ class Game:
         board = self.d["board"]
         weights = self.ghost_priorities(context)
         gains = []
+        risk = 0.0
         sign = -1 if negative else 1
         for i, truth in enumerate(self.d["truth"]):
             scores, public = context["scores"][i], context["public"][i]
             signals = {c: sign * hint_signal(board, c, i, cid) for c in board[i]}
-            before = scores[truth] - max(v for c, v in scores.items() if c != truth)
-            after = scores[truth] + signals[truth] - max(v + signals[c] for c, v in scores.items() if c != truth)
-            gain = after - before
+            projected = {c: v + signals[c] for c, v in scores.items()}
+            before, after = row_gap(scores, truth), row_gap(projected, truth)
+            gap_gain = after - before
+            gain = gap_gain
+            if not negative:
+                # Compare the whole distribution, not only the current strongest decoy.
+                gain = 0.72 * gap_gain + 0.28 * (log_odds(projected, truth) - log_odds(scores, truth))
+            # A clue that hands the lead to a false card needs a much larger benefit.
+            if gap_gain < -0.12 and after < 0.25:
+                risk += max(0.75, weights[i]) * (-gap_gain - 0.12)
+            if before >= 0.25 and after < 0:
+                risk += 0.35 * max(1.0, weights[i])
             # The leading-gap metric alone misses elimination of one of several
             # equally plausible alternatives. Explicit Silence can narrow the row
             # even when another alternative remains tied. Do not infer negatives
@@ -607,7 +684,9 @@ class Game:
             disagreement = max(0.0, public[rival] - public[truth])
             correction = min(0.65, (0.30 if context["difficulty"] == "normal" else 0.45) + 0.20 * disagreement)
             if disagreement > 0:
-                gain = (1 - correction) * gain + correction * (signals[truth] - signals[rival])
+                mixed = (1 - correction) * gain + correction * (signals[truth] - signals[rival])
+                # A social correction must not hide a real loss in public evidence.
+                gain = min(gain, mixed) if gap_gain < 0 else mixed
             # Never discount misleading cross-category associations merely because a clue was solved.
             weighted = weights[i] * max(0.0, gain) + max(0.75, weights[i]) * min(0.0, gain)
             gains.append(weighted)
@@ -621,7 +700,10 @@ class Game:
                 strength, tag = association(cid, truth)
                 if margins[i] > 0.12 and tag not in broad and strength >= 2.5:
                     clarity = max(clarity, min(0.12, weights[i] * margins[i] * 0.20))
-        return max(0.0, *gains) + 0.15 * sum(max(0, g) for g in gains) + 1.25 * sum(min(0, g) for g in gains) + confirmation + clarity
+        benefit = max(0.0, *gains) + 0.15 * sum(max(0, g) for g in gains)
+        harm = -1.25 * sum(min(0, g) for g in gains) + risk
+        # Confirmation and clarity are tie-breakers, never a reason to publish harm alone.
+        return benefit - harm + (confirmation + clarity if benefit > harm else 0.0)
 
     def ghost_apply_hint(self, context, cid, negative=False):
         if not negative:
@@ -666,6 +748,7 @@ class Game:
                 coverage[i] += margin
             if context is not None:
                 self.ghost_apply_hint(context, cid)
+                coverage[:] = self.coverage_from_scores(context["scores"])
         pool = list(sent)
         while pool:
             best = select(pool, 0.16, hand if self.marked else pool + list(hand))
@@ -694,6 +777,7 @@ class Game:
                 silence = candidate
                 if context is not None:
                     self.ghost_apply_hint(context, candidate, negative=True)
+                    coverage[:] = self.coverage_from_scores(context["scores"])
         pool = list(hand)
         for _ in range(2 if self.duel else 1):
             if not pool:
@@ -741,7 +825,9 @@ class Game:
             return max(useful, default=0.0) + 0.15 * max(0.0, gain(cid))
 
         discard = min(pool, key=retention) if pool else None
-        if discard is not None and (retention(discard) >= 0.12 or (context is not None and context["remaining"] <= 1)):
+        stalled = context is not None and not echo and silence is None and not own
+        if discard is not None and ((retention(discard) >= 0.12 and not stalled)
+                                    or (context is not None and context["remaining"] <= 1)):
             discard = None
         if "analytics" in self.d:
             self.trace("bot_ghost", pid=0, knowledge=self.player_knowledge(0), incoming=sent, decisions=decisions, echo=echo, silence=silence, own=own, discard=discard,
@@ -866,7 +952,10 @@ class Game:
             def mail_score(card, target):
                 row = next(row for row in knowledge["board"] if target in row)
                 other = max(affinity(card, cid) for cid in row if cid != target)
-                score = affinity(card, target) - 0.55 * other
+                score = affinity(card, target) - (0.75 if adaptive else 0.55) * other
+                if adaptive and not hostile:
+                    cross = max(affinity(card, c) for r in knowledge["board"] if r != row for c in r)
+                    score -= 0.22 * max(0.0, cross - affinity(card, target))
                 if hostile and not adaptive:
                     score -= 0.8 * max(affinity(card, cid) for cid in knowledge["truth"])
                 if adaptive:
@@ -966,7 +1055,7 @@ class Game:
             leads = {str(topic): leads[str(topic)]}
         suspect = None
         suspects = []
-        if not self.cooperative and (final_round or self.noise("name a suspect", pid) < 0.48):
+        if not self.cooperative and (knowledge["difficulty"] != "easy" or final_round or self.noise("name a suspect", pid) < 0.48):
             suspects = [i for i in range(1, len(self.d["players"])) if i != pid and i not in self.d["excluded"]]
             suspect = max(suspects, key=lambda target: self.suspicion(pid, target))
         tests = planned[:] or ([max(leads.values(), key=lambda cid: affinity(claim, cid))] if claim is not None else [])
@@ -981,14 +1070,29 @@ class Game:
         speech = self.bot_speech(knowledge, claim, tests, leads, receipt.get("check"), suspect=suspect)
         reason = self.public_reason(pid, suspect) if suspect is not None else ""
         if suspect is not None and not hostile and knowledge["difficulty"] != "easy" and reason.startswith("Предварительное подозрение"):
-            suspect, reason = None, ""
-            speech = self.bot_speech(knowledge, claim, tests, leads, receipt.get("check"), suspect=None)
+            if knowledge["role"] == "witness" and self.noise("witness caution", pid) < 0.25:
+                reason = "Хочу внимательнее проверить этого игрока; открытых доказательств пока нет."
+                speech += f" Пока предлагаю обратить внимание на игрока «{self.name(suspect)}»."
+            else:
+                suspect, reason = None, ""
+                speech = self.bot_speech(knowledge, claim, tests, leads, receipt.get("check"), suspect=None)
         if "analytics" in self.d:
             self.trace("bot_discussion", pid=pid, knowledge=knowledge, rankings=rankings,
                        suspect_scores={target:self.suspicion(pid,target) for target in suspects},
                        suspect_factors={target:self.suspicion_factors(pid,target) for target in suspects},
                        sent=receipt.get("sent_cards", []), claim=claim, leads=leads, tests=tests, suspect=suspect, speech=speech)
-        self.show_statement(pid, leads, suspect, claim, tests, speech=speech, reason=reason)
+        stance = 1
+        if knowledge["difficulty"] != "easy":
+            margins = []
+            for key, cid in leads.items():
+                i = int(key)
+                public = {c: evidence_score(knowledge, c, i) for c in knowledge["board"][i]}
+                margins.append(row_gap(public, cid))
+            if margins and all(m > 0.60 for m in margins):
+                stance = 2
+            elif margins and all(m < 0.15 for m in margins) and not hostile:
+                stance = 0
+        self.show_statement(pid, leads, suspect, claim, tests, speech=speech, stance=stance, reason=reason)
 
     def bot_speech(self, knowledge, claim, tests, leads, check=None, *, suspect=None):
         """Template-based, grounded in the bot's claim and public evidence, never private truth."""
@@ -1033,11 +1137,14 @@ class Game:
         if check:
             parts.append(f"Перепроверял ассоциацию игрока «{self.name(check['pid'])}».")
         else:
-            other = next((n for n in reversed(knowledge["notes"])
-                          if n["pid"] != knowledge["pid"] and n["leads"] and
-                          any(k in leads for k in n["leads"])), None)
+            relevant = [n for n in knowledge["notes"] if n["pid"] != knowledge["pid"]
+                        and n.get("stance", 1) != 0 and any(k in leads for k in n["leads"])]
+            other = max(relevant, key=lambda n: (n["round"],
+                        sum(k in leads and leads[k] != c for k, c in n["leads"].items())),
+                        default=None)
             if other:
-                shared = next(k for k in other["leads"] if k in leads)
+                shared = max((k for k in other["leads"] if k in leads),
+                             key=lambda k: leads[k] != other["leads"][k])
                 rival, own = other["leads"][shared], leads[shared]
                 if knowledge["difficulty"] == "easy":
                     agree = any(leads.get(k) == cid for k, cid in other["leads"].items())
@@ -1051,14 +1158,19 @@ class Game:
                     else:
                         parts.append(f"Игрок «{self.name(other['pid'])}» предлагает {names([rival])}, а я склоняюсь к {names([own])}.")
                     if visible:
-                        hint, sign = max(visible, key=lambda pair: pair[1] * (hint_signal(knowledge["board"], own, i, pair[0]) -
-                                                                                            (hint_signal(knowledge["board"], rival, i, pair[0]) if rival != own else 0)))
-                        delta = sign * (hint_signal(knowledge["board"], own, i, hint) -
-                                        (hint_signal(knowledge["board"], rival, i, hint) if rival != own else 0))
+                        comparison = rival if own != rival else max(
+                            (c for c in knowledge["board"][i] if c != own),
+                            key=lambda c: evidence_score(knowledge, c, i))
+                        def contrast(pair):
+                            hint, sign = pair
+                            return sign * (hint_signal(knowledge["board"], own, i, hint) -
+                                           hint_signal(knowledge["board"], comparison, i, hint))
+                        hint, sign = max(visible, key=contrast)
+                        delta = contrast((hint, sign))
                         if delta > 0.12:
                             parts.append(f"Подсказка {names([hint])} " + ("отмечена как ложный след и помогает исключать варианты." if sign < 0 else f"лучше согласуется с {names([own])}."))
                         elif rival != own:
-                            parts.append("По открытым письмам пока не могу уверенно отличить эти версии.")
+                            parts.append("По открытым письмам пока не могу уверенно отличить эти версии. Какое конкретное письмо поддерживает другую версию?")
             elif knowledge["own_leads"]:
                 prior = knowledge["own_leads"]
                 same = any(prior.get(k) == cid for k, cid in leads.items())
@@ -1079,7 +1191,8 @@ class Game:
             if suspect is not None:
                 reason = self.public_reason(knowledge["pid"], suspect)
                 if not reason.startswith("Предварительное подозрение"):
-                    parts.append(f"Хочу уточнить показания игрока «{self.name(suspect)}»: {reason}")
+                    parts.append(f"Хочу уточнить показания игрока «{self.name(suspect)}»: {reason} "
+                                 "Как ты объяснишь это расхождение?")
         return " ".join(parts)
 
     def show_statement(self, pid, leads, suspect, claim=None, tests=(), *, speech="", stance=1, reason=""):
@@ -1140,6 +1253,56 @@ class Game:
                     result.append(dict(round=note["round"], text=f'Обвиняет {self.name(accused)} за «{CARDS[cid]["name"]}», хотя сам поддерживает эту версию.'))
         return result
 
+    def public_claim_disputes(self, knowledge, target):
+        """Two incompatible public ownership claims; neither side is proven guilty."""
+        result = []
+        notes = knowledge["notes"]
+        for note in notes:
+            claim = note["claim"]
+            if note["pid"] != target or claim is None:
+                continue
+            rivals = [n["pid"] for n in notes if n["pid"] != target
+                      and n["round"] == note["round"] and n["claim"] == claim]
+            if rivals:
+                result.append(dict(round=note["round"], text=
+                    f'Письмо «{CARDS[claim]["name"]}» также назвал ' +
+                    ", ".join(self.name(pid) for pid in rivals) +
+                    ". Требуется уточнение; пока неизвестно, кто ошибся."))
+        return result
+
+    def public_pressure_events(self, knowledge, target):
+        """Weak lead: repeated confident opposition to evidence, then adoption by another speaker.
+        Do not mistake timing for proof of influence, or a private test for an endorsement.
+        """
+        notes = sorted(knowledge["notes"], key=lambda n: n["round"])
+        seen = Counter()
+        result = {}
+        for index, note in enumerate(notes):
+            if note["pid"] != target or note.get("stance", 1) != 2:
+                continue
+            visible = public_evidence_at(knowledge, note["round"])
+            for key, cid in note["leads"].items():
+                i = int(key)
+                scores = {c: evidence_score(visible, c, i) for c in visible["board"][i]}
+                if cid not in scores:
+                    continue
+                ranked = sorted(scores.values(), reverse=True)
+                if ranked[0] - ranked[1] < 0.55 or ranked[0] - scores[cid] < 0.65:
+                    continue
+                seen[(key, cid)] += 1
+                if seen[(key, cid)] < 2:
+                    continue
+                earlier = {n["pid"]: n["leads"][key] for n in notes[:index]
+                           if n.get("stance", 1) != 0 and key in n["leads"]}
+                adopters = [n["pid"] for n in notes[index+1:]
+                            if n["pid"] != target and n.get("stance", 1) != 0
+                            and n["leads"].get(key) == cid and earlier.get(n["pid"]) not in (None, cid)]
+                if adopters:
+                    result[(key, cid)] = dict(round=note["round"], text=
+                        f'Повторно уверенно отстаивал «{CARDS[cid]["name"]}» вопреки письмам; ' +
+                        "после этого другие игроки приняли эту версию. Это повод уточнить аргументы, не доказательство обмана.")
+        return list(result.values())
+
     def suspicion(self, pid, target):
         return sum(self.suspicion_factors(pid, target).values())
 
@@ -1152,8 +1315,9 @@ class Game:
                        social=0.0, revision=0.0, evidence_conflict=0.0, claim_conflict=0.0, role=0.0)
         factors["social"] = max(0, profile[1]) * self.public_suspicions()[target] / max(1, len(self.d["players"]) - 1)
         if adaptive:
-            factors["noise"] *= 0.22 if knowledge["difficulty"] == "normal" else 0.12
-            factors["social"] *= 0.04
+            # Stable, symmetric tie-break; neither seating nor popularity is evidence.
+            factors["noise"] = (self.noise("arrest tie", pid, target) - 0.5) * 0.04
+            factors["social"] = 0.0
             factors["persistence"] = 0.0
             factors["unsupported_shift"] = 0.0
             factors["claim_alignment"] = 0.0
@@ -1163,6 +1327,7 @@ class Game:
             factors["supported_leads"] = 0.0
             factors["response"] = 0.0
             factors["contradiction"] = min(0.48, 0.24 * len(self.public_contradictions(knowledge, target)))
+            factors["pressure"] = min(0.20, 0.10 * len(self.public_pressure_events(knowledge, target)))
         claims = sorted((note for note in knowledge["notes"] if note["pid"] == target), key=lambda n: n["round"])
         previous = {}
         if adaptive:
@@ -1245,6 +1410,13 @@ class Game:
             factors["persistence"] *= profile[3]
             factors["unsupported_shift"] *= 0.7 + profile[2]
             factors["verified_conflict"] *= 0.8 + profile[3] * 0.3
+            # Revisions and agreement remain useful diagnostics, but cannot create
+            # a negative suspicion balance or erase a verified contradiction.
+            soft = sum(factors[k] for k in ("evidence_conflict", "persistence",
+                                            "unsupported_shift", "unbacked_churn"))
+            credit = -sum(min(0.0, factors[k]) for k in ("revision", "constructive_revision",
+                                                        "supported_leads", "response"))
+            factors["mitigation_cap"] = max(0.0, credit - 0.5 * soft)
         for note in ([] if adaptive else claims):
             for key, cid in note["leads"].items():
                 if key in previous and previous[key] != cid:
@@ -1257,11 +1429,7 @@ class Game:
             scores = [evidence_score(knowledge, other, int(key)) for other in knowledge["board"][int(key)]]
             factors["evidence_conflict"] += min(0.55, max(0, max(scores) - evidence_score(knowledge, cid, int(key))) * (0.20 if adaptive else 0.12))
         # A contradictory claim is evidence of possible deception, never access to private mail.
-        for note in claims:
-            if note["claim"] is not None and any(
-                n["pid"] != target and n["round"] == note["round"] and n["claim"] == note["claim"]
-                for n in knowledge["notes"]):
-                factors["claim_conflict"] += 0.48
+        factors["claim_conflict"] = 0.48 * len(self.public_claim_disputes(knowledge, target))
         if adaptive:
             factors["claim_conflict"] = min(1.44, factors["claim_conflict"])
         if knowledge["role"] == "witness" and target == knowledge["killer"]:
@@ -1348,14 +1516,31 @@ class Game:
     def counter_suspicion(self, candidate, role=None):
         mode = role or self.d["mode"]
         score = self.noise("counter", candidate) * 2.1
+        adaptive = self.d.get("difficulty", "normal") != "easy"
+        knowledge = self.player_knowledge(self.role_id("killer")) if adaptive else None
         for note in self.d["history"]:
-            if note["pid"] == candidate:
-                if mode == "witness":
-                    score += 0.75 * (note["suspect"] == self.role_id("killer"))
-                else:
-                    leads = self.note_leads(note)
+            if note["pid"] != candidate:
+                continue
+            if mode == "witness":
+                if note["suspect"] == self.role_id("killer"):
+                    reason = note.get("reason", "")
+                    score += (0.75 if not adaptive else
+                              0.32 if reason and not reason.startswith(("Предварительное", "Хочу внимательнее")) else 0.75)
+            else:
+                leads = self.note_leads(note)
+                if not adaptive:
                     matches = sum(cid == self.d["truth"][int(key)] for key, cid in leads.items())
                     score += 0.52 * matches / max(1, len(leads))
+                    continue
+                visible = public_evidence_at(knowledge, note["round"])
+                for key, cid in leads.items():
+                    i = int(key)
+                    if cid != self.d["truth"][i] or note.get("stance", 1) == 0:
+                        continue
+                    row = {c: evidence_score(visible, c, i) for c in visible["board"][i]}
+                    # Correctly identifying an already obvious clue reveals little
+                    # about special knowledge. Early unexplained accuracy is more relevant.
+                    score += 0.52 * max(0.0, 1.0 - max(0.0, row_gap(row, cid))) / max(1, len(leads))
         return score
 
     def end(self, exposed=None, exposed_role=None):
@@ -1404,14 +1589,16 @@ class Game:
         if contradictions:
             return contradictions[-1]["text"]
         for n in reversed(prior):
-            if n["claim"] is not None and any(m["pid"] != target and m["round"] == n["round"] and
-                                               m["claim"] == n["claim"] for m in knowledge["notes"]):
-                return f'Спорное заявление о письме «{CARDS[n["claim"]]["name"]}».'
-        for n in reversed(prior):
             claim = n.get("claim")
             receipt = self.d.get("mail_log", {}).get(str(n["round"]), {}).get(str(observer), {})
             if observer != target and claim is not None and claim in receipt.get("sent_cards", [receipt.get("sent")]):
                 return f'Я сам отправил письмо «{CARDS[claim]["name"]}» в раунде {n["round"]}; его заявление противоречит моему.'
+        disputes = self.public_claim_disputes(knowledge, target)
+        if disputes:
+            return disputes[-1]["text"]
+        pressure = self.public_pressure_events(knowledge, target)
+        if pressure:
+            return pressure[-1]["text"]
         conflicts = Counter()
         for n in prior:
             if n.get("stance", 1) == 0:
@@ -1465,16 +1652,19 @@ class Game:
                     gap = max(scores.values()) - scores[cid]
                     previous = last_leads.get(key)
                     ranking = sorted(scores.values(), reverse=True)
-                    if gap < 0.12 and ranking[0] - ranking[1] > 0.35 and (key, cid) not in supported:
+                    if n.get("stance", 1) != 0 and gap < 0.12 and ranking[0] - ranking[1] > 0.35 and (key, cid) not in supported:
                         supported.add((key, cid))
-                        arguments_for.append(dict(round=n["round"], text=f'Поддерживает версию «{CARDS[cid]["name"]}», согласующуюся с открытыми письмами.'))
-                    if previous is not None and previous in scores and previous != cid and scores[cid] > scores[previous] + 0.18:
+                        arguments_for.append(dict(round=n["round"], text=f'Поддерживает версию «{CARDS[cid]["name"]}», согласующуюся с открытыми письмами (не доказательство невиновности).'))
+                    if n.get("stance", 1) != 0 and previous is not None and previous in scores and previous != cid and scores[cid] > scores[previous] + 0.18:
                         arguments_for.append(dict(round=n["round"], text=f'Пересмотрел версию в пользу «{CARDS[cid]["name"]}» после писем.'))
                     if n.get("stance", 1) != 0 and gap > 0.55 and ranking[0] - ranking[1] > 0.35:
                         conflicts[(key, cid)] += 1
                         if conflicts[(key, cid)] >= 2:
                             arguments_against.append(dict(round=n["round"], text=f'Повторно поддерживает «{CARDS[cid]["name"]}», несмотря на письма.'))
-                    last_leads[key] = cid
+                    if n.get("stance", 1) != 0:
+                        last_leads[key] = cid
+            arguments_against.extend(self.public_claim_disputes(knowledge, pid))
+            arguments_against.extend(self.public_pressure_events(knowledge, pid))
             arguments_against.extend(self.public_contradictions(knowledge, pid))
             people.append(dict(pid=pid, name=self.name(pid), count=len(incoming), incoming=incoming,
                 arguments_for=arguments_for[-5:], arguments_against=arguments_against[-5:],

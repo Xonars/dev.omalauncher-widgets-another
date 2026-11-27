@@ -799,6 +799,87 @@ class GhostLettersRules(unittest.TestCase):
             self.assertIn('key: "letter", label: "Показание"', source)
             self.assertIn("Версию преступления не заявляю.", source)
 
+    def test_engine4_association_precision(self):
+        names = {c["name"]: c["id"] for c in mod.CARDS}
+        a = lambda x, y: mod.affinity(names[x], names[y])
+        self.assertGreater(a("Экран", "Картина"), a("Стул", "Картина"))
+        self.assertGreater(a("Стул", "Подушка"), a("Стул", "Картина"))
+        self.assertEqual(a("Ключ", "Замок"), 4.0)
+        self.assertEqual(a("Проволока", "Катушка"), 4.0)
+        self.assertLess(mod.association_weight("дом", 3), mod.association_weight("изображение", 3))
+        self.assertEqual(a("Экран", "Картина"), a("Картина", "Экран"))
+
+    def test_engine4_evidence_does_not_expire(self):
+        g = Game.new("classic", 6, 1, False, difficulty="normal", seed=42)
+        k = g.player_knowledge(1)
+        k["letters"] = [dict(round=0, hints=[(7, 1)])]
+        c = k["board"][0][0]
+        self.assertEqual(mod.evidence_score(dict(k, round=1), c, 0),
+                         mod.evidence_score(dict(k, round=4), c, 0))
+
+    def test_engine4_mitigation_cannot_buy_innocence(self):
+        from unittest.mock import patch
+        g = Game.new("classic", 6, 1, False, difficulty="normal", seed=42)
+        observer = g.role_id("detective")
+        target = next(i for i in range(1, 6) if i != observer)
+        right, wrong = g.d["board"][0][:2]
+        g.d["round"] = 3
+        g.d["history"] = [dict(pid=target, round=1, leads={"0":wrong}, suspect=None, claim=None, tests=[]),
+                          dict(pid=target, round=2, leads={"0":right}, suspect=None, claim=None, tests=[]),
+                          dict(pid=target, round=3, leads={"0":right}, suspect=None, claim=None, tests=[])]
+        with patch.object(mod, "evidence_score", side_effect=lambda k,c,i: float(k["round"] > 1 and c == right)):
+            factors = g.suspicion_factors(observer, target)
+        self.assertLess(factors["constructive_revision"], 0)
+        self.assertAlmostEqual(sum(factors[k] for k in ("revision", "constructive_revision",
+            "supported_leads", "response", "mitigation_cap")), 0)
+        self.assertEqual(factors["social"], 0)
+
+    def test_engine4_tentative_lead_is_not_public_endorsement(self):
+        g = Game.new("classic", 6, 1, False, difficulty="normal", seed=42)
+        observer, target = 1, 2
+        c = g.d["board"][0][0]
+        g.d["history"] = [dict(pid=target, round=1, leads={"0":c}, suspect=None, claim=None, tests=[], stance=0)]
+        self.assertEqual(mod.public_opinions(g.player_knowledge(observer), 0), {})
+        self.assertEqual(sum(g.ghost_context()["public"][0].values()), 0)
+
+    def test_engine4_coverage_uses_combined_rivals(self):
+        g = Game.new("classic", 6, 1, False, difficulty="normal", seed=42)
+        g.d["truth"] = [r[0] for r in g.d["board"]]
+        a, b, c, d = g.d["board"][0]
+        first = {a:2, b:3, c:0, d:0}
+        second = {a:2, b:0, c:3, d:0}
+        combined = {k:first[k]+second[k] for k in first}
+        self.assertEqual(mod.row_gap(first,a), -1)
+        self.assertEqual(mod.row_gap(second,a), -1)
+        self.assertEqual(mod.row_gap(combined,a), 1)
+        self.assertGreater(mod.log_odds(combined,a), mod.log_odds(first,a))
+
+    def test_engine4_public_claim_dispute_is_symmetric_and_not_proof(self):
+        g = Game.new("classic", 6, 1, False, seed=42)
+        c = g.d["deck"][-1]
+        g.d["history"] = [dict(pid=p, round=1, leads={}, suspect=None, claim=c, tests=[]) for p in (1, 2)]
+        k = g.player_knowledge(3)
+        self.assertEqual(len(g.public_claim_disputes(k, 1)), 1)
+        self.assertEqual(len(g.public_claim_disputes(k, 2)), 1)
+        self.assertEqual(g.suspicion_factors(3, 1)["verified_conflict"], 0)
+        self.assertEqual(g.suspicion_factors(3, 2)["verified_conflict"], 0)
+
+    def test_engine4_public_pressure_requires_repeat_and_adoption(self):
+        from unittest.mock import patch
+        g = Game.new("classic", 6, 1, False, seed=42)
+        good, wrong = g.d["board"][0][:2]
+        g.d["round"] = 3
+        def n(pid, number, cid, stance=2):
+            return dict(pid=pid, round=number, leads={"0":cid}, suspect=None, claim=None, tests=[], stance=stance)
+        with patch.object(mod, "evidence_score", side_effect=lambda k,c,i: float(c == good)):
+            g.d["history"] = [n(1,1,wrong), n(2,1,good), n(1,2,wrong), n(2,3,wrong)]
+            self.assertEqual(len(g.public_pressure_events(g.player_knowledge(3), 1)), 1)
+            g.d["history"][-1]["stance"] = 0
+            self.assertEqual(g.public_pressure_events(g.player_knowledge(3), 1), [])
+            g.d["history"][-1]["stance"] = 2
+            g.d["history"][0]["stance"] = 0
+            self.assertEqual(g.public_pressure_events(g.player_knowledge(3), 1), [])
+
     def test_package_matches_source(self):
         row = next(x for x in json.loads((ROOT / "store-collection.json").read_text()) if x["source"] == "ghost-letters.owl")
         with zipfile.ZipFile(ROOT / row["resources"]) as z:

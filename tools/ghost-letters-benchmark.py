@@ -17,7 +17,9 @@ def load(path):
 def scenarios():
     # Classic at every supported seat count, plus representative co-op tables.
     return [(mode, total, marked, difficulty)
-            for mode, totals in (("classic", range(4, 13)), ("coop", (2, 3, 5, 8, 12)))
+            for mode, totals in (("classic", range(4, 13)), ("coop", (2, 3, 5, 8, 12)),
+                                 ("killer", (4, 6)), ("accomplice", (5, 8)),
+                                 ("witness", (5, 8)), ("expert", (5, 8)))
             for total in totals for marked in (False, True)
             for difficulty in ("easy", "normal", "hard")]
 
@@ -42,10 +44,21 @@ def play(module, seed, mode, total, marked, difficulty):
         raise RuntimeError(f"stuck game: {seed} {g.phase}")
     d = g.d
     final = [n for n in d["history"] if n["round"] == d["rounds"]]
-    unanimity = sum(len({g.note_leads(n).get(str(i)) for n in final}) == 1 for i in range(3))
+    opinions = [{g.note_leads(n).get(str(i)) for n in final} for i in range(3)]
+    unanimity = sum(len(row) == 1 for row in opinions)
+    wrong_unanimity = sum(len(row) == 1 and d["truth"][i] not in row and None not in row
+                          for i, row in enumerate(opinions))
+    ballots = [ballot["suspect"] for ballot in d["ballots"].values() if "suspect" in ballot]
+    public_accusations = [n for n in d["history"] if n.get("suspect") is not None]
+    reasons = [n for n in public_accusations if n.get("reason") and
+               not n["reason"].startswith(("Предварительное", "Хочу внимательнее"))]
     rounds = [x for x in d["letters"] if x["round"] > 0]
     return dict(games=1, solved=int(d["solved"]), detective_wins=int(d["winner"] == "detectives"),
                 correct=d["successes"], unanimous_categories=unanimity,
+                wrong_unanimous_categories=wrong_unanimity,
+                arrest_votes=len(ballots),
+                correct_arrest_votes=sum(v == g.role_id("killer") for v in ballots) if mode != "coop" else 0,
+                accusations=len(public_accusations), reasoned_accusations=len(reasons),
                 arrested_killer=int(mode != "coop" and d["arrested"] == g.role_id("killer")),
                 no_hint_rounds=sum(not g.letter_cards(x) for x in rounds),
                 rounds=d["rounds"], ties=sum(1 for tally in d["counts"])- (3 if mode=="coop" else 4) - len(d["excluded"])), d
@@ -83,7 +96,7 @@ def main():
     p.add_argument("--seed-start", type=int, default=0)
     p.add_argument("--difficulty", choices=("easy", "normal", "hard"))
     p.add_argument("--replay-seed", type=int)
-    p.add_argument("--mode", choices=("classic", "coop"), default="classic")
+    p.add_argument("--mode", choices=("classic", "coop", "killer", "accomplice", "witness", "expert"), default="classic")
     p.add_argument("--players", type=int, default=6)
     p.add_argument("--marked", action="store_true")
     args = p.parse_args()
