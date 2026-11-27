@@ -21,6 +21,8 @@ set -euo pipefail
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo=$(cd -- "$here/../../.." && pwd)
 jar=$repo/tools/owl.jar
+# Captured data belongs to the pinned oracle tree, not a newer catalogue overlay.
+fixture_widgets=${OWL_FIXTURE_WIDGETS:-"$repo/widgets"}
 owl=$here/../Owl.js
 out=$(mktemp -d)
 trap 'rm -rf "$out"' EXIT
@@ -76,8 +78,18 @@ done
 failed=0
 check() {
   local name=$1 src=$2 fixture=$3
-  java "${java_opts[@]}" -cp "$jar:$out" OwlOracle "$src" "$fixture" >"$out/java.json" 2>/dev/null
-  node "$here/walk.js" "$owl" "$src" "$fixture" >"$out/js.json" 2>/dev/null
+  if ! java "${java_opts[@]}" -cp "$jar:$out" OwlOracle "$src" "$fixture" >"$out/java.json" 2>"$out/java.err"; then
+    echo "not ok - $name (reference evaluator: $src)"
+    cat "$out/java.err" >&2
+    failed=1
+    return
+  fi
+  if ! node "$here/walk.js" "$owl" "$src" "$fixture" >"$out/js.json" 2>"$out/js.err"; then
+    echo "not ok - $name (Owl.js evaluator: $src)"
+    cat "$out/js.err" >&2
+    failed=1
+    return
+  fi
   if same "$out/java.json" "$out/js.json"; then
     echo "ok - $name"
   else
@@ -91,7 +103,7 @@ check "edge cases" "$here/edge.owl" "$here/edge.fixture.json"
 for f in "$here"/*.fixture.json; do
   name=$(basename "$f" .fixture.json)
   case $name in edge | base) continue ;; esac
-  check "$name with data" "$repo/widgets/simonschubert/$name/widget.owl" "$f"
+  check "$name with data" "$fixture_widgets/simonschubert/$name/widget.owl" "$f"
 done
 for w in "${widgets[@]}"; do
   check "$(basename "$(dirname "$w")") without data" "$w" "$here/base.fixture.json"
