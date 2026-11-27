@@ -860,6 +860,10 @@ app "Письма призрака" {
       Column {
         gap: 5; padding: 9; radius: 9; background: panel; border: 1; borderColor: rule
         Text { text: "ПОИСК УБИЙЦЫ · ${data.new_accusations} подозрений в раунде"; color: ash; fontSize: 12; fontWeight: 700 }
+        if len(data.changes ?? []) > 0 {
+          Text { text: "Изменения в раунде"; color: gold; fontSize: 12; fontWeight: 700 }
+          for change in (data.changes ?? []) key change.pid { Text { text: change.text; color: parchment; fontSize: 12; maxLines: 2 } }
+        }
         if data.me != null {
           Text { text: "Вас подозревают · ${data.me.count}"; color: data.me.count > 0 ? ash : dim; font: serif; fontSize: 20 }
           for accusation in data.me.incoming key accusation.pid {
@@ -926,7 +930,7 @@ app "Письма призрака" {
         if len(selected.arguments_against ?? []) == 0 { Copy { body: "Нет выявленных повторных расхождений или противоречий." } }
         for item in (selected.arguments_against ?? []) { Copy { body: "Р${item.round} · ${item.text}"; shade: ash } }
         CategoryLabel { label: "Аргументы в пользу"; tint: moss }
-        if len(selected.arguments_for ?? []) == 0 { Copy { body: "Пока нет отмеченных обоснованных пересмотров." } }
+        if len(selected.arguments_for ?? []) == 0 { Copy { body: "Пока нет отмеченных подтверждений или обоснованных пересмотров." } }
         for item in (selected.arguments_for ?? []) { Copy { body: "Р${item.round} · ${item.text}"; shade: moss } }
         Copy { body: "Аргументы основаны на публичных письмах и версиях. Это не оценка виновности." }
         CategoryLabel { label: "История версий · ${selected.name}" }
@@ -1142,7 +1146,7 @@ app "Письма призрака" {
       if !atmospheric || roleArt == null { Text { text: actor.role; color: parchment; font: serif; fontSize: 34; align: center; maxLines: 2 } }
       Text { text: actor.label; color: tone; font: sans; fontSize: 14; align: center }
       Box { height: 1; fill: width; background: alpha(tone, 0.4) }
-      Copy { body: actor.role == "Детектив" ? "Цель: раскрыть мотив, место и способ, затем найти убийцу." : actor.brief; shade: parchment }
+      Copy { body: actor.brief; shade: parchment }
       Lines { rows: actor.knowledge }
       Text { text: "Не показывай эту карту другим участникам."; color: dim; font: sans; fontSize: 12; align: center }
     }

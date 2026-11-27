@@ -1436,6 +1436,7 @@ class Game:
             arguments_for, arguments_against = [], []
             last_leads = {}
             conflicts = Counter()
+            supported = set()
             for n in own:
                 visible = public_evidence_at(knowledge, n["round"])
                 for key, cid in self.note_leads(n).items():
@@ -1445,7 +1446,11 @@ class Game:
                         continue
                     gap = max(scores.values()) - scores[cid]
                     previous = last_leads.get(key)
-                    if previous is not None and previous != cid and scores[cid] > scores[previous] + 0.18:
+                    ranking = sorted(scores.values(), reverse=True)
+                    if gap < 0.12 and ranking[0] - ranking[1] > 0.35 and (key, cid) not in supported:
+                        supported.add((key, cid))
+                        arguments_for.append(dict(round=n["round"], text=f'Поддерживает версию «{CARDS[cid]["name"]}», согласующуюся с открытыми письмами.'))
+                    if previous is not None and previous in scores and previous != cid and scores[cid] > scores[previous] + 0.18:
                         arguments_for.append(dict(round=n["round"], text=f'Пересмотрел версию в пользу «{CARDS[cid]["name"]}» после писем.'))
                     if n.get("stance", 1) != 0 and gap > 0.55:
                         conflicts[(key, cid)] += 1
@@ -1460,7 +1465,22 @@ class Game:
         owner = self.notebook_owner()
         me = next((p for p in people if p["pid"] == owner), None)
         response = self.d.get("defenses", {}).get(str(self.d["round"]), {}).get(str(owner))
-        return dict(people=people, me=me, response=DEFENSES[response] if response in range(len(DEFENSES)) else None,
+        previous = {n["pid"]: n for n in notes if n["round"] < self.d["round"]}
+        changes = []
+        for pid, n in latest.items():
+            if n["round"] != self.d["round"]:
+                continue
+            old = previous.get(pid, {}).get("suspect")
+            new = n.get("suspect")
+            if old != new:
+                if new is None:
+                    text = f"{self.name(pid)} снял подозрение с {self.name(old)}."
+                elif old is None:
+                    text = f"{self.name(pid)} подозревает {self.name(new)}."
+                else:
+                    text = f"{self.name(pid)}: {self.name(old)} → {self.name(new)}."
+                changes.append(dict(pid=pid, text=text))
+        return dict(people=people, me=me, changes=changes, response=DEFENSES[response] if response in range(len(DEFENSES)) else None,
                     can_respond=self.phase == "discussion" and len(self.d["local"]) == 1 and me is not None and
                         any(x["round"] == self.d["round"] for x in me["incoming"]) and response is None,
                     responses=[dict(value=i, label=label) for i,label in enumerate(DEFENSES)],
