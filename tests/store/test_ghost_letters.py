@@ -663,7 +663,7 @@ class GhostLettersRules(unittest.TestCase):
             self.assertIn("component LettersPanel(letters)", source)
             self.assertIn("Первая зацепка", source)
             self.assertIn("LettersPanel { letters: sheet.letters }", source)
-            self.assertIn("columns: verticalCategories ? 3 : 1", source)
+            self.assertIn("columns: compactBoard ? (showDesk || layoutWidth < 320 ? 2 : 4) : 2", source)
 
     def test_detective_hand_respects_local_turn_privacy(self):
         g = Game.new("classic", 6, 1, False, seed=42)
@@ -709,8 +709,8 @@ class GhostLettersRules(unittest.TestCase):
             self.assertIn("notebookPersisted = notebookPending", source)
             self.assertNotIn("Сохранить и закрыть", source)
             self.assertIn("component ReplyEditor(groups)", source)
-            self.assertIn('detectiveHandOpen = phase == "mail" || phase == "intro"', source)
-            self.assertIn("if editable { TurnAction {} }", source)
+            self.assertIn('detectiveHandOpen = phase == "mail"', source)
+            self.assertIn("TurnAction {}", source)
             self.assertIn('if phase != "mail" || showDesk { TurnAction {} }', source)
 
     def test_mobile_polish_layout_guards(self):
@@ -722,7 +722,18 @@ class GhostLettersRules(unittest.TestCase):
             self.assertNotIn('text: "Все"', letters)
             self.assertIn('fontWeight: 700; weight: 1; maxLines: 1', letters)
             self.assertIn('Table { rows: rows; editable: true }', source)
-            self.assertIn('if replySection == section.key { Flow', source)
+            self.assertIn('component ReplyModes(groups)', source)
+            self.assertIn('Table { rows: sheet.board; interactive: true }', source)
+            self.assertIn('selectingTest && testAllowed', source)
+            self.assertIn('selectingCategory', source)
+            self.assertIn('state dynamicFlow = false', source)
+            self.assertIn('let autoStep = solo &&', source)
+            self.assertIn('if editable || detectiveHandOpen', source)
+            self.assertIn('component TablePlayers(players)', source)
+            self.assertIn('component LiveStatement(player, opinion, progress)', source)
+            self.assertIn('lettersPanelOpen ? letters : [first(letters)]', source)
+            self.assertIn('if spotlight || get(fullSpeech, player, false)', source)
+            self.assertNotIn('onTap: intentOpen = !intentOpen', source)
             self.assertNotIn('height: mini ? 20 : 29', source)
 
     def test_package_matches_source(self):
