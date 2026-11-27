@@ -282,12 +282,6 @@
     "resources": null
   },
   {
-    "source": "market-simonschubert-fetch.owl",
-    "path": "widgets/simonschubert/fetch/widget.owl",
-    "author": "simonschubert",
-    "resources": null
-  },
-  {
     "source": "market-simonschubert-focus.owl",
     "path": "widgets/simonschubert/focus/widget.owl",
     "author": "simonschubert",
