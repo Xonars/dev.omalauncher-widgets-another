@@ -2,6 +2,12 @@
 """Local game state and computer players for the OWL app."""
 
 import argparse
+import csv
+import hashlib
+import io
+import re
+import time
+import zipfile
 from collections import Counter
 from contextlib import contextmanager
 from functools import lru_cache
@@ -16,6 +22,9 @@ import uuid
 
 HERE = Path(__file__).resolve().parent
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "ghost-letters"
+ANALYTICS_SCHEMA = 1
+GAME_VERSION = "2.7.1"
+BOT_VERSION = "2.3.1"
 CATEGORIES = ("Мотив", "Место", "Способ")
 MARKS = {"echo": "Эхо", "silence": "Тишина", "seal": "Печать"}
 MODES = {
@@ -148,6 +157,24 @@ class Game:
     def __init__(self, data):
         self.d = data
 
+    def enable_analytics(self, partial=False):
+        if "analytics" not in self.d:
+            self.d["analytics"] = dict(schema=ANALYTICS_SCHEMA, version=GAME_VERSION,
+                bot_version=BOT_VERSION, started_at=None if partial else int(time.time()),
+                partial=partial, events=[])
+            self.trace("capture_start", partial=partial, seed=self.d["seed"],
+                       mode=self.d["mode"], difficulty=self.d.get("difficulty", "normal"),
+                       board=self.d["board"], players=[dict(pid=i, role=p["role"], local=p["local"],
+                       profile=self.bot_profile(i) if i and not p["local"] else None)
+                       for i,p in enumerate(self.d["players"])])
+
+    def trace(self, kind, **fields):
+        analytics = self.d.get("analytics")
+        if analytics is not None:
+            events = analytics["events"]
+            events.append(json.loads(json.dumps(dict(seq=len(events)+1, round=self.d["round"],
+                phase=self.phase, rev=self.d["rev"], kind=kind, **fields), ensure_ascii=False)))
+
     @classmethod
     def new(cls, mode, total, humans, human_ghost, *, marked=False, difficulty="normal", seed=None):
         if (mode not in MODES or type(total) is not int or type(humans) is not int
@@ -240,11 +267,13 @@ class Game:
         return random.Random(repr((self.d["seed"], self.d["round"], purpose, parts))).random()
 
     def set_phase(self, phase, queue=()):
+        self.trace("phase", target=phase, queue=list(queue))
         self.d["phase"] = phase
         self.d["queue"] = list(queue)
 
     def refill(self, pid):
         player = self.d["players"][pid]
+        before = player["hand"][:]
         while len(player["hand"]) < 5:
             if not self.d["deck"]:
                 # These cards never entered the post, so returning them gives no false history.
@@ -252,6 +281,8 @@ class Game:
                                         key=lambda cid: self.noise("recycle", cid))
                 self.d["discard"] = []
             player["hand"].append(self.d["deck"].pop())
+        if before != player["hand"]:
+            self.trace("refill", pid=pid, before=before, after=player["hand"])
 
     def move_to_opening(self):
         for pid in range(len(self.d["players"])):
@@ -261,9 +292,12 @@ class Game:
             return
         hand = self.d["players"][0]["hand"]
         best = max(hand, key=self.relative)
+        if "analytics" in self.d:
+            self.trace("bot_opening", pid=0, knowledge=self.player_knowledge(0), scores={c:self.relative(c) for c in hand}, selected=best if self.relative(best) > 0.22 else None)
         self.open_letter(best if self.relative(best) > 0.22 else None)
 
     def open_letter(self, cid, comment=""):
+        self.trace("opening", pid=0, card=cid)
         if cid is not None:
             self.d["players"][0]["hand"].remove(cid)
             self.d["letters"].append(dict(round=0, echo=[cid], silence=[], seal=None, missing=0,
@@ -282,6 +316,7 @@ class Game:
         self.d["first_sender"] = None
 
     def advance(self):
+        self.trace("advance")
         if self.phase == "board":
             killer = self.role_id("killer")
             if self.cooperative and 0 in self.d["local"]:
@@ -355,6 +390,7 @@ class Game:
 
     def choose_ghost_letters(self, sent, hand):
         coverage = self.ghost_coverage()
+        decisions = []
         echo, silence, own = [], None, []
         def add_positive(cid):
             for i, margin in enumerate(self.ghost_margins(cid)):
@@ -362,6 +398,8 @@ class Game:
         pool = list(sent)
         while pool:
             best = max(pool, key=lambda cid: self.ghost_gain(cid, coverage))
+            if "analytics" in self.d:
+                decisions.append(dict(stage="echo", coverage=coverage[:], scores={c:self.ghost_gain(c, coverage) for c in pool}, best=best, threshold=0.16))
             if self.ghost_gain(best, coverage) <= 0.16:
                 break
             echo.append(best)
@@ -371,11 +409,15 @@ class Game:
                 break
         if self.marked and pool:
             candidate = max(pool, key=lambda cid: self.ghost_gain(cid, coverage, negative=True))
+            if "analytics" in self.d:
+                decisions.append(dict(stage="silence", coverage=coverage[:], scores={c:self.ghost_gain(c, coverage, negative=True) for c in pool}, best=candidate, threshold=0.22))
             if self.ghost_gain(candidate, coverage, negative=True) > 0.22:
                 silence = candidate
         pool = list(hand)
         for _ in range(2 if self.duel else 1):
             best = max(pool, key=lambda cid: self.ghost_gain(cid, coverage))
+            if "analytics" in self.d:
+                decisions.append(dict(stage="seal", coverage=coverage[:], scores={c:self.ghost_gain(c, coverage) for c in pool}, best=best, threshold=0.24 if echo else 0.16))
             if self.ghost_gain(best, coverage) <= (0.24 if echo else 0.16):
                 break
             own.append(best)
@@ -384,6 +426,8 @@ class Game:
         discard = min(pool, key=lambda cid: self.ghost_gain(cid, coverage))
         if self.ghost_gain(discard, coverage) >= 0.12:
             discard = None
+        if "analytics" in self.d:
+            self.trace("bot_ghost", pid=0, knowledge=self.player_knowledge(0), incoming=sent, decisions=decisions, echo=echo, silence=silence, own=own, discard=discard)
         return echo, silence, own, discard
 
     def bot_profile(self, pid):
@@ -434,6 +478,7 @@ class Game:
         hand = self.d["players"][pid]["hand"]
         round_mail = self.d.setdefault("mail_log", {}).setdefault(str(self.d["round"]), {})
         sent = [cid] if second is None else [cid, second]
+        self.trace("mail", pid=pid, hand=hand, sent=sent, discard=discard, check=check, planned=list(planned))
         round_mail[str(pid)] = dict(sent=cid, sent_cards=sent, hand=hand[:], check=check, planned=list(planned))
         if self.d.get("first_sender") is None:
             self.d["first_sender"] = pid
@@ -487,6 +532,10 @@ class Game:
                 planned.append(target2)
                 remaining.remove(second)
             discard = min(remaining, key=lambda cid: max(affinity(cid, lead) for lead in leads))
+            if "analytics" in self.d:
+                self.trace("bot_mail", pid=pid, knowledge=knowledge, rankings=rankings, targets=leads,
+                           candidates=[dict(card=c, target=t, score=mail_score(c,t)) for c in p["hand"] for t in leads],
+                           selected=[best] if second is None else [best,second], planned=planned, check=check)
             self.post(pid, best, discard if self.noise("redraw", pid) < 0.55 else None, check, second, planned)
         self.d["mail"].sort(key=lambda cid: self.noise("envelope", cid))
         if self.d["players"][0]["local"]:
@@ -503,6 +552,7 @@ class Game:
         self.d["letters"].append(dict(round=self.d["round"], echo=hints,
                                       silence=[] if silence is None else [silence], seal=seal, extra=list(extra),
                                       missing=len(missing), comments=comments or {}))
+        self.trace("publish", pid=0, received=self.d["mail"], opened=hints, silence=silence, seal=seal, extra=list(extra), archived=missing, discard=discard)
         self.d["archive"].append(missing)
         hand = self.d["players"][0]["hand"]
         for cid in (seal, discard, *extra):
@@ -537,6 +587,7 @@ class Game:
                 topic = max(range(3), key=lambda i: max(rankings[i].values()) - min(rankings[i].values()))
             leads = {str(topic): leads[str(topic)]}
         suspect = None
+        suspects = []
         if not self.cooperative and (final_round or self.noise("name a suspect", pid) < 0.48):
             suspects = [i for i in range(1, len(self.d["players"])) if i != pid and i not in self.d["excluded"]]
             suspect = max(suspects, key=lambda target: self.suspicion(pid, target))
@@ -550,6 +601,10 @@ class Game:
                 if affinity(alternative, target) >= 1.5 and affinity(alternative, target) >= affinity(claim, target):
                     claim, tests = alternative, [target]
         speech = self.bot_speech(knowledge, claim, tests, leads, receipt.get("check"))
+        if "analytics" in self.d:
+            self.trace("bot_discussion", pid=pid, knowledge=knowledge, rankings=rankings,
+                       suspect_scores={target:self.suspicion(pid,target) for target in suspects},
+                       sent=receipt.get("sent_cards", []), claim=claim, leads=leads, tests=tests, suspect=suspect, speech=speech)
         self.show_statement(pid, leads, suspect, claim, tests, speech=speech)
 
     def bot_speech(self, knowledge, claim, tests, leads, check=None):
@@ -613,6 +668,7 @@ class Game:
         if leads or suspect is not None or claim is not None or tests:
             self.d["notes"].append(dict(pid=pid, leads=leads, suspect=suspect,
                                         round=self.d["round"], claim=claim, tests=tests, check=check, speech=speech))
+        self.trace("statement", pid=pid, leads=leads, suspect=suspect, claim=claim, tests=tests, speech=speech)
         self.d["speaker"] = pid
         self.d["speakers"].pop(0)
         if self.d["players"][pid]["local"] and len(self.d["local"]) == 1:
@@ -621,6 +677,7 @@ class Game:
             self.set_phase("statement")
 
     def start_vote(self, keys, retry=False):
+        self.trace("vote_start", keys=keys, retry=retry)
         self.d["pass_no"] = int(retry)
         self.d["vote_keys"] = keys
         self.d["ballots"] = {}
@@ -678,10 +735,13 @@ class Game:
             for key in keys:
                 choices = self.candidates(key)
                 if key == "suspect":
-                    votes[key] = max(choices, key=lambda target: self.suspicion(pid, target))
+                    scores = {target: self.suspicion(pid, target) for target in choices}
                 else:
                     scores = self.theories(pid, int(key), "vote")
-                    votes[key] = max(choices, key=scores.get)
+                votes[key] = max(choices, key=scores.get)
+                if "analytics" in self.d:
+                    self.trace("bot_vote", pid=pid, key=key, candidates=choices, scores=scores,
+                               selected=votes[key], knowledge=self.player_knowledge(pid), retry=self.d["pass_no"])
             self.d["ballots"][str(pid)] = votes
         leaders, counts = {}, []
         for key in keys:
@@ -700,6 +760,7 @@ class Game:
                 leaders[key] = tied
             tally = " · ".join(f"{self.label(key, value)} {count}" for value, count in votes.most_common())
             counts.append(tally_line(self.category(key), tally))
+        self.trace("vote_result", keys=keys, retry=self.d["pass_no"], ballots=self.d["ballots"], counts=counts, decided=self.d["decided"], ties=leaders)
         self.d["counts"].append(counts)
         if leaders:
             self.d["leaders"] = leaders
@@ -732,6 +793,8 @@ class Game:
             others = [pid for pid in range(1, len(self.d["players"])) if pid != killer]
             role, target = max(((role, pid) for role in special for pid in others),
                                key=lambda pair: self.counter_suspicion(pair[1], pair[0]))
+            if "analytics" in self.d:
+                self.trace("bot_counter", pid=killer, selected=[role,target], candidates=[dict(role=r,pid=p,score=self.counter_suspicion(p,r)) for r in special for p in others])
             self.end(target, role)
         else:
             self.end()
@@ -761,6 +824,9 @@ class Game:
                              or (not good and p["role"] == "killer")
                              or (not self.d["solved"] and p["role"] == "accomplice"
                                  and pid not in self.d["excluded"])]
+        self.trace("result", winner=self.d["winner"], winners=self.d["winners"], solved=self.d["solved"], truth=self.d["truth"], decided=self.d["decided"], arrested=self.d["arrested"], exposed=exposed, exposed_role=exposed_role)
+        if "analytics" in self.d:
+            self.d["analytics"]["finished_at"] = int(time.time())
         self.set_phase("result")
 
     def category(self, key):
@@ -1025,7 +1091,12 @@ class Game:
                 valid = type(value) is int and value in allowed
             if not valid:
                 raise ValueError("Проверь выбранные карты.")
+        intent = picks.get("intent")
+        if phase == "mail" and intent is not None and (type(intent) is not int or not any(intent in row for row in self.d["board"])):
+            raise ValueError("Неизвестная улика.")
         picks = {key: picks[key] for key in [g["key"] for g in groups] + ["comments"] if key in picks}
+        self.trace("human_choice", pid=pid, picks={k:v for k,v in picks.items() if k != "comments"},
+                   intent=intent if phase == "mail" else None)
         if phase == "role":
             self.d["queue"].pop(0)
             if self.actor is None:
@@ -1169,6 +1240,30 @@ class Game:
             return self.letter_cards(self.d["letters"][-1])
         return []
 
+    def flow_view(self):
+        phase = self.phase
+        stage = {"intro":0,"mail":0,"sort":1,"reveal":1,"note":2,"statement":2,"discussion":3}.get(phase,-1)
+        letter = next((x for x in self.d["letters"] if x["round"] == self.d["round"]), None)
+        result = dict(stage=stage, opened=len(self.letter_cards(letter)) if letter else 0,
+                      archived=letter["missing"] if letter else 0,
+                      received=(len(letter["echo"])+len(letter["silence"])+letter["missing"]) if letter else None,
+                      spoken=len(self.d["players"])-1-len(self.d.get("speakers", [])) if phase in ("note","statement","discussion") else 0,
+                      speakers=len(self.d["players"])-1)
+        if phase == "discussion":
+            latest = {}
+            for note in self.d["history"] + self.d["notes"]:
+                for key,cid in self.note_leads(note).items():
+                    latest[(note["pid"],key)] = cid
+            result["leaders"] = []
+            for i,category in enumerate(CATEGORIES):
+                counts = Counter(cid for (pid,key),cid in latest.items() if key == str(i))
+                result["leaders"].append(dict(label=category, cards=[dict(card=card_view(cid), votes=count)
+                    for cid,count in counts.most_common() if count == max(counts.values(),default=0)]))
+        if phase in ("ballot","appeal","arrest"):
+            result["vote_step"] = (int(self.d["vote_keys"][0])+1 if self.d["vote_keys"][0].isdigit() else 4) if self.d.get("vote_keys") else 1
+            result["vote_total"] = 3 if self.cooperative else 4
+        return result
+
     def view(self):
         phase = self.phase
         title, brief, action = SCREENS[phase]
@@ -1224,7 +1319,7 @@ class Game:
         return dict(id=self.d["id"], rev=self.d["rev"], phase=phase, title=title, brief=brief,
                     action=action, mode=MODES[self.d["mode"]], round=self.d["round"],
                     rounds=self.d["rounds"], marked=self.marked, cooperative=self.cooperative,
-                    local_count=len(self.d["local"]), difficulty=self.d.get("difficulty", "normal"), actor=actor, groups=self.groups(), board=board,
+                    flow=self.flow_view(), local_count=len(self.d["local"]), difficulty=self.d.get("difficulty", "normal"), actor=actor, groups=self.groups(), board=board,
                     notebook=self.notebook_view(), history=self.history_view(),
                     roster=roster, letters=letters, notes=notes, speaker=speaker, statement=statement,
                     tallies=self.d["counts"] if phase in ("appeal", "arrest", "result") else [],
@@ -1298,6 +1393,111 @@ def save(path, data):
         Path(tmp).unlink(missing_ok=True)
 
 
+def archive_game(game, directory=None):
+    if game.phase != "result":
+        return
+    directory = STATE_DIR / "games" if directory is None else directory
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    case_id = game.d["id"]
+    if not re.fullmatch(r"[0-9a-f]{32}", case_id):
+        raise ValueError("Invalid case ID")
+    path = directory / (case_id + ".json")
+    if path.exists():
+        return
+    data = json.loads(json.dumps(game.d, ensure_ascii=False))
+    data.pop("notebooks", None)
+    save(path, data)
+
+
+def archived_games(directory=None):
+    directory = STATE_DIR / "games" if directory is None else directory
+    records = []
+    for path in directory.glob("*.json"):
+        try:
+            data = json.loads(path.read_text())
+            if data.get("phase") == "result" and path.stem == data.get("id") and re.fullmatch(r"[0-9a-f]{32}", path.stem):
+                records.append(data)
+        except (ValueError, OSError):
+            continue
+    return sorted(records, key=lambda d: ((d.get("analytics") or {}).get("finished_at") or 0,d["id"]), reverse=True)
+
+
+def case_summary(data):
+    a = data.get("analytics", {})
+    start, end = a.get("started_at"), a.get("finished_at")
+    return dict(id=data["id"], short=data["id"][:8], mode=data["mode"], mode_label=MODES[data["mode"]],
+        difficulty=data.get("difficulty","normal"), marked=data.get("marked",True),
+        date=time.strftime("%Y-%m-%d %H:%M",time.localtime(end)) if end else "До обновления",
+        duration=max(0,end-start) if start is not None and end is not None else None,
+        players=len(data["players"]), humans=len(data["local"]), round=data["round"], rounds=data["rounds"],
+        successes=data["successes"], solved=data["solved"], winner=data["winner"],
+        partial=a.get("partial",True), version=a.get("version","legacy"),
+        people=[dict(role=data["players"][pid]["role"], label=ROLES[data["players"][pid]["role"]][0],
+                     won=pid in data["winners"]) for pid in data["local"]])
+
+
+def statistics(records, role=None):
+    rows=[case_summary(d) for d in records]
+    roles=[]
+    for key,(label,_) in ROLES.items():
+        participants=[p for row in rows for p in row["people"] if p["role"]==key]
+        roles.append(dict(key=key,label=label,total=len(participants),wins=sum(p["won"] for p in participants)))
+    times=[r["duration"] for r in rows if r["duration"] is not None]
+    participants=[p for r in rows for p in r["people"] if not role or p["role"]==role]
+    return dict(total=len(rows), wins=sum(p["won"] for p in participants), attempts=len(participants),
+                solved=sum(r["solved"] for r in rows), correct=sum(r["successes"] for r in rows),
+                clues=3*len(rows), average_seconds=round(sum(times)/len(times)) if times else None,
+                timed_games=len(times), roles=roles,
+                empty_rounds=sum(not (l["echo"] or l["silence"] or l["seal"] is not None or l.get("extra")) for d in records for l in d["letters"] if l["round"]>0),
+                rounds=sum(d["round"] for d in records))
+
+
+def filter_records(records, filters):
+    return [d for d in records if
+            all(not filters.get(k) or filters[k]==d.get(k,"normal") for k in ("mode","difficulty")) and
+            (not filters.get("players") or len(d["players"])==filters["players"]) and
+            (not filters.get("role") or any(d["players"][pid]["role"]==filters["role"] for pid in d["local"]))]
+
+
+def export_analysis(records, directory=None):
+    directory = Path.home() / "Downloads" if directory is None else directory
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd, filename = tempfile.mkstemp(prefix="ghost-letters-analysis-", suffix=".zip", dir=directory)
+    os.close(fd)
+    target=Path(filename)
+    def clean(obj):
+        if isinstance(obj, dict):
+            return {k:clean(v) for k,v in obj.items() if k not in ("notebooks","comments","analytics")}
+        if isinstance(obj,list):
+            return [clean(v) for v in obj]
+        return obj
+    try:
+        with zipfile.ZipFile(target,"w",zipfile.ZIP_DEFLATED) as z:
+            def write_json(name,obj):
+                z.writestr(name,json.dumps(obj,ensure_ascii=False,indent=2))
+            write_json("manifest.json",dict(schema=ANALYTICS_SCHEMA, version=GAME_VERSION, games=len(records),
+                deck_sha256=hashlib.sha256((HERE/"deck.json").read_bytes()).hexdigest(),
+                privacy="Completed games only; private notebook and free-text ghost comments omitted.",
+                duration="Wall-clock elapsed, including pauses; null for pre-update sessions."))
+            write_json("statistics.json",statistics(records))
+            write_json("deck.json",CARDS)
+            buf=io.StringIO()
+            fields=["id","date","version","mode","difficulty","players","humans","successes","solved","winner","duration","partial"]
+            writer=csv.DictWriter(buf,fieldnames=fields,extrasaction="ignore")
+            writer.writeheader()
+            for d in records:
+                cid=d["id"]
+                writer.writerow(case_summary(d))
+                write_json("games/"+cid+".json",clean(d))
+                events=d.get("analytics",{}).get("events",[])
+                z.writestr("events/"+cid+".jsonl","".join(json.dumps(clean(e),ensure_ascii=False)+"\n" for e in events))
+            z.writestr("summary.csv",buf.getvalue())
+        return str(target)
+    except Exception:
+        target.unlink(missing_ok=True)
+        raise
+
+
 def atmosphere_view():
     # Static public assets only: never encode the active role in the resource map.
     keys = ("ghost", "detective", "killer", "accomplice", "witness", "expert", "back", "table")
@@ -1326,19 +1526,40 @@ def public_view(game):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("view", "start", "advance", "submit", "reset", "notebook"))
+    parser.add_argument("action", choices=("view", "start", "advance", "submit", "reset", "notebook", "archive", "case", "export", "collection"))
     parser.add_argument("token", nargs="?", default="-")
     parser.add_argument("payload", nargs="?", default="{}")
     args = parser.parse_args()
     with storage() as path:
         data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
         game = Game(data) if data is not None else None
+        if game is not None and game.phase == "result":
+            archive_game(game)
+        if args.action == "collection":
+            print(json.dumps(dict(cards=[card_view(i) for i in range(len(CARDS))]),ensure_ascii=False))
+            return
+        if args.action in ("archive", "case", "export"):
+            records = archived_games()
+            if args.action == "archive":
+                filters = json.loads(args.payload)
+                filtered = filter_records(records,filters)
+                answer = dict(cases=[case_summary(d) for d in filtered], stats=statistics(filtered, filters.get("role")))
+            elif args.action == "case":
+                record = next((d for d in records if d["id"] == args.token),None)
+                if record is None:
+                    raise ValueError("Дело не найдено.")
+                answer = dict(case=public_view(Game(record)), summary=case_summary(record))
+            else:
+                answer = dict(export=export_analysis(records))
+            print(json.dumps(answer,ensure_ascii=False))
+            return
         if args.action == "view":
             print(json.dumps(public_view(game), ensure_ascii=False))
             return
         if args.action == "start" and game is None:
             config = json.loads(args.payload)
             game = Game.new(**config)
+            game.enable_analytics()
             save(path, game.d)
         elif game and args.token == f'{game.d["id"]}:{game.d["rev"]}':
             if args.action == "reset":
@@ -1348,12 +1569,15 @@ def main():
                 game.save_notebook(json.loads(args.payload))
                 save(path, game.d)
             elif args.action in ("advance", "submit"):
+                game.enable_analytics(partial=True)
                 if args.action == "advance":
                     game.advance()
                 else:
                     game.submit(json.loads(args.payload))
                 game.d["rev"] += 1
                 save(path, game.d)
+                if game.phase == "result":
+                    archive_game(game)
         elif args.action == "notebook":
             raise ValueError("Ход уже изменился.")
         print(json.dumps({"game": public_view(game)}, ensure_ascii=False))
