@@ -129,6 +129,8 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/31af
   let shownPage = showDesk && (evidence == "board" || evidence == "letters") ? "" : evidence
   let privateTurn = game.actor != null
   let solo = game.local_count == 1
+  // Always enter the morning mail automatically, but do not skip public speeches in normal play.
+  let autoStep = solo && (dynamicFlow || phase == "role" || phase == "board" || phase == "truth" || phase == "opening" || phase == "intro" || phase == "discussion")
   let covered = privateTurn && !solo && revealed != token
   let canNotebook = game.notebook != null && !covered
   let notebookPayload = toJson({marks: notebookMarks, suspects: notebookSuspects, text: notebookText})
@@ -359,9 +361,9 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/31af
         Image { src: entry.artwork; fill: width; height: boardColumn ? (layoutWidth >= 400 ? 45 : 38) : (mini ? 72 : (showDesk ? 85 : 100)); radius: 4; fit: contain; label: entry.label; offset: [0, marked ? -2 : 0]; animate offset: 180ms }
         Box {
           height: boardColumn ? 25 : (mini ? 30 : 34); fill: width; align: center
-          Text { text: boardColumn && markText != "" ? (personal == "likely" ? "✓ ${entry.label}" : "× ${entry.label}") : entry.label; font: sans; fontSize: boardColumn ? 11 : (mini ? 11 : 13); fontWeight: 700; align: center; maxLines: 2; color: boardColumn && markText != "" ? personalTone : parchment }
+          Text { text: boardColumn ? (marked ? "✓ " : "") + (markText != "" ? (personal == "likely" ? "• " : "× ") : "") + entry.label : entry.label; font: sans; fontSize: boardColumn ? 11 : (mini ? 11 : 13); fontWeight: 700; align: center; maxLines: 2; color: boardColumn && markText != "" ? personalTone : parchment }
         }
-        if marked || detail != "" {
+        if (!boardColumn && marked) || detail != "" {
           Text { text: marked ? (detail != "" ? "✓ ${detail}" : "✓ Выбрано") : detail; color: tone; font: sans; fontSize: 10; fontWeight: 650; align: center; maxLines: 2 }
         }
         if !boardColumn && markText != "" { Text { text: markText; color: personalTone; font: sans; fontSize: 10; align: center; maxLines: 2 } }
@@ -626,8 +628,8 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/31af
           receipt = ""
           if privateTurn {
             revealed = ""
-            receipt = run("${script} ${dynamicFlow && solo ? "submit_dynamic" : "submit"} ${sh(token)} ${sh(toJson(set(set(choices, "comments", ghostNotes), "intent", intentCard.value)))}")
-          } else { receipt = run("${script} ${dynamicFlow && solo ? "advance_dynamic" : "advance"} ${sh(token)}") }
+            receipt = run("${script} ${autoStep ? "submit_dynamic" : "submit"} ${sh(token)} ${sh(toJson(set(set(choices, "comments", ghostNotes), "intent", intentCard.value)))}")
+          } else { receipt = run("${script} ${autoStep ? "advance_dynamic" : "advance"} ${sh(token)}") }
         }
       }
       Action {
@@ -701,11 +703,11 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/31af
       fill: width; gap: 4; padding: 5; radius: 9; border: 1; borderColor: rule
       background: mix(panel, gold, 0.055)
       Row {
-        align: center; gap: 5; onTap: detectiveHandOpen = !detectiveHandOpen
+        align: center; gap: 5; onTap: { if !editable { detectiveHandOpen = !detectiveHandOpen } }
         Text { text: "Твоя рука · ${len(hand)}"; color: gold; font: sans; fontSize: 14; fontWeight: 700; weight: 1 }
-        Text { text: detectiveHandOpen ? "⌃" : "⌄"; color: gold; fontSize: 16 }
+        if !editable { Text { text: detectiveHandOpen ? "⌃" : "⌄"; color: gold; fontSize: 16 } }
       }
-      if detectiveHandOpen {
+      if editable || detectiveHandOpen {
         if editable {
           Row {
             gap: 3
@@ -742,6 +744,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/31af
                     if choices.send2 == option.value { choices = remove(choices, "send2") }
                     if choices.discard == option.value { choices = remove(choices, "discard") }
                     choices = set(choices, handAction, option.value)
+                    if handAction == "send" && choices.send2 == null && game.groups.any(g => g.key == "send2") { handAction = "send2" }
                   }
                 } else if illustrated && option.artwork != null { previewCard = option }
               }
@@ -1304,28 +1307,22 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/31af
           Action { label: "Меня подозревают · ${data.me.count}"; hot: data.me.count > 0 }
         }
       }
-      CategoryLabel { label: "Кто кого подозревает"; tint: ash }
-      for person in data.people key person.pid {
-        Row {
-          align: center; gap: 6; padding: 9; radius: 8; border: 1
-          borderColor: investigationPerson == person.pid ? gold : rule
-          background: panel
-          onTap: { investigationPerson = person.pid; investigationRound = null }
-          Column {
-            weight: 1; gap: 3
-            Text { text: person.name; color: parchment; font: serif; fontSize: 18 }
-            Text { text: person.outgoing == null ? "Нет заявленного подозрения" : "→ ${person.outgoing} · Р${person.outgoing_round}"; color: person.outgoing == null ? dim : ash; fontSize: 12; maxLines: 2 }
-          }
-          if canNotebook && person.pid != game.notebook.pid {
-            let flag = shownPage == "notebook" ? get(notebookSuspects, "${int(person.pid)}", "neutral") : get(game.notebook.suspects, "${int(person.pid)}", "neutral")
-            Text { text: flag == "likely" ? "Подозреваю" : (flag == "unlikely" ? "Доверяю" : ""); color: flag == "likely" ? ash : moss; fontSize: 10 }
-          }
-          Suspicion { count: person.count }
-        }
-      }
       let selected = data.people.find(p => p.pid == investigationPerson) ?? data.me ?? first(data.people)
       if selected != null {
         CategoryLabel { label: "Досье · ${selected.name}"; tint: gold }
+        if selected.outgoing != null { Text { text: "Подозревает → ${selected.outgoing} · Р${selected.outgoing_round}"; color: ash; font: sans; fontSize: 13 } }
+        if canNotebook && shownPage == "notebook" && selected.pid != game.notebook.pid {
+          Row {
+            gap: 3
+            for option in [{key: "unlikely", label: "Доверяю"}, {key: "neutral", label: "Неясно"}, {key: "likely", label: "Подозреваю"}] key option.key {
+              Box {
+                weight: 1; height: 34; align: center; radius: 6; background: get(notebookSuspects, "${int(selected.pid)}", "neutral") == option.key ? plum : panel
+                onTap: notebookSuspects = set(notebookSuspects, "${int(selected.pid)}", option.key)
+                Text { text: option.label; color: parchment; font: sans; fontSize: 11; maxLines: 1 }
+              }
+            }
+          }
+        }
         if len(selected.incoming) == 0 { Copy { body: "Нет действующих публичных подозрений." } }
         for accusation in selected.incoming key accusation.pid {
           Column {
@@ -1363,6 +1360,25 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/31af
         for opinion in selected.opinions.filter(o => investigationRound == null || o.round == investigationRound) key opinion.round {
           RuleLabel { heading: "Раунд ${opinion.round}" }
           Opinion { player: selected.name; opinion: opinion }
+        }
+      }
+      CategoryLabel { label: "Кто кого подозревает"; tint: ash }
+      for person in data.people key person.pid {
+        Row {
+          align: center; gap: 6; padding: 9; radius: 8; border: 1
+          borderColor: investigationPerson == person.pid ? gold : rule
+          background: panel
+          onTap: { investigationPerson = person.pid; investigationRound = null }
+          Column {
+            weight: 1; gap: 3
+            Text { text: person.name; color: parchment; font: serif; fontSize: 18 }
+            Text { text: person.outgoing == null ? "Нет заявленного подозрения" : "→ ${person.outgoing} · Р${person.outgoing_round}"; color: person.outgoing == null ? dim : ash; fontSize: 12; maxLines: 2 }
+          }
+          if canNotebook && person.pid != game.notebook.pid {
+            let flag = shownPage == "notebook" ? get(notebookSuspects, "${int(person.pid)}", "neutral") : get(game.notebook.suspects, "${int(person.pid)}", "neutral")
+            Text { text: flag == "likely" ? "Подозреваю" : (flag == "unlikely" ? "Доверяю" : ""); color: flag == "likely" ? ash : moss; fontSize: 10 }
+          }
+          Suspicion { count: person.count }
         }
       }
       CategoryLabel { label: "Матрица публичных подозрений" }
@@ -1473,21 +1489,6 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/31af
         Table { rows: rows; editable: true }
       }
       if notebookTab == "people" && game.investigation != null { Investigation { data: game.investigation } }
-      if notebookTab == "people" && !game.cooperative && canNotebook {
-        CategoryLabel { label: "Мои подозрения"; tint: ash }
-        for player in people.filter(p => p.value != 0 && p.value != game.notebook.pid) key player.value {
-          let k = "${int(player.value)}"
-          let flag = get(notebookSuspects, k, "neutral")
-          Row {
-            gap: 6; padding: 9; radius: 8; border: 1; borderColor: rule; background: panel
-            onTap: {
-              notebookSuspects = set(notebookSuspects, k, flag == "neutral" ? "likely" : (flag == "likely" ? "unlikely" : "neutral"))
-            }
-            Text { text: player.name; color: parchment; weight: 1; fontSize: 14 }
-            Text { text: flag == "likely" ? "Подозреваю" : (flag == "unlikely" ? "Доверяю" : "Неясно"); color: flag == "likely" ? ash : (flag == "unlikely" ? moss : dim); fontSize: 12 }
-          }
-        }
-      }
       if notebookTab == "history" { NotebookJournal { rounds: game.history; letters: game.letters } }
       if notebookTab == "text" && canNotebook {
       CategoryLabel { label: "Заметки" }
@@ -1946,7 +1947,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/31af
                 fill: width
                 onTap: {
                   homeOpen = false; revealed = ""; evidence = ""
-                  if dynamicFlow && solo && game.actor == null && (phase == "intro" || phase == "statement") && queued != token {
+                  if solo && game.actor == null && (phase == "intro" || (dynamicFlow && phase == "statement")) && queued != token {
                     queued = token; receipt = ""; receipt = run("${script} advance_dynamic ${sh(token)}")
                   }
                 }

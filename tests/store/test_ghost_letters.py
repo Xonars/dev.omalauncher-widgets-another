@@ -727,6 +727,8 @@ class GhostLettersRules(unittest.TestCase):
             self.assertIn('selectingTest && testAllowed', source)
             self.assertIn('selectingCategory', source)
             self.assertIn('state dynamicFlow = false', source)
+            self.assertIn('let autoStep = solo &&', source)
+            self.assertIn('if editable || detectiveHandOpen', source)
             self.assertIn('component TablePlayers(players)', source)
             self.assertIn('component LiveStatement(player, opinion, progress)', source)
             self.assertIn('lettersPanelOpen ? letters : [first(letters)]', source)
