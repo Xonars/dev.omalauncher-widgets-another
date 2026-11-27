@@ -177,6 +177,7 @@ app "Письма призрака" {
     else if overlay != "" { overlay = ""; libraryError = "" }
     else if intentOpen { intentOpen = false }
     else if ballotConfirm { ballotConfirm = false }
+    else if shownPage == "notebook" { if !notebookSaving { evidence = "" } }
     else if shownPage != "" || (privateTurn && !solo && !covered) {
       evidence = ""
       revealed = ""
@@ -1033,7 +1034,7 @@ app "Письма призрака" {
           }
         }
         Box {
-          fill: width; onTap: { investigationPerson = data.me.pid; investigationRound = null; if canNotebook { notebookMarks = game.notebook.marks ?? {}; notebookSuspects = game.notebook.suspects ?? {}; notebookText = game.notebook.text ?? ""; notebookTab = "people"; evidence = "notebook" } else { evidence = "suspects" } }
+          fill: width; onTap: { investigationPerson = data.me.pid; investigationRound = null; if canNotebook { notebookMarks = game.notebook.marks ?? {}; notebookSuspects = game.notebook.suspects ?? {}; notebookText = game.notebook.text ?? "" }; notebookTab = "people"; evidence = "notebook" }
           Action { label: "Открыть доску подозрений"; hot: false }
         }
       }
@@ -1130,8 +1131,8 @@ app "Письма призрака" {
       }
       Copy { body: "— не назвал подозреваемого; … ещё не высказался. Последнее заявление заменяет прежнее." }
       Box {
-        fill: width; onTap: { reviewRound = null; evidence = "history" }
-        Action { label: "Полная история обсуждений"; hot: false }
+        fill: width; onTap: { reviewRound = null; if shownPage == "notebook" { notebookTab = "history" } else { evidence = "history" } }
+        Action { label: "Журнал обсуждений"; hot: false }
       }
     }
   }
@@ -1139,15 +1140,15 @@ app "Письма призрака" {
   component Notebook(rows, people) {
     Column {
       gap: 10
-      SceneTitle { heading: "Личный блокнот"; description: "Только твои предположения. Призрак не подтверждает эти отметки." }
-      RuleLabel { heading: game.notebook.owner }
+      SceneTitle { heading: canNotebook ? "Личный блокнот" : "Журнал дела"; description: canNotebook ? "Публичный журнал расследования и твои личные заметки." : "Только открытые сведения дела." }
+      if canNotebook { RuleLabel { heading: game.notebook.owner } }
       Row {
         gap: 4
-        for tab in [{key: "clues", label: "Улики"}, {key: "people", label: "Люди"}, {key: "text", label: "Записи"}].filter(t => t.key != "people" || !game.cooperative) key tab.key {
-          Box { weight: 1; onTap: notebookTab = tab.key; Action { label: tab.label; hot: notebookTab == tab.key } }
+        for tab in [{key: "clues", label: "Улики"}, {key: "people", label: "Люди"}, {key: "history", label: "Журнал"}, {key: "text", label: "Записи"}].filter(t => (t.key != "people" || !game.cooperative) && (canNotebook || (t.key != "clues" && t.key != "text"))) key tab.key {
+          Box { weight: 1; onTap: { if !notebookSaving { notebookTab = tab.key; if tab.key == "history" { reviewRound = null } } }; Action { label: tab.label; hot: notebookTab == tab.key } }
         }
       }
-      if notebookTab == "clues" {
+      if notebookTab == "clues" && canNotebook {
       Copy { body: "Нажми улику: ? → вероятно → исключить → ?." }
       if len(game.letters) > 0 { Post { letters: game.letters.take(1) } }
       for category in rows key category.key {
@@ -1173,7 +1174,7 @@ app "Письма призрака" {
         }
       }
       }
-      if notebookTab == "people" && !game.cooperative {
+      if notebookTab == "people" && !game.cooperative && canNotebook {
         CategoryLabel { label: "Мои подозрения"; tint: ash }
         for player in people.filter(p => p.value != 0 && p.value != game.notebook.pid) key player.value {
           let k = "${int(player.value)}"
@@ -1189,7 +1190,8 @@ app "Письма призрака" {
         }
       }
       if notebookTab == "people" && game.investigation != null { Investigation { data: game.investigation } }
-      if notebookTab == "text" {
+      if notebookTab == "history" { NotebookJournal { rounds: game.history; letters: game.letters } }
+      if notebookTab == "text" && canNotebook {
       CategoryLabel { label: "Заметки" }
       Input {
         text: notebookText; lines: 5; fontSize: 15
@@ -1197,7 +1199,70 @@ app "Письма призрака" {
         onChange: notebookText = sub(value, 0, 2000)
       }
       }
-      Copy { body: "Отметки и текст сохраняются только после нажатия кнопки внизу." }
+      if canNotebook { Copy { body: "Личные отметки и текст сохраняются кнопкой внизу. Журнал ведётся автоматически." } }
+    }
+  }
+
+  component NotebookJournal(rounds, letters) {
+    let active = reviewRound ?? first(rounds).round ?? first(letters).round
+    Column {
+      gap: 7
+      CategoryLabel { label: "Журнал расследования" }
+      Copy { body: "Записи о публичных версиях участников. Не являются доказательством виновности." }
+      Flow {
+        gap: 4
+        for letter in letters key letter.round {
+          Box {
+            padding: [8, 6]; radius: 5; border: 1
+            borderColor: active == letter.round ? gold : rule
+            background: active == letter.round ? plum : panel
+            onTap: reviewRound = letter.round
+            Text { text: letter.round == 0 ? "Первая зацепка" : "Раунд ${letter.round}"; color: parchment; font: sans; fontSize: 12 }
+          }
+        }
+      }
+      if len(letters) == 0 { Copy { body: "Записей пока нет." } }
+      for letter in letters.filter(l => l.round == active) key letter.round {
+        Column {
+          padding: 8; radius: 7; border: 1; borderColor: rule; gap: 5; background: alpha(gold, 0.04)
+          RuleLabel { heading: letter.round == 0 ? "ПЕРВАЯ ЗАЦЕПКА" : "ПИСЬМА · РАУНД ${letter.round}" }
+          if len(letter.cards) == 0 { Copy { body: "Новых открытых подсказок нет." } }
+          for clue in letter.cards key clue.value { ReferenceCard { entry: clue } }
+        }
+      }
+      if active != null && active > 0 && !rounds.any(r => r.round == active) { Copy { body: "В этом раунде ещё нет записанных реплик." } }
+      for log in rounds.filter(r => r.round == active) key log.round {
+        for opinion in log.entries key opinion.player {
+          let journalKey = "journal-${log.round}-${opinion.player}"
+          Column {
+            gap: 5; padding: 8; radius: 6; border: 1; borderColor: rule; background: mix(panel, gold, 0.045)
+            Row {
+              align: center; gap: 5
+              Text { text: opinion.player; font: serif; color: gold; fontSize: 17; weight: 1 }
+              if opinion.stance != null { Text { text: opinion.stance; color: dim; font: sans; fontSize: 11; maxLines: 2 } }
+            }
+            if opinion.claim != null { Text { text: "Назвал письмо: ${opinion.claim.label}"; color: parchment; font: sans; fontSize: 12 } }
+            if len(opinion.tests ?? []) > 0 { Text { text: "Проверял: ${join(opinion.tests.map(c => c.label), ", ")}"; color: dim; font: sans; fontSize: 12 } }
+            for clue in (opinion.clues ?? []) key clue.key {
+              Text { text: "${clue.category}: ${clue.label}"; color: get(categoryColors, clue.key, gold); font: sans; fontSize: 13 }
+            }
+            if opinion.suspect != null {
+              Text { text: "Подозревает → ${opinion.suspect}"; color: ash; font: sans; fontSize: 12; fontWeight: 700 }
+              if opinion.reason != null && opinion.reason != "" { Copy { body: opinion.reason } }
+            }
+            if opinion.defense != null { Text { text: "Ответ: ${opinion.defense}"; color: gold; font: sans; fontSize: 12 } }
+            if len(opinion.clues ?? []) == 0 && opinion.suspect == null && opinion.claim == null && len(opinion.tests ?? []) == 0 { Copy { body: "Не заявил версии." } }
+            if opinion.speech != null && opinion.speech != "" {
+              Box {
+                fill: width; padding: 4
+                onTap: fullSpeech = set(fullSpeech, journalKey, !get(fullSpeech, journalKey, false))
+                Text { text: get(fullSpeech, journalKey, false) ? "Свернуть исходную реплику" : "Читать исходную реплику"; color: gold; font: sans; fontSize: 12 }
+              }
+              if get(fullSpeech, journalKey, false) { Copy { body: opinion.speech; shade: parchment } }
+            }
+          }
+        }
+      }
     }
   }
 
@@ -1806,7 +1871,7 @@ app "Письма призрака" {
               weight: 1
               scroll: true
               gap: 12
-              if shownPage == "notebook" && canNotebook {
+              if shownPage == "notebook" {
                 Notebook { rows: sheet.board; people: sheet.roster }
               } else if shownPage == "suspects" && sheet.investigation != null {
                 Investigation { data: sheet.investigation }
@@ -1956,13 +2021,6 @@ app "Письма призрака" {
                     SealedMail {}
                     Text { text: "Письма ждут отправки"; color: parchment; font: serif; fontSize: 22; align: center }
                     Text { text: "Сопоставь карты на столе и выбери ассоциацию."; color: dim; font: sans; fontSize: 13; align: center }
-                  }
-                }
-                if sheet.phase == "reveal" && canNotebook {
-                  Box {
-                    fill: width
-                    onTap: { notebookMarks = game.notebook.marks ?? {}; notebookSuspects = game.notebook.suspects ?? {}; notebookText = game.notebook.text ?? ""; notebookTab = "clues"; evidence = "notebook" }
-                    Action { label: "Обновить гипотезы в блокноте"; hot: false }
                   }
                 }
                 if sheet.phase == "note" && len(sheet.notes) > 0 {
@@ -2190,7 +2248,7 @@ app "Письма призрака" {
               Box {
                 weight: 1
                 onTap: { if !notebookSaving { evidence = "" } }
-                Action { label: "Отмена"; hot: false; allowed: !notebookSaving }
+                Action { label: "Закрыть без сохранения"; hot: false; allowed: !notebookSaving }
               }
               Box {
                 weight: 1
@@ -2204,7 +2262,7 @@ app "Письма призрака" {
                     receipt = run("${script} notebook ${sh(token)} ${sh(toJson(payload))}")
                   }
                 }
-                Action { label: notebookSaving ? "Сохраняем…" : "Сохранить"; allowed: !notebookSaving && queued != token }
+                Action { label: notebookSaving ? "Сохраняем…" : "Сохранить и закрыть"; allowed: !notebookSaving && queued != token }
               }
             }
           } else if shownPage != "" {
@@ -2248,32 +2306,25 @@ app "Письма призрака" {
               }
             }
           }
-          if game.round > 0 && phase != "result" && phase != "opening" && shownPage != "notebook" {
+          if game.round > 0 && phase != "result" && phase != "opening" && shownPage == "" {
             Row {
-              gap: 3
-              for tab in [{key: "", label: "Стол", glyph: "▦"}, {key: "history", label: "История", glyph: "↻"}, {key: "notebook", label: "Блокнот", glyph: "▤"}, {key: "suspects", label: "Люди", glyph: "◎"}].filter(t => (t.key != "notebook" || canNotebook) && (t.key != "suspects" || (!canNotebook && game.investigation != null))) key tab.label {
-                Column {
-                  weight: 1; gap: 2; padding: 4; radius: 7; border: 1
-                  borderColor: shownPage == tab.key ? gold : rule
-                  background: shownPage == tab.key ? plum : panel
-                  onTap: {
-                    if !fastDiscussion && queued == "" {
-                      if tab.key == "notebook" {
-                        notebookTab = phase == "discussion" && !game.cooperative ? "people" : "clues"
-                        investigationPerson = game.investigation.me.pid; investigationRound = null
-                        notebookMarks = game.notebook.marks ?? {}
-                        notebookSuspects = game.notebook.suspects ?? {}
-                        notebookText = game.notebook.text ?? ""
-                      }
-                      if tab.key == "history" { reviewRound = null }
-                       if tab.key == "suspects" { investigationPerson = game.investigation.me.pid; investigationRound = null }
-                      evidence = tab.key
-                    }
+              fill: width; align: center; gap: 7; padding: 8; radius: 8; border: 1; borderColor: rule; background: panel
+              onTap: {
+                if !fastDiscussion && queued == "" {
+                  notebookTab = canNotebook ? (phase == "discussion" && !game.cooperative ? "people" : "clues") : "history"
+                  investigationPerson = game.investigation.me.pid; investigationRound = null; reviewRound = null
+                  if canNotebook {
+                    notebookMarks = game.notebook.marks ?? {}
+                    notebookSuspects = game.notebook.suspects ?? {}
+                    notebookText = game.notebook.text ?? ""
                   }
-                  Text { text: tab.key == "suspects" && game.investigation.me.count > 0 ? "◎ ${game.investigation.me.count}" : tab.glyph; color: tab.key == "suspects" && game.investigation.me.count > 0 ? ash : (shownPage == tab.key ? gold : dim); fontSize: 17; align: center }
-                  Text { text: tab.label; color: parchment; font: sans; fontSize: 11; align: center }
+                  evidence = "notebook"
                 }
               }
+              Text { text: "▤"; color: gold; fontSize: 19 }
+              Text { text: "Блокнот"; color: parchment; font: sans; fontSize: 14; fontWeight: 700; weight: 1 }
+              if game.investigation.me.count > 0 { Text { text: "Подозревают · ${game.investigation.me.count}"; color: ash; font: sans; fontSize: 11 } }
+              Text { text: "›"; color: gold; fontSize: 19 }
             }
           }
         }

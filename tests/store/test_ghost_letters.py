@@ -653,7 +653,7 @@ class GhostLettersRules(unittest.TestCase):
                      ROOT / "apps/xonars/ghost-letters/app.owl"):
             source = path.read_text()
             for text in ("component Investigation(data)", "Матрица публичных подозрений",
-                         'key: "suspects"', 'notebookTab', 'defend ${sh(token)}'):
+                         'key: "people"', 'notebookTab', 'defend ${sh(token)}'):
                 self.assertIn(text, source)
 
     def test_mobile_board_has_round_letters_panel(self):
@@ -693,8 +693,12 @@ class GhostLettersRules(unittest.TestCase):
             self.assertIn("component DetectiveHand(hand, editable = false)", source)
             self.assertIn("component DiscardPile(hand, count = 0, editable = false)", source)
             self.assertIn('notebookTab == "people" && game.investigation != null', source)
-            self.assertIn('key: "", label: "Стол"', source)
+            self.assertNotIn('key: "", label: "Стол"', source)
             self.assertNotIn('key: "letters", label: "Письма"', source)
+            self.assertIn('component NotebookJournal(rounds, letters)', source)
+            self.assertIn('notebookTab == "history"', source)
+            self.assertIn('key: "history", label: "Журнал"', source)
+            self.assertIn('text: "Блокнот";', source)
 
     def test_package_matches_source(self):
         row = next(x for x in json.loads((ROOT / "store-collection.json").read_text()) if x["source"] == "ghost-letters.owl")
