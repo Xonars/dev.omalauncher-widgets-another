@@ -1,10 +1,11 @@
 app "Письма призрака" {
-  meta { owl: 18; description: "Карточное расследование с тайной перепиской"; version: "1.7"; category: "games" }
+  meta { owl: 18; description: "Карточное расследование с тайной перепиской"; version: "2.0.0"; category: "games" }
   title: "Письма призрака"
   icon: appIcon
   requires { pacman: ["python"] }
 
-  state mode = "killer"
+  state mode = "classic"
+  state markedHints = false
   state seats = 5
   state humans = 1
   state localGhost = false
@@ -35,7 +36,7 @@ app "Письма призрака" {
   let shownPage = showDesk && (evidence == "board" || evidence == "letters") ? "" : evidence
   let privateTurn = game.actor != null
   let covered = privateTurn && revealed != token
-  let config = {mode: mode, total: seats, humans: humans, human_ghost: localGhost}
+  let config = {mode: mode, total: seats, humans: humans, human_ghost: localGhost, marked: markedHints}
   let missing = game.groups.any(g => g.required && get(choices, g.key, null) == null)
   let ballot = phase == "ballot"
   let ballotSections = ballot ? game.groups : []
@@ -44,7 +45,9 @@ app "Письма призрака" {
   let ballotReady = get(choices, activeBallot.key, null) != null
   let conflicting = (choices.send != null && choices.send == choices.discard) ||
                     (choices.echo != null && choices.echo == choices.silence) ||
-                    (choices.seal != null && choices.seal == choices.discard)
+                    (choices.seal != null && choices.seal == choices.discard) ||
+                    (choices.send2 != null && (choices.send2 == choices.send || choices.send2 == choices.discard)) ||
+                    (choices.seal2 != null && (choices.seal2 == choices.seal || choices.seal2 == choices.discard))
   let setup = phase == "setup"
   let loading = caseView == null && caseReport == null
   let failed = caseView == null && !loading && !caseReport.ok
@@ -141,7 +144,7 @@ app "Письма призрака" {
               humans = min(humans, seats - (localGhost ? 0 : 1))
             } else {
               humans = humans - 1
-              if humans == 1 { localGhost = false }
+              
             }
           }
         }
@@ -356,8 +359,8 @@ app "Письма призрака" {
           if opinion.claim != null {
             Text { text: "«Я отправил: ${opinion.claim.label}»"; color: parchment; font: sans; fontSize: 16; fontWeight: 700 }
             Text {
-              text: opinion.claim.mark == null ? "Призрак не открыл эту карту" : "Призрак открыл · ${opinion.claim.mark}"
-              color: opinion.claim.mark == null ? dim : get(markColors, opinion.claim.mark, gold)
+              text: opinion.claim.mark != null ? "Призрак открыл · ${opinion.claim.mark}" : (opinion.claim.opened ? "Призрак открыл эту карту" : "Призрак не открыл эту карту")
+              color: opinion.claim.opened ? get(markColors, opinion.claim.mark, gold) : dim
               font: sans; fontSize: 12
             }
             if opinion.claim.disputed {
@@ -725,11 +728,11 @@ app "Письма призрака" {
             weight: 1; scroll: true; gap: 13
             SceneTitle { heading: "Как играть"; description: "" }
             Lines { rows: [
-              {label: "1 · Роли и стол", value: "Игра рассчитана на 4–12 участников, включая ботов. Узнайте роли по очереди. Убийца тайно назначает по одной истинной улике из четырёх вариантов в каждой категории."},
-              {label: "2 · Почта", value: "Каждый, кроме Призрака, отправляет карту с руки. Призрак может отметить одно письмо «Эхо» (есть связь с истиной), второе — «Тишина» (ложный след), а также приложить одну карту с руки как печать. Остальные письма уходят в закрытый архив."},
+              {label: "1 · Роли и стол", value: "Соревновательная игра на 4–12 участников, кооператив на 2–12. Узнайте роли по очереди. Убийца (в кооперативе Призрак) тайно выбирает по одной улике из каждой категории."},
+              {label: "2 · Почта", value: "Каждый, кроме Призрака, отправляет карту с руки (вдвоём — две). В классике Призрак открывает подходящие письма и может добавить карту с руки. Метки Эхо, Тишина и Печать — отдельная опция новой партии."},
               {label: "3 · Ход Призрака и обсуждение", value: "Когда все отправили свои карты, Призрак показывает письма раунда всему столу. После этого участники по очереди высказывают версии. Можно назвать другую карту. В следующем раунде можно перепроверить чужую версию. Число рядом с игроком показывает, сколько участников сейчас его подозревают."},
-              {label: "4 · Голосование", value: "Выберите три улики и одного подозреваемого. Побеждает вариант с наибольшим числом голосов. При ничьей проводится один повторный тур. В одиночной игре твой голос решает ничью, если он за один из лидирующих вариантов."},
-              {label: "5 · Развязка", value: "Для раскрытия дела нужны три верные улики или две улики и арест убийцы. Если задержан сообщник, он выбывает из голосования и проводится ещё один арест. После раскрытия дела убийца может отнять победу, угадав свидетеля или эксперта."},
+              {label: "4 · Голосование", value: "Последовательно выберите три улики и, в соревновательной партии, подозреваемого. При ничьей — повторный тур, затем решение не принято."},
+              {label: "5 · Развязка", value: "Для раскрытия дела нужны три верные улики или, в соревновательной партии, две улики и арест убийцы. Если задержан сообщник, он выбывает из голосования и проводится ещё один арест. После раскрытия дела убийца может отнять победу, угадав свидетеля или эксперта."},
               {label: "Передача телефона", value: "Личные экраны закрыты до нажатия «Открыть мой ход». Кнопка «Назад» скрывает открытый ход. Партия сохраняется после каждого хода."}
             ] }
           }
@@ -786,11 +789,21 @@ app "Письма призрака" {
                   borderColor: mode == option.key ? gold : rule
                   radius: 8
                   background: mode == option.key ? plum : panel
-                  onTap: mode = option.key
+                  onTap: {
+                    mode = option.key
+                    if mode != "coop" { seats = max(seats, 4) }
+                  }
                   Text { text: option.label; fontSize: 13; color: parchment; maxLines: 2; fontWeight: mode == option.key ? 700 : 500 }
                 }
               }
             }
+            Row {
+              padding: 10; radius: 8; border: 1; borderColor: rule; background: panel
+              onTap: markedHints = !markedHints
+              Text { text: "Метки Призрака · Эхо / Тишина / Печать"; color: parchment; fontSize: 14; weight: 1 }
+              Text { text: markedHints ? "Вкл" : "Выкл"; color: gold; fontSize: 14 }
+            }
+            Text { text: markedHints ? "Авторский вариант: явные положительные и отрицательные подсказки." : "Классика: все открытые карты равнозначны."; color: dim; fontSize: 12 }
             RuleLabel { heading: "ЗА СТОЛОМ" }
             Column {
               padding: [10, 6]
@@ -799,9 +812,9 @@ app "Письма призрака" {
               border: 1
               borderColor: rule
               background: panel
-              Stepping { label: "Всего участников"; amount: seats; minimum: 4; maximum: 12; isSeats: true }
+              Stepping { label: "Всего участников"; amount: seats; minimum: mode == "coop" ? 2 : 4; maximum: 12; isSeats: true }
               Stepping { label: "Людей на телефоне"; amount: humans; minimum: 1; maximum: seats - (localGhost ? 0 : 1); isSeats: false }
-              if humans > 1 {
+              if humans >= 1 {
                 Row {
                   height: 40
                   align: center
@@ -815,7 +828,7 @@ app "Письма призрака" {
               }
             }
             Text {
-              text: "Ботов: ${seats - humans}  ·  Раундов: ${seats == 4 ? 5 : (seats <= 7 ? 4 : (seats <= 10 ? 3 : 2))}"
+              text: "Ботов: ${seats - humans}  ·  Раундов: ${seats <= 4 ? 5 : (seats <= 7 ? 4 : (seats <= 10 ? 3 : 2))}"
               color: dim
               font: mono
               fontSize: 12
@@ -955,7 +968,7 @@ app "Письма призрака" {
                   let selected = get(choices, section.key, null)
                   let checked = section.multiple ? (selected ?? []) : []
                   let canExplain = (phase == "opening" || phase == "sort") &&
-                                   (section.key == "echo" || section.key == "silence" || section.key == "seal")
+                                   (section.key == "echo" || section.key == "silence" || section.key == "seal" || section.key == "seal2")
                   Column {
                     gap: 7
                     if !ballot { CategoryLabel { label: section.label; tint: tone } }
