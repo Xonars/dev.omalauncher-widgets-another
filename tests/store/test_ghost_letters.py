@@ -453,6 +453,53 @@ class GhostLettersRules(unittest.TestCase):
         self.assertEqual(note["tests"], [card])
         self.assertEqual(note["leads"], {})
 
+    def test_human_public_lead_is_separate_from_test(self):
+        g = Game.new("classic", 6, 1, False, difficulty="normal", seed=42)
+        pid = g.d["local"][0]
+        g.d["round"] = 1
+        g.d["speakers"] = [pid]
+        g.set_phase("note", [pid])
+        wrong, tested = g.d["board"][0][:2]
+        self.assertIn("0", [group["key"] for group in g.groups()])
+        g.submit({"lead": [tested], "0": wrong})
+        note = g.d["history"][0]
+        self.assertEqual(note["tests"], [tested])
+        self.assertEqual(note["leads"], {"0": wrong})
+        self.assertEqual(g.ghost_context()["human"][0][0]["card"], wrong)
+        self.assertEqual(g.ghost_context()["human"][0][0]["confidence"], 1.0)
+
+    def test_final_confirmation_is_clear_and_once_per_category(self):
+        g = Game.new("classic", 6, 1, False, difficulty="normal", seed=42)
+        g.d["truth"] = [row[0] for row in g.d["board"]]
+        g.d["round"] = g.d["rounds"]
+        context = g.ghost_context()
+        cid = g.d["players"][0]["hand"][0] if g.d["players"][0]["hand"] else 0
+        g.ghost_margins = lambda card: [0.65, 0.0, -0.1]
+        self.assertEqual([i for i, _ in g.ghost_confirmation(cid, context)], [0])
+        g.ghost_apply_hint(context, cid)
+        self.assertEqual(context["confirmed"], [0])
+        self.assertEqual(g.ghost_confirmation(cid, context), [])
+        context["confirmed"] = []
+        g.ghost_margins = lambda card: [0.65, 0.0, -0.5]
+        self.assertEqual(g.ghost_confirmation(cid, context), [])
+        g.ghost_margins = lambda card: [0.65, 0.0, 0.0]
+        context["remaining"] = 2
+        self.assertEqual(g.ghost_confirmation(cid, context), [])
+
+    def test_sabotage_focus_reacts_to_public_endorsements(self):
+        g = Game.new("classic", 6, 1, False, difficulty="normal", seed=42)
+        g.d["truth"] = [row[0] for row in g.d["board"]]
+        pid = g.role_id("killer")
+        g.d["letters"] = []
+        g.d["history"] = []
+        g.d["notes"] = []
+        self.assertEqual(mod.sabotage_focus(g.player_knowledge(pid)), 0)
+        for who in range(1, 6):
+            if who != pid:
+                g.d["history"].append(dict(pid=who, round=1, leads={"2":g.d["board"][2][1]},
+                                           suspect=None, claim=None, tests=[]))
+        self.assertEqual(mod.sabotage_focus(g.player_knowledge(pid)), 2)
+
     def test_arrest_ballot_excludes_self(self):
         g = Game.new("classic", 6, 1, False, seed=42)
         pid = g.d["local"][0]
