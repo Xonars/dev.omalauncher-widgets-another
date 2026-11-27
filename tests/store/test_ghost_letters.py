@@ -854,6 +854,32 @@ class GhostLettersRules(unittest.TestCase):
         self.assertEqual(mod.row_gap(combined,a), 1)
         self.assertGreater(mod.log_odds(combined,a), mod.log_odds(first,a))
 
+    def test_engine4_public_claim_dispute_is_symmetric_and_not_proof(self):
+        g = Game.new("classic", 6, 1, False, seed=42)
+        c = g.d["deck"][-1]
+        g.d["history"] = [dict(pid=p, round=1, leads={}, suspect=None, claim=c, tests=[]) for p in (1, 2)]
+        k = g.player_knowledge(3)
+        self.assertEqual(len(g.public_claim_disputes(k, 1)), 1)
+        self.assertEqual(len(g.public_claim_disputes(k, 2)), 1)
+        self.assertEqual(g.suspicion_factors(3, 1)["verified_conflict"], 0)
+        self.assertEqual(g.suspicion_factors(3, 2)["verified_conflict"], 0)
+
+    def test_engine4_public_pressure_requires_repeat_and_adoption(self):
+        from unittest.mock import patch
+        g = Game.new("classic", 6, 1, False, seed=42)
+        good, wrong = g.d["board"][0][:2]
+        g.d["round"] = 3
+        def n(pid, number, cid, stance=2):
+            return dict(pid=pid, round=number, leads={"0":cid}, suspect=None, claim=None, tests=[], stance=stance)
+        with patch.object(mod, "evidence_score", side_effect=lambda k,c,i: float(c == good)):
+            g.d["history"] = [n(1,1,wrong), n(2,1,good), n(1,2,wrong), n(2,3,wrong)]
+            self.assertEqual(len(g.public_pressure_events(g.player_knowledge(3), 1)), 1)
+            g.d["history"][-1]["stance"] = 0
+            self.assertEqual(g.public_pressure_events(g.player_knowledge(3), 1), [])
+            g.d["history"][-1]["stance"] = 2
+            g.d["history"][0]["stance"] = 0
+            self.assertEqual(g.public_pressure_events(g.player_knowledge(3), 1), [])
+
     def test_package_matches_source(self):
         row = next(x for x in json.loads((ROOT / "store-collection.json").read_text()) if x["source"] == "ghost-letters.owl")
         with zipfile.ZipFile(ROOT / row["resources"]) as z:

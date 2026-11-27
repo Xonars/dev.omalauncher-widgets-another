@@ -1070,8 +1070,12 @@ class Game:
         speech = self.bot_speech(knowledge, claim, tests, leads, receipt.get("check"), suspect=suspect)
         reason = self.public_reason(pid, suspect) if suspect is not None else ""
         if suspect is not None and not hostile and knowledge["difficulty"] != "easy" and reason.startswith("Предварительное подозрение"):
-            suspect, reason = None, ""
-            speech = self.bot_speech(knowledge, claim, tests, leads, receipt.get("check"), suspect=None)
+            if knowledge["role"] == "witness" and self.noise("witness caution", pid) < 0.25:
+                reason = "Хочу внимательнее проверить этого игрока; открытых доказательств пока нет."
+                speech += f" Пока предлагаю обратить внимание на игрока «{self.name(suspect)}»."
+            else:
+                suspect, reason = None, ""
+                speech = self.bot_speech(knowledge, claim, tests, leads, receipt.get("check"), suspect=None)
         if "analytics" in self.d:
             self.trace("bot_discussion", pid=pid, knowledge=knowledge, rankings=rankings,
                        suspect_scores={target:self.suspicion(pid,target) for target in suspects},
@@ -1166,7 +1170,7 @@ class Game:
                         if delta > 0.12:
                             parts.append(f"Подсказка {names([hint])} " + ("отмечена как ложный след и помогает исключать варианты." if sign < 0 else f"лучше согласуется с {names([own])}."))
                         elif rival != own:
-                            parts.append("По открытым письмам пока не могу уверенно отличить эти версии.")
+                            parts.append("По открытым письмам пока не могу уверенно отличить эти версии. Какое конкретное письмо поддерживает другую версию?")
             elif knowledge["own_leads"]:
                 prior = knowledge["own_leads"]
                 same = any(prior.get(k) == cid for k, cid in leads.items())
@@ -1187,7 +1191,8 @@ class Game:
             if suspect is not None:
                 reason = self.public_reason(knowledge["pid"], suspect)
                 if not reason.startswith("Предварительное подозрение"):
-                    parts.append(f"Хочу уточнить показания игрока «{self.name(suspect)}»: {reason}")
+                    parts.append(f"Хочу уточнить показания игрока «{self.name(suspect)}»: {reason} "
+                                 "Как ты объяснишь это расхождение?")
         return " ".join(parts)
 
     def show_statement(self, pid, leads, suspect, claim=None, tests=(), *, speech="", stance=1, reason=""):
@@ -1248,6 +1253,56 @@ class Game:
                     result.append(dict(round=note["round"], text=f'Обвиняет {self.name(accused)} за «{CARDS[cid]["name"]}», хотя сам поддерживает эту версию.'))
         return result
 
+    def public_claim_disputes(self, knowledge, target):
+        """Two incompatible public ownership claims; neither side is proven guilty."""
+        result = []
+        notes = knowledge["notes"]
+        for note in notes:
+            claim = note["claim"]
+            if note["pid"] != target or claim is None:
+                continue
+            rivals = [n["pid"] for n in notes if n["pid"] != target
+                      and n["round"] == note["round"] and n["claim"] == claim]
+            if rivals:
+                result.append(dict(round=note["round"], text=
+                    f'Письмо «{CARDS[claim]["name"]}» также назвал ' +
+                    ", ".join(self.name(pid) for pid in rivals) +
+                    ". Требуется уточнение; пока неизвестно, кто ошибся."))
+        return result
+
+    def public_pressure_events(self, knowledge, target):
+        """Weak lead: repeated confident opposition to evidence, then adoption by another speaker.
+        Do not mistake timing for proof of influence, or a private test for an endorsement.
+        """
+        notes = sorted(knowledge["notes"], key=lambda n: n["round"])
+        seen = Counter()
+        result = {}
+        for index, note in enumerate(notes):
+            if note["pid"] != target or note.get("stance", 1) != 2:
+                continue
+            visible = public_evidence_at(knowledge, note["round"])
+            for key, cid in note["leads"].items():
+                i = int(key)
+                scores = {c: evidence_score(visible, c, i) for c in visible["board"][i]}
+                if cid not in scores:
+                    continue
+                ranked = sorted(scores.values(), reverse=True)
+                if ranked[0] - ranked[1] < 0.55 or ranked[0] - scores[cid] < 0.65:
+                    continue
+                seen[(key, cid)] += 1
+                if seen[(key, cid)] < 2:
+                    continue
+                earlier = {n["pid"]: n["leads"][key] for n in notes[:index]
+                           if n.get("stance", 1) != 0 and key in n["leads"]}
+                adopters = [n["pid"] for n in notes[index+1:]
+                            if n["pid"] != target and n.get("stance", 1) != 0
+                            and n["leads"].get(key) == cid and earlier.get(n["pid"]) not in (None, cid)]
+                if adopters:
+                    result[(key, cid)] = dict(round=note["round"], text=
+                        f'Повторно уверенно отстаивал «{CARDS[cid]["name"]}» вопреки письмам; ' +
+                        "после этого другие игроки приняли эту версию. Это повод уточнить аргументы, не доказательство обмана.")
+        return list(result.values())
+
     def suspicion(self, pid, target):
         return sum(self.suspicion_factors(pid, target).values())
 
@@ -1272,6 +1327,7 @@ class Game:
             factors["supported_leads"] = 0.0
             factors["response"] = 0.0
             factors["contradiction"] = min(0.48, 0.24 * len(self.public_contradictions(knowledge, target)))
+            factors["pressure"] = min(0.20, 0.10 * len(self.public_pressure_events(knowledge, target)))
         claims = sorted((note for note in knowledge["notes"] if note["pid"] == target), key=lambda n: n["round"])
         previous = {}
         if adaptive:
@@ -1373,11 +1429,7 @@ class Game:
             scores = [evidence_score(knowledge, other, int(key)) for other in knowledge["board"][int(key)]]
             factors["evidence_conflict"] += min(0.55, max(0, max(scores) - evidence_score(knowledge, cid, int(key))) * (0.20 if adaptive else 0.12))
         # A contradictory claim is evidence of possible deception, never access to private mail.
-        for note in claims:
-            if note["claim"] is not None and any(
-                n["pid"] != target and n["round"] == note["round"] and n["claim"] == note["claim"]
-                for n in knowledge["notes"]):
-                factors["claim_conflict"] += 0.48
+        factors["claim_conflict"] = 0.48 * len(self.public_claim_disputes(knowledge, target))
         if adaptive:
             factors["claim_conflict"] = min(1.44, factors["claim_conflict"])
         if knowledge["role"] == "witness" and target == knowledge["killer"]:
@@ -1464,14 +1516,31 @@ class Game:
     def counter_suspicion(self, candidate, role=None):
         mode = role or self.d["mode"]
         score = self.noise("counter", candidate) * 2.1
+        adaptive = self.d.get("difficulty", "normal") != "easy"
+        knowledge = self.player_knowledge(self.role_id("killer")) if adaptive else None
         for note in self.d["history"]:
-            if note["pid"] == candidate:
-                if mode == "witness":
-                    score += 0.75 * (note["suspect"] == self.role_id("killer"))
-                else:
-                    leads = self.note_leads(note)
+            if note["pid"] != candidate:
+                continue
+            if mode == "witness":
+                if note["suspect"] == self.role_id("killer"):
+                    reason = note.get("reason", "")
+                    score += (0.75 if not adaptive else
+                              0.32 if reason and not reason.startswith(("Предварительное", "Хочу внимательнее")) else 0.75)
+            else:
+                leads = self.note_leads(note)
+                if not adaptive:
                     matches = sum(cid == self.d["truth"][int(key)] for key, cid in leads.items())
                     score += 0.52 * matches / max(1, len(leads))
+                    continue
+                visible = public_evidence_at(knowledge, note["round"])
+                for key, cid in leads.items():
+                    i = int(key)
+                    if cid != self.d["truth"][i] or note.get("stance", 1) == 0:
+                        continue
+                    row = {c: evidence_score(visible, c, i) for c in visible["board"][i]}
+                    # Correctly identifying an already obvious clue reveals little
+                    # about special knowledge. Early unexplained accuracy is more relevant.
+                    score += 0.52 * max(0.0, 1.0 - max(0.0, row_gap(row, cid))) / max(1, len(leads))
         return score
 
     def end(self, exposed=None, exposed_role=None):
@@ -1520,14 +1589,16 @@ class Game:
         if contradictions:
             return contradictions[-1]["text"]
         for n in reversed(prior):
-            if n["claim"] is not None and any(m["pid"] != target and m["round"] == n["round"] and
-                                               m["claim"] == n["claim"] for m in knowledge["notes"]):
-                return f'Спорное заявление о письме «{CARDS[n["claim"]]["name"]}».'
-        for n in reversed(prior):
             claim = n.get("claim")
             receipt = self.d.get("mail_log", {}).get(str(n["round"]), {}).get(str(observer), {})
             if observer != target and claim is not None and claim in receipt.get("sent_cards", [receipt.get("sent")]):
                 return f'Я сам отправил письмо «{CARDS[claim]["name"]}» в раунде {n["round"]}; его заявление противоречит моему.'
+        disputes = self.public_claim_disputes(knowledge, target)
+        if disputes:
+            return disputes[-1]["text"]
+        pressure = self.public_pressure_events(knowledge, target)
+        if pressure:
+            return pressure[-1]["text"]
         conflicts = Counter()
         for n in prior:
             if n.get("stance", 1) == 0:
@@ -1592,6 +1663,8 @@ class Game:
                             arguments_against.append(dict(round=n["round"], text=f'Повторно поддерживает «{CARDS[cid]["name"]}», несмотря на письма.'))
                     if n.get("stance", 1) != 0:
                         last_leads[key] = cid
+            arguments_against.extend(self.public_claim_disputes(knowledge, pid))
+            arguments_against.extend(self.public_pressure_events(knowledge, pid))
             arguments_against.extend(self.public_contradictions(knowledge, pid))
             people.append(dict(pid=pid, name=self.name(pid), count=len(incoming), incoming=incoming,
                 arguments_for=arguments_for[-5:], arguments_against=arguments_against[-5:],

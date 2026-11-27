@@ -14,3 +14,9 @@ Baseline: 3669d83739ac6f2ebaee044f15ffd15d3bc3dc14, Ghost Letters 3.1.0 / bots 3
 
 ## Validation
 Regression tests for association contrast, combined evidence, tentative leads, non-expiring public evidence and no immunity from revision. Existing tests still run. CI compares 500 matched seeds for base and candidate and uploads raw results. All-bot benchmark is not an estimate of human win rates; evaluate difficulty, seat count, marks, and both investigation outcomes. Never tune to one seed.
+
+## Social evidence extension
+- Symmetric disputed mail claims are now visible in the public dossier; observer's own receipt can verify a conflict, without revealing other receipts.
+- Repeated confident opposition followed by a visible adoption of that theory is a capped weak lead, never proof of causality or guilt; tests and tentative statements are excluded.
+- Discussion asks for specific grounds when theories diverge. Witness can cautiously express suspicion without fabricating evidence. Counter-accusation weighs correct expert guesses before they become obvious.
+- Benchmark includes explicit special-role modes, incorrect unanimous theories, arrest-vote accuracy, and reasoned accusation counts.
