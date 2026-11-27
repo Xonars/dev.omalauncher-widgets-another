@@ -47,11 +47,11 @@ def install(url, digest, entry):
                 os.replace(temporary, target)
         marker.write_text(digest)
 
-install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/e1480cf52542a71ce76d7a3267e8ed39416fe9d2213e295e92b865c353eed7a4.zip', 'e1480cf52542a71ce76d7a3267e8ed39416fe9d2213e295e92b865c353eed7a4', 'xonars-oma-another-features-widget')
+install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/155991598134309e83fb2b8366913fc61d6983b3ed432d67fdb3f8e140e83885.zip', '155991598134309e83fb2b8366913fc61d6983b3ed432d67fdb3f8e140e83885', 'xonars-oma-another-features-widget')
 """
   let storeInstall = "python -c ${sh(storeBootstrap)}"
 
-  meta { owl: 10; version: "1.0.1"; description: "Количество возможностей OMA Another. Нажмите, чтобы открыть каталог отличий. · ресурсы при первом запуске"; category: "productivity" ; license: "MIT" }
+  meta { owl: 10; version: "2.0.1"; description: "Количество возможностей OMA Another. Нажмите, чтобы открыть каталог отличий. · ресурсы при первом запуске"; category: "productivity" ; license: "MIT" }
   requires { pacman: ["python"] }
   page: 1
   size: 3x2
@@ -62,9 +62,9 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/e148
   Column { gap: 3; justify: spaceBetween; fill: true
     Text { text: "OMA ANOTHER"; font: sans; fontSize: 11; letterSpacing: 1; color: accent; bold: true; maxLines: 1 }
     Row { gap: 10; align: center
-      Text { text: catalog == null ? "…" : str(total); font: sans; fontSize: 42; color: accent; bold: true }
-      Text { text: "уникальных\nфункций"; font: sans; fontSize: 13; weight: 1 }
+      Text { text: catalog == null ? "…" : str(total); font: sans; fontSize: 38; color: accent; bold: true }
+      Text { text: "возможностей\nAnother"; font: sans; fontSize: 13; weight: 1 }
     }
-    Text { text: "Каталог возможностей →"; font: sans; fontSize: 11; color: muted; maxLines: 1 }
+    Text { text: "Открыть обзор →"; font: sans; fontSize: 11; color: muted; maxLines: 1 }
   }
 }

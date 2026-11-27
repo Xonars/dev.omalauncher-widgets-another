@@ -1,14 +1,14 @@
 {
   "schema": 1,
-  "reviewed": "17.11.2026",
-  "sourceCommit": "cabce989b396f47bc17214ea780c93ecf0ef72a1",
-  "upstreamCommit": "4d2cf3f22041b14bb0db76c72131c40e78076d80",
-  "verification": "Исходники; не аппаратная проверка установленной версии",
+  "reviewed": "27.11.2026",
+  "sourceCommit": "1cc5a6d1b5a49e47ac7435e1eed0a0665b31494e",
+  "upstreamCommit": "9e1e012b8e9d96b0d8939cc222a3ed1df30b2537",
+  "verification": "Редакционная подборка: прежние карточки основаны на аудите 17.11; обновлённые функции сверены с main, PR #7–11 и путями исходников. Полная повторная проверка всех прежних отличий от upstream не проводилась.",
   "features": [
     {
       "id": "oma-input",
       "category": "Управление",
-      "title": "Клавиатура для вашего Linux",
+      "title": "OMA Input — клавиатура Linux",
       "summary": "Русская раскладка, терминальные клавиши и сочетания — прямо на телефоне.",
       "details": "OMA Input предлагает EN/RU, символы, F1–F12, Ctrl, Alt и Super. Можно включить ряд цифр, виброотклик и оформление в цветах темы. Поддерживается одновременное нажатие нескольких клавиш. Пользовательская панель OWL над клавиатурой сохраняется.",
       "howTo": "Откройте настройки → OMA Input. Включите клавиатуру и выберите дополнительные клавиши и ряд цифр.",
@@ -18,12 +18,15 @@
         "app/src/main/kotlin/dev/omalauncher/input/InputHost.kt",
         "app/src/main/kotlin/dev/omalauncher/input/InputModel.kt",
         "app/src/main/kotlin/dev/omalauncher/input/InputSettingsScreen.kt"
-      ]
+      ],
+      "symbol": "⌘",
+      "featured": false,
+      "recent": false
     },
     {
       "id": "phone-controller",
-      "category": "Управление",
-      "title": "Телефон вместо клавиатуры и тачпада",
+      "category": "Внешний экран",
+      "title": "Телефон как клавиатура и тачпад",
       "summary": "Управляйте рабочим местом на внешнем экране, не подключая периферию.",
       "details": "На телефоне можно выбрать внешнее Linux-окно и отправлять ему ввод. Есть режимы клавиатуры, тачпада и общей панели, боковой тачпад и полоса прокрутки одним пальцем. Для Android предусмотрен отдельный контроллер с явным разрешением специальных возможностей.",
       "howTo": "Настройки → OMA Input → управление внешним дисплеем. Выберите окно. Для управления Android отдельно включите соответствующий режим и разрешите службу специальных возможностей.",
@@ -33,12 +36,15 @@
         "app/src/main/kotlin/dev/omalauncher/input/ExternalInputScreen.kt",
         "app/src/main/kotlin/dev/omalauncher/input/AndroidInputController.kt",
         "app/src/main/kotlin/dev/omalauncher/input/TouchpadScrollRail.kt"
-      ]
+      ],
+      "symbol": "▣",
+      "featured": false,
+      "recent": false
     },
     {
       "id": "desktop-profiles",
-      "category": "Экран",
-      "title": "Свой рабочий стол для монитора",
+      "category": "Внешний экран",
+      "title": "Независимый внешний рабочий стол",
       "summary": "Домашний экран телефона и раскладка большого экрана живут независимо.",
       "details": "У внешнего рабочего стола свои страницы, виджеты, закреплённые приложения и именованные профили. Можно настроить рабочее место для монитора, не переставляя плитки на телефоне. Система учитывает характеристики экрана при повторном подключении.",
       "howTo": "Подключите поддерживаемый внешний экран и откройте Desktop. Профили и сетка доступны в настройках Desktop и монитора.",
@@ -48,12 +54,15 @@
         "app/src/main/kotlin/dev/omalauncher/desktop/NativeDesktopActivity.kt",
         "app/src/main/kotlin/dev/omalauncher/desktop/DesktopHomeSession.kt",
         "app/src/main/kotlin/dev/omalauncher/desktop/DesktopMonitorSettings.kt"
-      ]
+      ],
+      "symbol": "▣",
+      "featured": false,
+      "recent": false
     },
     {
       "id": "tiled-workspaces",
-      "category": "Экран",
-      "title": "Окна, которые складываются в порядок",
+      "category": "Внешний экран",
+      "title": "Тайловый Desktop",
       "summary": "Размещайте Linux и OWL в колонках и стопках, без перекрытия.",
       "details": "Тайловый рабочий стол позволяет менять ширину колонок и высоту окон, увеличивать выбранное окно и переносить его между именованными рабочими пространствами. Настройки пространств сохраняются, чтобы разделять работу, общение и другие задачи.",
       "howTo": "Откройте приложения на внешнем Desktop. Перетаскивайте разделители для изменения размеров. Удерживайте заголовок плитки, чтобы открыть операции с окном и рабочими пространствами.",
@@ -63,12 +72,15 @@
         "app/src/main/kotlin/dev/omalauncher/desktop/TiledDesktopActivity.kt",
         "app/src/main/kotlin/dev/omalauncher/desktop/TiledWorkspace.kt",
         "app/src/main/kotlin/dev/omalauncher/desktop/DesktopTileMenus.kt"
-      ]
+      ],
+      "symbol": "▣",
+      "featured": true,
+      "recent": false
     },
     {
       "id": "android-tiles",
-      "category": "Экран",
-      "title": "Android рядом с Linux и OWL",
+      "category": "Внешний экран",
+      "title": "Android в тайлах Desktop",
       "summary": "Соберите приложения разных типов в одной тайловой рабочей области.",
       "details": "Android-приложение может занять выбранную плитку, сохранив её место в раскладке. Если подготовка не удалась, прежнее содержимое остаётся. Обычный запуск предлагается отдельно — он не выдаётся за встроенное окно.",
       "howTo": "Включите Android tiling и явно запустите вспомогательную службу через беспроводную отладку или USB ADB. Затем выберите Android-приложение через палитру целевой плитки.",
@@ -78,12 +90,15 @@
         "app/src/main/kotlin/dev/omalauncher/desktop/UnifiedDesktopTiles.kt",
         "app/src/main/kotlin/dev/omalauncher/androidtiling/AndroidTileClient.kt",
         "app/src/main/kotlin/dev/omalauncher/androidtiling/adb/LocalHelperManager.kt"
-      ]
+      ],
+      "symbol": "▣",
+      "featured": true,
+      "recent": false
     },
     {
       "id": "shortcuts",
       "category": "Управление",
-      "title": "Горячие клавиши по вашим правилам",
+      "title": "Настраиваемые горячие клавиши",
       "summary": "Назначьте удобные сочетания для окон, рабочих пространств и команд.",
       "details": "Единый список действий помогает настроить вызов палитры, переключение окон, колонок, рабочих пространств и панели. Назначения сохраняются и используются разными поверхностями лаунчера.",
       "howTo": "Настройки → Desktop → сочетания клавиш. Открыть их также можно удержанием кнопки команд на панели.",
@@ -92,12 +107,15 @@
       "evidence": [
         "app/src/main/kotlin/dev/omalauncher/desktop/DesktopShortcuts.kt",
         "app/src/main/kotlin/dev/omalauncher/desktop/ShortcutSettingsScreen.kt"
-      ]
+      ],
+      "symbol": "⌘",
+      "featured": false,
+      "recent": false
     },
     {
       "id": "backup",
-      "category": "Данные",
-      "title": "Настройки с запасным выходом",
+      "category": "Данные и настройки",
+      "title": "Резервное копирование и восстановление",
       "summary": "Сохраните оформление и OWL, а после импорта сможете отменить изменения.",
       "details": "Переносимый ZIP включает виджеты и их ресурсы, сохранённое состояние, стиль, домашнюю раскладку, пользовательские темы и обои, разрешённые настройки. При восстановлении проверяется целостность архива. Предусмотрены возврат при ошибке и локальная отмена последнего восстановления.",
       "howTo": "Настройки → резервное копирование и восстановление. Экспортируйте файл через системный диалог. Для импорта выберите архив, подтвердите операцию и перезапуск.",
@@ -108,11 +126,14 @@
         "app/src/main/kotlin/dev/omalauncher/backup/BackupFormat.kt",
         "app/src/main/kotlin/dev/omalauncher/backup/RestoreTransaction.kt",
         "app/src/main/kotlin/dev/omalauncher/backup/BackupScreen.kt"
-      ]
+      ],
+      "symbol": "≡",
+      "featured": false,
+      "recent": false
     },
     {
       "id": "apk-install",
-      "category": "Приложения",
+      "category": "Приложения и OWL",
       "title": "Установка APK прямо из Linux",
       "summary": "Передавайте APK Android-установщику, не разыскивая файл вручную.",
       "details": "Команда передаёт защищённую копию APK в OMA. Перед установкой можно посмотреть приложение, версию, подпись и разрешения. Затем решение подтверждается отдельно в OMA и штатном Android-установщике.",
@@ -123,12 +144,15 @@
         "app/src/main/kotlin/dev/omalauncher/packageinstall/PackageInstallBridge.kt",
         "app/src/main/kotlin/dev/omalauncher/packageinstall/PackageInstallActivity.kt",
         "app/src/main/kotlin/dev/omalauncher/ui/PackageInstallScreen.kt"
-      ]
+      ],
+      "symbol": "⊞",
+      "featured": false,
+      "recent": false
     },
     {
       "id": "two-stores",
-      "category": "Приложения",
-      "title": "Две коллекции в одном магазине",
+      "category": "Приложения и OWL",
+      "title": "Два каталога магазина OWL",
       "summary": "Переключайтесь между каталогами Another и оригинального Oma Launcher.",
       "details": "В Store доступны источники Simon Schubert и Xonars. Выбор сохраняется, записи установки и имена файлов разделены, а обновления проверяются для обоих источников. Оригинальная коллекция остаётся доступна.",
       "howTo": "Откройте Store и переключите источник коллекции. Если источник ещё не выбран, Another использует Xonars.",
@@ -138,11 +162,14 @@
         "app/src/main/kotlin/dev/omalauncher/widgets/StoreSource.kt",
         "app/src/main/kotlin/dev/omalauncher/widgets/Market.kt",
         "app/src/main/kotlin/dev/omalauncher/ui/store/StoreScreen.kt"
-      ]
+      ],
+      "symbol": "⊞",
+      "featured": false,
+      "recent": false
     },
     {
       "id": "linux-media",
-      "category": "Медиа",
+      "category": "Мультимедиа",
       "title": "Музыка Linux на экране блокировки",
       "summary": "Управляйте совместимым плеером из уведомления или с гарнитуры.",
       "details": "OWL-плеер может передавать Android название трека, обложку и команды воспроизведения. Поддерживается фоновая работа между треками, в том числе во время ожидания сетевого ответа.",
@@ -154,12 +181,15 @@
         "app/src/main/kotlin/dev/omalauncher/linux/MediaPlaybackOwner.kt",
         "app/src/main/kotlin/dev/omalauncher/linux/MediaArtwork.kt",
         "app/src/main/kotlin/dev/omalauncher/widgets/runtime/WidgetInstance.kt"
-      ]
+      ],
+      "symbol": "♫",
+      "featured": false,
+      "recent": false
     },
     {
       "id": "visualizer",
-      "category": "Медиа",
-      "title": "Виджеты, которые видят музыку",
+      "category": "Мультимедиа",
+      "title": "Встроенный визуализатор звука",
       "summary": "Звуковой спектр Android без Linux и отдельного анализатора.",
       "details": "OWL-виджет может получать 32 частотные полосы Android-воспроизведения и рисовать живую визуализацию. Когда источник больше не используется, захват освобождается.",
       "howTo": "Выберите виджет с поддержкой android.visualizer. Нажмите его кнопку запроса доступа к звуку и подтвердите разрешение.",
@@ -168,12 +198,15 @@
       "evidence": [
         "app/src/main/kotlin/dev/omalauncher/widgets/runtime/AudioSpectrum.kt",
         "app/src/main/kotlin/dev/omalauncher/widgets/runtime/SpectrumBands.kt"
-      ]
+      ],
+      "symbol": "♫",
+      "featured": false,
+      "recent": false
     },
     {
       "id": "audio-capture",
-      "category": "Медиа",
-      "title": "Звук Android для программ Linux",
+      "category": "Мультимедиа",
+      "title": "Захват звука Android для Linux",
       "summary": "Направляйте разрешённое воспроизведение в CAVA и другие аудиоинструменты.",
       "details": "Системный захват передаёт звук воспроизведения в источник PulseAudio android_capture. Его могут читать несколько Linux-программ. Микрофон и видео не захватываются, звук не записывается на диск.",
       "howTo": "Настройки → Android audio → Linux. Подтвердите системный запрос. В CAVA выберите method = pulse и source = android_capture.",
@@ -182,7 +215,10 @@
       "evidence": [
         "app/src/main/kotlin/dev/omalauncher/audiocapture/PlaybackCaptureActivity.kt",
         "app/src/main/kotlin/dev/omalauncher/audiocapture/PlaybackCaptureService.kt"
-      ]
+      ],
+      "symbol": "♫",
+      "featured": false,
+      "recent": false
     },
     {
       "id": "owl-keys",
@@ -197,11 +233,14 @@
         "app/src/main/kotlin/dev/omalauncher/widgets/input/OwlHardwareKeys.kt",
         "app/src/main/kotlin/dev/omalauncher/widgets/input/OwlKeyState.kt",
         "app/src/main/kotlin/dev/omalauncher/OwlAppActivity.kt"
-      ]
+      ],
+      "symbol": "⌘",
+      "featured": false,
+      "recent": false
     },
     {
       "id": "owl-background",
-      "category": "Приложения",
+      "category": "Приложения и OWL",
       "title": "OWL продолжает работу в фоне",
       "summary": "Открытое приложение не обязано останавливать обновления при уходе с экрана.",
       "details": "Фоновый режим сохраняет работу обычных источников и таймеров размещённых виджетов, страниц и уже открытых OWL-приложений. При необходимости можно вернуть прежнее поведение, когда обновления зависят от видимости.",
@@ -213,25 +252,33 @@
         "app/src/main/kotlin/dev/omalauncher/widgets/WidgetEngine.kt",
         "app/src/main/kotlin/dev/omalauncher/widgets/runtime/WidgetInstance.kt",
         "app/src/main/kotlin/dev/omalauncher/theme/Style.kt"
-      ]
+      ],
+      "symbol": "⊞",
+      "featured": false,
+      "recent": false
     },
     {
       "id": "palette",
       "category": "Управление",
-      "title": "Все действия в одной палитре",
-      "summary": "Приложения, настройки и команды — с категориями и общим поиском.",
-      "details": "Палитра объединяет Android, Linux и OWL, настройки и действия лаунчера. Пустой поиск показывает категории, введённый текст ищет по всему каталогу. Можно перейти прямо к нужной настройке или создать OWL с помощью агента.",
-      "howTo": "Удерживайте пустое место на Home или Desktop либо нажмите кнопку команд панели. Назад сначала очищает запрос, затем возвращает в родительскую категорию.",
-      "limitations": "Поиск сам не исполняет команды: для командной строки используется явный префикс >. Linux-действия требуют запущенного Linux.",
+      "title": "Command Palette v3",
+      "summary": "Единый поиск приложений, команд и настроек; понятная навигация по разделам.",
+      "details": "Адаптивная палитра с категориями, векторными значками, отдельными разделами оформления и единой фильтруемой сеткой Android, Linux и OWL. В альбомной компоновке доступна боковая навигация. Существующие маршруты запуска приложений и тайлов сохранены.",
+      "howTo": "Откройте палитру жестом, назначенной клавишей или через Waybar. Выберите раздел либо введите название приложения или команды.",
+      "limitations": "Shell-команды выполняются только в соответствующем режиме. Запуск Android внутри тайла требует настроенного помощника.",
       "screenshots": [],
       "evidence": [
         "app/src/main/kotlin/dev/omalauncher/desktop/CommandPaletteActivity.kt",
-        "app/src/main/kotlin/dev/omalauncher/desktop/PaletteMenu.kt"
-      ]
+        "app/src/main/kotlin/dev/omalauncher/desktop/PaletteMenu.kt",
+        "app/src/main/kotlin/dev/omalauncher/desktop/PaletteLayout.kt",
+        "app/src/main/kotlin/dev/omalauncher/desktop/PaletteActionRegistry.kt"
+      ],
+      "symbol": "⌘",
+      "featured": true,
+      "recent": true
     },
     {
       "id": "drawer-toggle",
-      "category": "Приложения",
+      "category": "Приложения и OWL",
       "title": "Домашний экран без App Drawer",
       "summary": "Пользуйтесь палитрой, сохранив возможность вернуть привычный список приложений.",
       "details": "App Drawer можно отключить одним переключателем. Ваш drawer.owl и назначения жестов не удаляются; другие пользовательские панели продолжают работать. Доступ к каталогу приложений и их запуск сохраняются.",
@@ -241,28 +288,34 @@
       "evidence": [
         "app/src/main/kotlin/dev/omalauncher/ui/home/Gestures.kt",
         "app/src/main/kotlin/dev/omalauncher/ui/home/LauncherState.kt"
-      ]
+      ],
+      "symbol": "⊞",
+      "featured": false,
+      "recent": false
     },
     {
       "id": "waybar",
-      "category": "Экран",
-      "title": "Компактная панель рабочего места",
-      "summary": "Страницы, команды, часы и батарея — на одной панели.",
-      "details": "Adaptive Waybar объединяет навигацию по страницам или рабочим пространствам и полезные индикаторы. Можно скрыть часы и настроить отступы. На телефоне панель может лежать поверх сетки или занимать отдельное место над ней.",
-      "howTo": "Настройки → оформление → Adaptive Waybar. Включите панель, затем настройте часы, отступы и резервирование места.",
-      "limitations": "По умолчанию выключена. Наложение может закрывать часть верхних плиток; отдельное место уменьшает доступную высоту сетки. На Desktop заменяется содержимое существующей панели, а не весь интерфейс.",
+      "category": "Рабочая среда",
+      "title": "Adaptive Waybar — 21 модуль",
+      "summary": "Настраивайте модули, их расположение, внешний вид и профили для разных экранов.",
+      "details": "Каталог из 21 модуля с монохромными иконками, режимами отображения и редактором геометрии. Панель поддерживает телефон, альбомную ориентацию, планшет и внешний дисплей. Включает системные показатели, свободное место, Android/Linux-медиа и действия модулей. Профили телефона могут наследоваться или переопределяться рабочим пространством.",
+      "howTo": "Палитра → Оформление → настройки панели. Выберите профиль и добавьте модули в нужные группы.",
+      "limitations": "Доступ к общесистемной нагрузке CPU и данным сети зависит от Android. При ограничениях используется явно обозначенная нагрузка процесса OMA; температура относится к батарее. Внешний профиль глобальный.",
       "screenshots": [],
       "evidence": [
         "app/src/main/kotlin/dev/omalauncher/ui/AdaptiveWaybar.kt",
-        "app/src/main/kotlin/dev/omalauncher/ui/AdaptiveWaybarLayout.kt",
-        "app/src/main/kotlin/dev/omalauncher/ui/home/WaybarGridGeometry.kt",
-        "app/src/main/kotlin/dev/omalauncher/theme/Style.kt"
-      ]
+        "app/src/main/kotlin/dev/omalauncher/ui/WaybarCatalog.kt",
+        "app/src/main/kotlin/dev/omalauncher/ui/WaybarModules.kt",
+        "app/src/main/kotlin/dev/omalauncher/theme/WaybarProfile.kt"
+      ],
+      "symbol": "▦",
+      "featured": true,
+      "recent": true
     },
     {
       "id": "minimal-home",
-      "category": "Экран",
-      "title": "Меньше лишнего на домашнем экране",
+      "category": "Оформление",
+      "title": "Минималистичный домашний экран",
       "summary": "Скройте строку ввода и подписи, отключите движение обоев.",
       "details": "Три независимых переключателя позволяют оставить только нужное: строку ввода, подписи приложений и прокрутку обоев. При отключённом движении обои остаются по центру. Изменять файлы виджетов не требуется.",
       "howTo": "Настройки → оформление. Настройте prompt bar, подписи приложений и движение обоев по отдельности.",
@@ -272,7 +325,69 @@
         "app/src/main/kotlin/dev/omalauncher/theme/Style.kt",
         "app/src/main/kotlin/dev/omalauncher/theme/OmarchyWallpaperService.kt",
         "app/src/main/kotlin/dev/omalauncher/ui/home/ShortcutTile.kt"
-      ]
+      ],
+      "symbol": "◈",
+      "featured": false,
+      "recent": false
+    },
+    {
+      "id": "workspace-toml",
+      "category": "Рабочая среда",
+      "title": "Рабочие пространства в TOML",
+      "summary": "Храните и редактируйте рабочие пространства в отдельных конфигурационных файлах.",
+      "details": "Все телефонные рабочие пространства синхронизируются с редактируемыми TOML-файлами. Можно хранить конфигурации отдельно и управлять ими через локальные команды; настройки отдельных пространств и размеры ярлыков сохраняются.",
+      "howTo": "Создайте несколько рабочих пространств. Используйте интерфейс лаунчера для настройки, а для ручного редактирования — конфигурации рабочих пространств и локальные команды OMA.",
+      "limitations": "TOML сохраняет конфигурацию, а не состояние запущенных процессов. Перед ручным изменением файлов рекомендуется резервная копия.",
+      "screenshots": [],
+      "evidence": [
+        "app/src/main/kotlin/dev/omalauncher/widgets/PhoneWorkspaces.kt",
+        "app/src/main/kotlin/dev/omalauncher/widgets/WorkspaceFiles.kt",
+        "app/src/main/kotlin/dev/omalauncher/linux/PhoneWorkspaceCommands.kt"
+      ],
+      "symbol": "▦",
+      "featured": false,
+      "recent": true
+    },
+    {
+      "id": "workspace-appearance",
+      "category": "Оформление",
+      "title": "Индивидуальное оформление пространств",
+      "summary": "Разные темы, обои, сетки и панели для работы, общения и отдыха.",
+      "details": "Каждому телефонному пространству можно задать свою тему, обои, палитру, набор иконок, сетку, размеры ярлыков, оформление виджетов и профили панели. Настройки поддерживают наследование и применение к текущему или всем пространствам.",
+      "howTo": "Переключитесь на нужное пространство и откройте оформление через палитру. Выберите область применения настроек: текущее пространство, все пространства или глобальный стиль.",
+      "limitations": "Тема гостевого Linux и операционные настройки остаются глобальными; внешний рабочий стол имеет собственный профиль.",
+      "screenshots": [],
+      "evidence": [
+        "app/src/main/kotlin/dev/omalauncher/theme/WorkspaceAppearance.kt",
+        "app/src/main/kotlin/dev/omalauncher/ui/home/WorkspaceAppearance.kt",
+        "app/src/main/kotlin/dev/omalauncher/widgets/WorkspaceFiles.kt"
+      ],
+      "symbol": "◈",
+      "featured": true,
+      "recent": true
+    },
+    {
+      "id": "control-center",
+      "category": "Управление",
+      "title": "Control Center v3",
+      "summary": "Быстрые настройки, уведомления и управление музыкой в одном адаптивном центре.",
+      "details": "Нативный центр управления учитывает активную тему, имеет компактное и расширенное представления, независимые панели в альбомной ориентации и всплывающий режим на Desktop. Можно настроить профили, переключатели и доступ через жесты, Waybar и палитру. Поддерживаются Android/Linux-медиа.",
+      "howTo": "Откройте центр управления через назначенный жест, модуль Waybar или палитру. Настройте состав профиля в соответствующем разделе настроек.",
+      "limitations": "Доступ к уведомлениям зависит от выданных разрешений. Ответы внутри уведомлений, отложенные уведомления и расширенные OWL-функции остаются в прежней панели.",
+      "screenshots": [],
+      "evidence": [
+        "app/src/main/kotlin/dev/omalauncher/ui/ControlCenter.kt",
+        "app/src/main/kotlin/dev/omalauncher/ui/ControlCenterActivity.kt",
+        "app/src/main/kotlin/dev/omalauncher/ui/ControlCenterConfig.kt"
+      ],
+      "symbol": "⌘",
+      "featured": true,
+      "recent": true
     }
-  ]
+  ],
+  "previousAudit": {
+    "sourceCommit": "cabce989b396f47bc17214ea780c93ecf0ef72a1",
+    "upstreamCommit": "4d2cf3f22041b14bb0db76c72131c40e78076d80",
+    "reviewed": "17.11.2026"
+  }
 }
