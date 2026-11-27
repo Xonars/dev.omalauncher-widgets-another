@@ -1,99 +1,175 @@
 app "Oma Another Features" {
-  meta { owl: 11; version: "1.0"; description: "Возможности OMA Another: наглядный каталог отличий от Oma Launcher"; category: "tools" }
+  meta { owl: 11; version: "2.0.0"; description: "Витрина возможностей OMA Another: обзор, новые функции, инструкции"; category: "tools" }
   requires { pacman: [] }
   icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect x=".5" y=".5" width="47" height="47" rx="9" fill="#19191d"/><rect x=".5" y=".5" width="47" height="47" rx="9" fill="currentColor" fill-opacity=".30" stroke="currentColor" stroke-opacity=".78"/><defs><g id="symbol"><rect x="6" y="6" width="36" height="13" rx="3"/><rect x="6" y="26" width="14" height="16" rx="3"/><rect x="27" y="26" width="15" height="16" rx="3"/></g></defs><g transform="translate(3.39 3.39) scale(0.859)" fill="none" stroke="#faf8f3" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.91"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g><g transform="translate(3.39 3.39) scale(0.859)" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.91" opacity=".16"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g></svg>"""
-  title: selected == "" ? "Oma Another Features" : "Возможность"
-  back: selected != ""
-  onBack: selected = ""
+
+  title: selected != "" ? (current.title ?? "Возможность") : "OMA Another Features"
+  back: selected != "" || section != "Обзор"
+  onBack: { if selected != "" { selected = ""; expanded = false; shotIndex = -1 } else { section = "Обзор"; query = ""; category = "Все" } }
   source catalog = file("~/.config/omalauncher/widgets/oma-another-features/catalog.json") json
   state selected = ""
   state query = ""
   state category = "Все"
   state onlySaved = false
   state saved = [] persist
+  state section = "Обзор"
+  state expanded = false
+  state shotIndex = -1
   let items = catalog.features ?? []
-  let categories = ["Все", "Экран", "Управление", "Данные", "Медиа", "Приложения"]
-  let found = items.filter(f => (category == "Все" || f.category == category) && (!onlySaved || contains(saved, f.id)) && contains(lower(f.title + " " + f.summary + " " + f.details + " " + f.howTo + " " + f.limitations + " " + f.category), lower(trim(query))))
+  let categories = ["Все", "Рабочая среда", "Оформление", "Управление", "Внешний экран", "Мультимедиа", "Приложения и OWL", "Данные и настройки"]
   let current = items.find(f => f.id == selected)
-  component Paragraph(label, body) {
-    Column { gap: 7; fill: width
-      Text { text: label; font: sans; fontSize: 12; bold: true; color: accent }
-      Text { text: body; font: sans; fontSize: 16 }
-    }
+  let found = items.filter(f => (section != "Новое" || f.recent == true) && (section != "Избранное" || contains(saved, f.id)) && (category == "Все" || f.category == category) && (!onlySaved || contains(saved, f.id)) && contains(lower(f.title + " " + f.summary + " " + f.details + " " + f.howTo + " " + f.limitations + " " + f.category), lower(trim(query))))
+  let featured = items.filter(f => f.featured == true)
+  component Heading(label) {
+    Text { text: label; font: sans; fontSize: 12; bold: true; color: accent; letterSpacing: 0.7 }
   }
-  Column { fill: true; padding: [16, 10]; gap: 12
+  Column { fill: true; padding: [14, 8]; gap: 10
     if selected == "" {
-      Column { fill: width; padding: 18; gap: 8; radius: 16; background: linear(0, 0, 1, 1, [mix(background, accent, 0.16), surface])
-        Text { text: "БОЛЬШЕ ВОЗМОЖНОСТЕЙ"; font: sans; fontSize: 11; letterSpacing: 1.4; color: accent; bold: true }
-        Row { align: center; gap: 14
-          Text { text: str(len(items)); font: sans; fontSize: 48; bold: true; color: accent }
-          Column { weight: 1; gap: 3
-            Text { text: "отличий Another"; font: sans; fontSize: 21; bold: true }
-            Text { text: "от Oma Launcher"; font: sans; fontSize: 13; color: muted }
-          }
+      Row { align: center; gap: 8
+        Box { weight: 1; background: surface; radius: 9; padding: [10, 2]
+          Input { text: query; placeholder: "Найти возможность…"; underline: false; fontSize: 14; onChange: { query = value; section = "Все"; category = "Все"; onlySaved = false } }
         }
-        Text { text: "Узнайте, что умеет ваш лаунчер. Откройте карточку — внутри польза, инструкция и важные условия."; font: sans; fontSize: 14 }
+        Box { size: 42; radius: 9; background: section == "Избранное" ? alpha(accent, 0.20) : surface; onTap: { section = section == "Избранное" ? "Обзор" : "Избранное"; category = "Все"; query = ""; onlySaved = false }
+          Text { text: section == "Избранное" ? "★" : "☆"; color: accent; fontSize: 23 }
+        }
       }
-      Box { fill: width; background: surface; radius: 12; padding: [12, 2]
-        Input { text: query; placeholder: "Найти возможность…"; underline: false; fontSize: 15; onChange: query = value }
-      }
-      Grid { columns: 3; gap: 6
-        for c in categories {
-          Box { padding: [10, 7]; radius: 9; background: category == c ? alpha(accent, 0.18) : surface; onTap: category = c
-            Text { text: c; font: sans; fontSize: 12; color: category == c ? accent : muted }
+      Grid { columns: 3; gap: 5
+        for tab in ["Обзор", "Все", "Новое"] {
+          Box { radius: 8; padding: [10, 9]; background: section == tab ? alpha(accent, 0.20) : surface; onTap: { section = tab; category = "Все"; query = ""; onlySaved = false }
+            Text { text: tab; font: sans; fontSize: 13; bold: section == tab; color: section == tab ? accent : muted }
           }
         }
       }
-      Row { align: center
-        Text { text: "Найдено: ${len(found)}"; font: sans; fontSize: 12; color: muted; weight: 1 }
-        Text { text: onlySaved ? "★ Избранное" : "☆ Избранное"; font: sans; fontSize: 12; color: onlySaved ? accent : muted; padding: [6, 5]; onTap: onlySaved = !onlySaved }
-      }
-      Column { weight: 1; lazy: true; gap: 10
-        for f in found key f.id {
-          Column { fill: width; padding: 16; gap: 9; radius: 14; background: surface; border: 1; borderColor: alpha(accent, 0.14); onTap: selected = f.id
-            Row { align: center
-              Text { text: f.category; font: sans; fontSize: 11; color: accent; weight: 1 }
-              Text { text: contains(saved, f.id) ? "★" : "↗"; color: accent; fontSize: 18 }
+      if catalog == null {
+        Column { weight: 1; padding: 16; gap: 8
+          Text { text: "Загружаем каталог…"; font: sans; fontSize: 18; bold: true }
+          Text { text: "При первом запуске магазина нужна сеть для установки ресурсов."; font: sans; fontSize: 14; color: muted }
+        }
+      } else {
+        if section == "Обзор" {
+          Column { weight: 1; scroll: true; gap: 13
+            Column { fill: width; radius: 14; padding: 15; gap: 8; background: linear(0, 0, 1, 1, [alpha(accent, 0.20), surface])
+              Heading { label: "ANDROID · LINUX · OWL" }
+              Text { text: "Больше, чем лаунчер"; font: sans; fontSize: 26; bold: true }
+              Row { align: center; gap: 10
+                Text { text: str(len(items)); font: sans; fontSize: 33; bold: true; color: accent }
+                Text { text: "возможностей OMA Another"; font: sans; fontSize: 14; color: muted; weight: 1 }
+                Text { text: "Новое →"; font: sans; fontSize: 13; color: accent; onTap: { section = "Новое"; category = "Все" } }
+              }
             }
-            Text { text: f.title; font: sans; fontSize: 20; bold: true }
-            Text { text: f.summary; font: sans; fontSize: 14; color: muted }
-            Text { text: "Подробнее →"; font: sans; fontSize: 12; color: accent }
+            Heading { label: "ГЛАВНЫЕ ВОЗМОЖНОСТИ" }
+            Grid { columns: 2; gap: 8
+              for f in featured key f.id {
+                Column { fill: width; radius: 12; padding: 10; gap: 7; background: surface; border: 1; borderColor: alpha(accent, 0.14); onTap: { selected = f.id; expanded = false; shotIndex = -1 }
+                  if len(f.screenshots ?? []) > 0 {
+                    Image { src: f.screenshots[0].src; fill: width; height: 92; fit: contain }
+                  } else {
+                    Box { fill: width; height: 76; radius: 8; background: alpha(accent, 0.12)
+                      Text { text: f.symbol ?? "▦"; fontSize: 39; color: accent }
+                    }
+                  }
+                  Text { text: f.title; font: sans; fontSize: 15; bold: true; maxLines: 3 }
+                  Text { text: f.category; font: sans; fontSize: 11; color: muted; maxLines: 2 }
+                }
+              }
+            }
+            Heading { label: "КАТЕГОРИИ" }
+            for c in categories {
+              if c != "Все" {
+                Row { fill: width; align: center; gap: 8; padding: [12, 10]; radius: 9; background: surface; onTap: { category = c; section = "Все"; query = ""; onlySaved = false }
+                  Text { text: c; font: sans; fontSize: 14; weight: 1 }
+                  Text { text: str(len(items.filter(f => f.category == c))); font: sans; color: muted; fontSize: 12 }
+                  Text { text: "›"; color: accent; fontSize: 20 }
+                }
+              }
+            }
+            Text { text: "Каталог · ${catalog.reviewed ?? "…"}"; font: sans; fontSize: 11; color: muted }
           }
-        }
-        if len(found) == 0 {
-          Column { padding: 20; gap: 10
-            Text { text: catalog == null ? "Загружаем каталог…" : "Ничего не найдено"; font: sans; fontSize: 20 }
-            Text { text: "Попробуйте другой запрос или отключите фильтры."; font: sans; fontSize: 14; color: muted }
-            Button { text: "Сбросить фильтры"; onTap: { query = ""; category = "Все"; onlySaved = false } }
+        } else {
+          if section == "Все" {
+            Grid { columns: 2; gap: 4
+              for c in categories {
+                Box { radius: 7; padding: [8, 6]; background: category == c ? alpha(accent, 0.20) : surface; onTap: category = c
+                  Text { text: c; font: sans; fontSize: 12; color: category == c ? accent : muted }
+                }
+              }
+            }
+          }
+          Row { align: center
+            Text { text: section == "Новое" ? "Последние изменения" : (section == "Избранное" ? "Избранное" : category); font: sans; fontSize: 14; bold: true; weight: 1 }
+            Text { text: str(len(found)); font: sans; fontSize: 12; color: muted }
+          }
+          Column { weight: 1; lazy: true; gap: 6
+            for f in found key f.id {
+              Row { fill: width; align: center; padding: 10; gap: 10; radius: 10; background: surface; onTap: { selected = f.id; expanded = false; shotIndex = -1 }
+                Box { size: 43; radius: 8; background: alpha(accent, 0.12)
+                  Text { text: f.symbol ?? "▦"; fontSize: 23; color: accent }
+                }
+                Column { weight: 1; gap: 4
+                  Text { text: f.title; font: sans; fontSize: 16; bold: true }
+                  Text { text: f.summary; font: sans; fontSize: 12; color: muted; maxLines: 3 }
+                  if f.recent == true { Text { text: "Обновлено"; font: sans; fontSize: 10; color: accent } }
+                }
+                Text { text: contains(saved, f.id) ? "★" : "›"; fontSize: 20; color: accent }
+              }
+            }
+            if len(found) == 0 {
+              Column { padding: 16; gap: 8
+                Text { text: section == "Избранное" ? "Пока ничего не сохранено" : "Ничего не найдено"; font: sans; fontSize: 18; bold: true }
+                Text { text: "Откройте каталог или измените запрос."; font: sans; fontSize: 13; color: muted }
+                Button { text: "Все возможности"; onTap: { section = "Все"; category = "Все"; query = ""; onlySaved = false } }
+              }
+            }
           }
         }
       }
-      Text { text: "Каталог по исходникам · ${catalog.reviewed ?? "…"}"; font: sans; fontSize: 10; color: muted }
     } else {
-      Column { weight: 1; scroll: true; gap: 20
-        Text { text: "← Все возможности"; font: sans; fontSize: 14; color: accent; padding: [0, 5]; onTap: selected = "" }
-        Column { fill: width; padding: 18; radius: 16; background: mix(surface, accent, 0.08); gap: 12
-          Text { text: current.category ?? ""; font: sans; fontSize: 12; color: accent; bold: true }
-          Text { text: current.title ?? "Карточка не найдена"; font: sans; fontSize: 28; bold: true }
-          Text { text: current.summary ?? "Вернитесь в каталог."; font: sans; fontSize: 16; color: muted }
-          Text { text: contains(saved, selected) ? "★ В избранном" : "☆ Добавить в избранное"; font: sans; fontSize: 13; color: accent; padding: [0, 5]; onTap: saved = contains(saved, selected) ? saved.filter(s => s != selected) : saved + [selected] }
-        }
-        if current != null {
-          Paragraph { label: "ЧТО ЭТО ДАЁТ"; body: current.details }
-          Paragraph { label: "КАК ПОЛЬЗОВАТЬСЯ"; body: current.howTo }
-          Column { fill: width; padding: 16; radius: 12; background: alpha(yellow, 0.08); gap: 7
-            Text { text: "ВАЖНО ЗНАТЬ"; font: sans; fontSize: 12; color: yellow; bold: true }
-            Text { text: current.limitations; font: sans; fontSize: 14 }
-          }
-          for shot in current.screenshots ?? [] {
-            Column { fill: width; gap: 6
-              Image { src: shot.src; fill: width; height: 300; fit: contain; label: shot.caption }
-              Text { text: shot.caption; font: sans; fontSize: 12; color: muted }
+      if current != null {
+        Column { weight: 1; scroll: true; gap: 14
+          if len(current.screenshots ?? []) > 0 {
+            for shot in current.screenshots {
+              Column { fill: width; radius: 12; padding: 8; gap: 6; background: surface
+                Image { src: shot.src; fill: width; height: 300; fit: contain; label: shot.caption }
+                Text { text: shot.caption; font: sans; fontSize: 12; color: muted }
+              }
+            }
+          } else {
+            Row { fill: width; align: center; padding: 12; gap: 12; radius: 12; background: alpha(accent, 0.12)
+              Text { text: current.symbol ?? "▦"; fontSize: 34; color: accent }
+              Column { weight: 1; gap: 3
+                Heading { label: current.category }
+                if current.recent == true { Text { text: "Последние изменения"; font: sans; fontSize: 12; color: muted } }
+              }
             }
           }
-          Text { text: "Описание сверено с кодом. Доступность зависит от версии приложения и устройства."; font: sans; fontSize: 12; color: muted }
+          Row { align: start; gap: 8
+            Text { text: current.title; font: sans; fontSize: 26; bold: true; weight: 1 }
+            Box { size: 42; radius: 9; background: alpha(accent, 0.12); onTap: saved = contains(saved, selected) ? saved.filter(s => s != selected) : saved + [selected]
+              Text { text: contains(saved, selected) ? "★" : "☆"; fontSize: 24; color: accent }
+            }
+          }
+          Text { text: current.summary; font: sans; fontSize: 16; color: muted }
+          Column { fill: width; radius: 12; padding: 12; background: surface; gap: 7
+            Heading { label: "ЧТО ЭТО ДАЁТ" }
+            Text { text: current.details; font: sans; fontSize: 15 }
+          }
+          Column { fill: width; radius: 12; padding: 12; background: surface; gap: 7
+            Heading { label: "КАК ПОЛЬЗОВАТЬСЯ" }
+            Text { text: current.howTo; font: sans; fontSize: 15 }
+          }
+          Column { fill: width; radius: 10; padding: 12; background: alpha(accent, 0.08); gap: 8
+            Row { fill: width; align: center; onTap: expanded = !expanded
+              Text { text: "Особенности и ограничения"; font: sans; fontSize: 14; bold: true; weight: 1 }
+              Text { text: expanded ? "−" : "+"; fontSize: 19; color: accent }
+            }
+            if expanded { Text { text: current.limitations; font: sans; fontSize: 14; color: muted } }
+          }
+          Text { text: "Редакционный каталог · ${catalog.reviewed ?? "…"}"; font: sans; fontSize: 11; color: muted }
+          Spacer { height: 8 }
         }
-        Spacer { height: 12 }
+      } else {
+        Text { text: "Карточка не найдена"; font: sans; fontSize: 16 }
+        Button { text: "Вернуться"; onTap: selected = "" }
       }
     }
   }
