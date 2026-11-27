@@ -559,8 +559,8 @@ class Game:
             signals = [hint_signal(self.d["board"], c, focus, cid) for c in row if c != truth]
             own_signal = hint_signal(self.d["board"], truth, focus, cid)
             direct = own_signal - max(signals)
-            inverse = min(signals) - own_signal if self.marked else 0.0
-            return max(0.0, direct, inverse) * priorities[focus] + 0.30 * max(0.0, gain(cid))
+            # Own cards can only be positive seals; silence applies to incoming mail.
+            return max(0.0, direct) * priorities[focus] + 0.30 * max(0.0, gain(cid))
 
         discard = min(pool, key=retention) if pool else None
         if discard is not None and (retention(discard) >= 0.12 or (context is not None and context["remaining"] <= 1)):
