@@ -187,7 +187,7 @@ class Game:
         return cls(dict(
             id=uuid.uuid4().hex, rev=0, seed=seed, mode=mode, phase="role", queue=local[:],
             players=players, local=local, board=board, deck=deck, discard=[], truth=[],
-            schema=3, marked=marked, difficulty=difficulty, sequential=True, exposed_role=None, winners=[],
+            schema=4, marked=marked, difficulty=difficulty, sequential=True, exposed_role=None, winners=[], notebooks={},
             rounds=rounds, round=0, letters=[], mail=[], notes=[], history=[], archive=[],
             ballots={}, counts=[], decided={}, tie=[], pass_no=0, arrested=None,
             excluded=[], successes=0, solved=False, winner="", exposed=None,
@@ -502,7 +502,7 @@ class Game:
             target = max(tests, key=lambda cid: affinity(claim, cid))
             weight, tag = association(claim, target)
             if weight:
-                parts.append(f"Я проверял {names([target])}: общая ассоциация с {names([claim])} — «{tag}».")
+                parts.append(f"Я проверял карту {names([target])}. Связь с картой {names([claim])} — «{tag}».")
             else:
                 parts.append(f"Я хотел проверить {names(tests)}, но моя ассоциация непрямая.")
         else:
@@ -523,14 +523,14 @@ class Game:
                           "social": "Карта исчезла. Сравню её с версиями остальных.",
                           "strategist": "Карта исчезла; в следующем раунде нужна другая проверка."}[profile])
         if check:
-            parts.append(f"Перепроверял версию игрока {self.name(check['pid'])}.")
+            parts.append(f"Перепроверял версию игрока «{self.name(check['pid'])}».")
         else:
             other = next((n for n in reversed(knowledge["notes"])
                           if n["pid"] != knowledge["pid"] and n["leads"] and
                           any(k in leads for k in n["leads"])), None)
             if other:
                 agree = any(leads.get(k) == cid for k, cid in other["leads"].items())
-                parts.append(f"С версией игрока {self.name(other['pid'])} " +
+                parts.append(f"С версией игрока «{self.name(other['pid'])}» " +
                              ("отчасти согласен." if agree else "пока не согласен — нужны новые письма."))
             elif knowledge["own_leads"]:
                 prior = knowledge["own_leads"]
@@ -735,21 +735,67 @@ class Game:
             return note["leads"]
         return {str(note["category"]): note["card"]} if note["card"] is not None else {}
 
-    def notes_view(self):
-        notes = self.d["notes"]
+    def notebook_owner(self):
+        if self.phase in ("role", "result") or self.d["round"] < 1:
+            return None
+        pid = self.actor
+        if pid is None and len(self.d["local"]) == 1:
+            pid = self.d["local"][0]
+        if pid is not None and pid in self.d["local"] and self.d["players"][pid]["role"] != "ghost":
+            return pid
+        return None
+
+    def notebook_view(self):
+        pid = self.notebook_owner()
+        if pid is None:
+            return None
+        record = self.d.get("notebooks", {}).get(str(pid), {})
+        return dict(owner=self.name(pid), pid=pid, marks=record.get("marks", {}).copy(),
+                    suspects=record.get("suspects", {}).copy(), text=record.get("text", ""))
+
+    def save_notebook(self, payload):
+        pid = self.notebook_owner()
+        if pid is None or not isinstance(payload, dict):
+            raise ValueError("Личный блокнот недоступен.")
+        cards = {str(cid) for row in self.d["board"] for cid in row}
+        people = {str(i) for i in range(1, len(self.d["players"])) if i != pid}
+        def validate_marks(values, allowed):
+            if not isinstance(values, dict) or any(k not in allowed or v not in ("likely", "unlikely", "neutral")
+                                                    for k, v in values.items()):
+                raise ValueError("Неверная отметка в блокноте.")
+            return {k: v for k, v in values.items() if v != "neutral"}
+        marks = validate_marks(payload.get("marks", {}), cards)
+        suspects = validate_marks(payload.get("suspects", {}), people)
+        text = payload.get("text", "")
+        if not isinstance(text, str) or len(text) > 2000:
+            raise ValueError("Заметка слишком длинная.")
+        self.d.setdefault("notebooks", {})[str(pid)] = dict(marks=marks, suspects=suspects, text=text)
+
+    def history_view(self):
+        grouped = {}
+        for note in self.d["history"] + self.d["notes"]:
+            grouped.setdefault(note.get("round", 0), {})[note["pid"]] = note
+        return [dict(round=number, entries=self.notes_view(list(grouped[number].values()), number))
+                for number in sorted(grouped, reverse=True)]
+
+    def notes_view(self, notes=None, number=None):
+        notes = self.d["notes"] if notes is None else notes
+        number = self.d["round"] if number is None else number
+        letter = next((entry for entry in self.d["letters"] if entry["round"] == number), None)
+        opened = {c["value"]: c.get("mark") for c in self.letter_cards(letter)} if letter else {}
         claim_counts = Counter(note["claim"] for note in notes if note.get("claim") is not None)
-        suspicions = self.public_suspicions()
+        suspicions = Counter(n["suspect"] for n in notes if n.get("suspect") is not None)
         rows = []
         for note in notes:
             claim, check = note.get("claim"), note.get("check")
-            mark = self.claim_mark(claim) if claim is not None else None
+            mark = opened.get(claim) if claim is not None else None
             suspect = note["suspect"]
             rows.append(dict(
                 player=self.name(note["pid"]),
                 speech=note.get("speech", ""),
                 suspect=self.name(suspect) if suspect is not None else None,
                 suspicions=suspicions[suspect] if suspect is not None else 0,
-                claim=card_view(claim, mark=mark, opened=self.claim_opened(claim), disputed=claim_counts[claim] > 1) if claim is not None else None,
+                claim=card_view(claim, mark=mark, opened=claim in opened, disputed=claim_counts[claim] > 1) if claim is not None else None,
                 tests=[card_view(cid) for cid in clue_list(note, "tests", "test")],
                 checking=self.name(check["pid"]) if check is not None else None,
                 clues=[card_view(cid, key=key, category=self.category(key))
@@ -1090,9 +1136,10 @@ class Game:
                 if check:
                     actor["recheck"] = [CARDS[cid]["name"] for cid in clue_list(check, "clues", "clue")]
         suspicions = self.public_suspicions()
-        roster = [dict(name=p["name"], seat=f'Игрок {p["local"]}' if p["local"] else "Бот",
+        roster = [dict(value=i, name=p["name"], seat=f'Игрок {p["local"]}' if p["local"] else "Бот",
                        role=ROLES[p["role"]][0] if phase == "result" else "",
                        personality=PROFILE_NAMES[self.bot_profile(i)] if phase == "result" and i and p["local"] is None else "",
+                       won=(i in self.d["winners"]) if phase == "result" and "winners" in self.d else None,
                        suspicions=suspicions[i] if i else None)
                   for i, p in enumerate(self.d["players"])]
         letters = [dict(round=entry["round"], missing=entry["missing"], cards=self.letter_cards(entry))
@@ -1106,6 +1153,7 @@ class Game:
                     action=action, mode=MODES[self.d["mode"]], round=self.d["round"],
                     rounds=self.d["rounds"], marked=self.marked, cooperative=self.cooperative,
                     local_count=len(self.d["local"]), difficulty=self.d.get("difficulty", "normal"), actor=actor, groups=self.groups(), board=board,
+                    notebook=self.notebook_view(), history=self.history_view(),
                     roster=roster, letters=letters, notes=notes, speaker=speaker, statement=statement,
                     tallies=self.d["counts"] if phase in ("appeal", "arrest", "result") else [],
                     outcome=self.outcome() if result else [],
@@ -1195,7 +1243,7 @@ def public_view(game):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("view", "start", "advance", "submit", "reset"))
+    parser.add_argument("action", choices=("view", "start", "advance", "submit", "reset", "notebook"))
     parser.add_argument("token", nargs="?", default="-")
     parser.add_argument("payload", nargs="?", default="{}")
     args = parser.parse_args()
@@ -1213,6 +1261,9 @@ def main():
             if args.action == "reset":
                 save(path, None)
                 game = None
+            elif args.action == "notebook":
+                game.save_notebook(json.loads(args.payload))
+                save(path, game.d)
             elif args.action in ("advance", "submit"):
                 if args.action == "advance":
                     game.advance()
@@ -1220,6 +1271,8 @@ def main():
                     game.submit(json.loads(args.payload))
                 game.d["rev"] += 1
                 save(path, game.d)
+        elif args.action == "notebook":
+            raise ValueError("Ход уже изменился.")
         print(json.dumps({"game": public_view(game)}, ensure_ascii=False))
 
 

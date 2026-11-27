@@ -122,6 +122,51 @@ class GhostLettersRules(unittest.TestCase):
                         if not g.d["players"][note["pid"]]["local"] and note.get("claim") is not None:
                             self.assertTrue(note.get("speech"))
 
+    def test_private_notebooks(self):
+        g = Game.new("classic", 5, 2, False, seed=8)
+        a,b = g.d["local"]
+        self.assertIsNone(g.notebook_view())
+        g.d["round"] = 1
+        g.set_phase("mail", [a])
+        key = str(g.d["board"][0][0])
+        before = (g.phase, g.actor, g.d["rev"])
+        g.save_notebook({"marks": {key:"likely"}, "suspects": {str(b):"likely"}, "text":"private A"})
+        self.assertEqual(g.notebook_view()["text"], "private A")
+        self.assertEqual(before, (g.phase, g.actor, g.d["rev"]))
+        g.set_phase("mail", [b])
+        self.assertEqual(g.notebook_view()["text"], "")
+        g.save_notebook({"marks": {key:"unlikely"}, "text":"private B"})
+        g.set_phase("mail", [a])
+        self.assertEqual(g.notebook_view()["marks"][key], "likely")
+        with self.assertRaises(ValueError):
+            g.save_notebook({"marks": {"9999":"likely"}})
+        g.set_phase("discussion")
+        self.assertIsNone(g.notebook_view())
+        self.assertIsNone(g.view()["notebook"])
+
+    def test_solo_notebook_during_public_discussion(self):
+        g = Game.new("classic", 4, 1, False, seed=3)
+        g.d["round"] = 1
+        g.set_phase("discussion")
+        g.save_notebook({"text":"case notes"})
+        self.assertEqual(g.view()["notebook"]["text"], "case notes")
+        g.d["round"] = 2
+        self.assertEqual(Game(json.loads(json.dumps(g.d))).notebook_view()["text"], "case notes")
+
+    def test_history_uses_corresponding_round(self):
+        g = Game.new("classic", 4, 1, False, marked=True, seed=3)
+        card = g.d["board"][0][0]
+        g.d["round"] = 2
+        g.d["letters"] = [dict(round=1, echo=[card], silence=[], seal=None, missing=0),
+                          dict(round=2, echo=[], silence=[], seal=None, missing=0)]
+        n = dict(pid=1, leads={}, suspect=None, round=1, claim=card, tests=[], check=None, speech="old")
+        g.d["history"] = [n]
+        g.d["notes"] = [dict(n, round=2)]
+        history = g.history_view()
+        self.assertFalse(history[0]["entries"][0]["claim"]["opened"])
+        self.assertTrue(history[1]["entries"][0]["claim"]["opened"])
+        self.assertEqual(history[1]["entries"][0]["claim"]["mark"], "Эхо")
+
     def test_package_matches_source(self):
         row = next(x for x in json.loads((ROOT / "store-collection.json").read_text()) if x["source"] == "ghost-letters.owl")
         with zipfile.ZipFile(ROOT / row["resources"]) as z:
