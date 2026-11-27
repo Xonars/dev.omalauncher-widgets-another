@@ -73,14 +73,30 @@
       "details": "У внешнего рабочего стола свои страницы, виджеты, закреплённые приложения и именованные профили. Можно настроить рабочее место для монитора, не переставляя плитки на телефоне. Система учитывает характеристики экрана при повторном подключении.",
       "howTo": "Подключите поддерживаемый внешний экран и откройте Desktop. Профили и сетка доступны в настройках Desktop и монитора.",
       "limitations": "Возможность выбрать внешний домашний экран зависит от Android и производителя устройства. Функция сама не включает DeX или свободные окна. Одинаковые мониторы иногда нельзя отличить друг от друга.",
-      "screenshots": [],
+      "screenshots": [
+        {
+          "src": "~/.config/omalauncher/widgets/oma-another-features/screenshots/desktop-cumulus.webp",
+          "thumb": "~/.config/omalauncher/widgets/oma-another-features/screenshots/desktop-cumulus-thumb.webp",
+          "caption": "Внешний рабочий стол с темой Cumulus и независимой компоновкой виджетов."
+        },
+        {
+          "src": "~/.config/omalauncher/widgets/oma-another-features/screenshots/desktop-jade-crane.webp",
+          "thumb": "~/.config/omalauncher/widgets/oma-another-features/screenshots/desktop-jade-crane-thumb.webp",
+          "caption": "Внешний рабочий стол с темой Jade Crane Light."
+        },
+        {
+          "src": "~/.config/omalauncher/widgets/oma-another-features/screenshots/desktop-cthulhu.webp",
+          "thumb": "~/.config/omalauncher/widgets/oma-another-features/screenshots/desktop-cthulhu-thumb.webp",
+          "caption": "Внешний рабочий стол с темой Cthulhu Deep One и другой раскладкой виджетов."
+        }
+      ],
       "evidence": [
         "app/src/main/kotlin/dev/omalauncher/desktop/NativeDesktopActivity.kt",
         "app/src/main/kotlin/dev/omalauncher/desktop/DesktopHomeSession.kt",
         "app/src/main/kotlin/dev/omalauncher/desktop/DesktopMonitorSettings.kt"
       ],
       "symbol": "▣",
-      "featured": false,
+      "featured": true,
       "recent": false,
       "shortTitle": "Внешний рабочий стол",
       "change": "",
@@ -277,7 +293,13 @@
       "details": "OWL-плеер может передавать Android название трека, обложку и команды воспроизведения. Поддерживается фоновая работа между треками, в том числе во время ожидания сетевого ответа.",
       "howTo": "Используйте OWL-плеер с интеграцией mediaSession. После начала воспроизведения его управление появится в системных медиаконтролах Android.",
       "limitations": "Это не автоматическая поддержка каждого Linux-плеера: нужна соответствующая интеграция. Одновременно публикуется одна сессия. Остановка Linux или лаунчера прекращает её работу.",
-      "screenshots": [],
+      "screenshots": [
+        {
+          "src": "~/.config/omalauncher/widgets/oma-another-features/screenshots/media-landscape.webp",
+          "thumb": "~/.config/omalauncher/widgets/oma-another-features/screenshots/media-landscape-thumb.webp",
+          "caption": "Музыкальный виджет и управление воспроизведением на рабочем столе. Системные медиаконтролы Android на этом снимке не показаны."
+        }
+      ],
       "evidence": [
         "app/src/main/kotlin/dev/omalauncher/linux/LinuxMedia.kt",
         "app/src/main/kotlin/dev/omalauncher/linux/MediaPlaybackOwner.kt",
@@ -306,13 +328,19 @@
       "details": "OWL-виджет может получать 32 частотные полосы Android-воспроизведения и рисовать живую визуализацию. Когда источник больше не используется, захват освобождается.",
       "howTo": "Выберите виджет с поддержкой android.visualizer. Нажмите его кнопку запроса доступа к звуку и подтвердите разрешение.",
       "limitations": "Android запрашивает разрешение RECORD_AUDIO, хотя микрофон не открывается. Результат зависит от устройства и звукового маршрута; нулевые полосы не всегда означают ошибку.",
-      "screenshots": [],
+      "screenshots": [
+        {
+          "src": "~/.config/omalauncher/widgets/oma-another-features/screenshots/media-landscape.webp",
+          "thumb": "~/.config/omalauncher/widgets/oma-another-features/screenshots/media-landscape-thumb.webp",
+          "caption": "Виджет спектра звука рядом с музыкальным виджетом в альбомной ориентации."
+        }
+      ],
       "evidence": [
         "app/src/main/kotlin/dev/omalauncher/widgets/runtime/AudioSpectrum.kt",
         "app/src/main/kotlin/dev/omalauncher/widgets/runtime/SpectrumBands.kt"
       ],
       "symbol": "♫",
-      "featured": false,
+      "featured": true,
       "recent": false,
       "shortTitle": "Визуализатор",
       "change": "",
@@ -421,7 +449,13 @@
       "details": "Адаптивная палитра с категориями, векторными значками, отдельными разделами оформления и единой фильтруемой сеткой Android, Linux и OWL. В альбомной компоновке доступна боковая навигация. Существующие маршруты запуска приложений и тайлов сохранены.",
       "howTo": "Откройте палитру жестом, назначенной клавишей или через Waybar. Выберите раздел либо введите название приложения или команды.",
       "limitations": "Shell-команды выполняются только в соответствующем режиме. Запуск Android внутри тайла требует настроенного помощника.",
-      "screenshots": [],
+      "screenshots": [
+        {
+          "src": "~/.config/omalauncher/widgets/oma-another-features/screenshots/command-palette.webp",
+          "thumb": "~/.config/omalauncher/widgets/oma-another-features/screenshots/command-palette-thumb.webp",
+          "caption": "Палитра команд: поиск, приложения, оформление, рабочие пространства и настройки."
+        }
+      ],
       "evidence": [
         "app/src/main/kotlin/dev/omalauncher/desktop/CommandPaletteActivity.kt",
         "app/src/main/kotlin/dev/omalauncher/desktop/PaletteMenu.kt",
@@ -479,7 +513,18 @@
       "details": "Каталог из 21 модуля с монохромными иконками, режимами отображения и редактором геометрии. Панель поддерживает телефон, альбомную ориентацию, планшет и внешний дисплей. Включает системные показатели, свободное место, Android/Linux-медиа и действия модулей. Профили телефона могут наследоваться или переопределяться рабочим пространством.",
       "howTo": "Палитра → Оформление → настройки панели. Выберите профиль и добавьте модули в нужные группы.",
       "limitations": "Доступ к общесистемной нагрузке CPU и данным сети зависит от Android. При ограничениях используется явно обозначенная нагрузка процесса OMA; температура относится к батарее. Внешний профиль глобальный.",
-      "screenshots": [],
+      "screenshots": [
+        {
+          "src": "~/.config/omalauncher/widgets/oma-another-features/screenshots/desktop-cumulus.webp",
+          "thumb": "~/.config/omalauncher/widgets/oma-another-features/screenshots/desktop-cumulus-thumb.webp",
+          "caption": "Адаптивная верхняя панель на внешнем дисплее."
+        },
+        {
+          "src": "~/.config/omalauncher/widgets/oma-another-features/screenshots/waybar-panel.webp",
+          "thumb": "~/.config/omalauncher/widgets/oma-another-features/screenshots/waybar-panel-thumb.webp",
+          "caption": "Фрагмент той же панели: рабочее пространство, дата, системные индикаторы и состояние Linux."
+        }
+      ],
       "evidence": [
         "app/src/main/kotlin/dev/omalauncher/ui/AdaptiveWaybar.kt",
         "app/src/main/kotlin/dev/omalauncher/ui/WaybarCatalog.kt",
@@ -567,7 +612,23 @@
       "details": "Каждому телефонному пространству можно задать свою тему, обои, палитру, набор иконок, сетку, размеры ярлыков, оформление виджетов и профили панели. Настройки поддерживают наследование и применение к текущему или всем пространствам.",
       "howTo": "Переключитесь на нужное пространство и откройте оформление через палитру. Выберите область применения настроек: текущее пространство, все пространства или глобальный стиль.",
       "limitations": "Тема гостевого Linux и операционные настройки остаются глобальными; внешний рабочий стол имеет собственный профиль.",
-      "screenshots": [],
+      "screenshots": [
+        {
+          "src": "~/.config/omalauncher/widgets/oma-another-features/screenshots/workspace-ingolstadt.webp",
+          "thumb": "~/.config/omalauncher/widgets/oma-another-features/screenshots/workspace-ingolstadt-thumb.webp",
+          "caption": "Первое рабочее пространство: тема Ingolstadt 1792, собственные обои и виджеты."
+        },
+        {
+          "src": "~/.config/omalauncher/widgets/oma-another-features/screenshots/workspace-rally.webp",
+          "thumb": "~/.config/omalauncher/widgets/oma-another-features/screenshots/workspace-rally-thumb.webp",
+          "caption": "Второе рабочее пространство: другие обои, виджеты и ярлыки."
+        },
+        {
+          "src": "~/.config/omalauncher/widgets/oma-another-features/screenshots/workspace-theme-preview.webp",
+          "thumb": "~/.config/omalauncher/widgets/oma-another-features/screenshots/workspace-theme-preview-thumb.webp",
+          "caption": "Предпросмотр темы Jade Crane Dark при выборе оформления."
+        }
+      ],
       "evidence": [
         "app/src/main/kotlin/dev/omalauncher/theme/WorkspaceAppearance.kt",
         "app/src/main/kotlin/dev/omalauncher/ui/home/WorkspaceAppearance.kt",
@@ -595,7 +656,13 @@
       "details": "Нативный центр управления учитывает активную тему, имеет компактное и расширенное представления, независимые панели в альбомной ориентации и всплывающий режим на Desktop. Можно настроить профили, переключатели и доступ через жесты, Waybar и палитру. Поддерживаются Android/Linux-медиа.",
       "howTo": "Откройте центр управления через назначенный жест, модуль Waybar или палитру. Настройте состав профиля в соответствующем разделе настроек.",
       "limitations": "Доступ к уведомлениям зависит от выданных разрешений. Ответы внутри уведомлений, отложенные уведомления и расширенные OWL-функции остаются в прежней панели.",
-      "screenshots": [],
+      "screenshots": [
+        {
+          "src": "~/.config/omalauncher/widgets/oma-another-features/screenshots/control-center.webp",
+          "thumb": "~/.config/omalauncher/widgets/oma-another-features/screenshots/control-center-thumb.webp",
+          "caption": "Развёрнутый центр управления: переключатели, яркость, звук и системные показатели."
+        }
+      ],
       "evidence": [
         "app/src/main/kotlin/dev/omalauncher/ui/ControlCenter.kt",
         "app/src/main/kotlin/dev/omalauncher/ui/ControlCenterActivity.kt",

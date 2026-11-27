@@ -47,11 +47,11 @@ def install(url, digest, entry):
                 os.replace(temporary, target)
         marker.write_text(digest)
 
-install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/78df1e46b04531ea623f248201ab2b8149ebef388fc6e8d0b58a7afd742e999c.zip', '78df1e46b04531ea623f248201ab2b8149ebef388fc6e8d0b58a7afd742e999c', 'xonars-oma-another-features-widget')
+install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/970be9a9dfad89ff50462c59d0f0f5affedb72a177672ffa7773ddc920219bd5.zip', '970be9a9dfad89ff50462c59d0f0f5affedb72a177672ffa7773ddc920219bd5', 'xonars-oma-another-features-widget')
 """
   let storeInstall = "python -c ${sh(storeBootstrap)}"
 
-  meta { owl: 10; version: "2.1.1"; description: "Количество возможностей OMA Another. Нажмите, чтобы открыть каталог отличий. · ресурсы при первом запуске"; category: "productivity" ; license: "MIT" }
+  meta { owl: 10; version: "2.2.1"; description: "Количество возможностей OMA Another. Нажмите, чтобы открыть каталог отличий. · ресурсы при первом запуске"; category: "productivity" ; license: "MIT" }
   requires { pacman: ["python"] }
   page: 1
   size: 3x2
