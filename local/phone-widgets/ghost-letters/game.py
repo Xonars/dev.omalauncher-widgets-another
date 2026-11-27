@@ -23,8 +23,8 @@ import uuid
 HERE = Path(__file__).resolve().parent
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "ghost-letters"
 ANALYTICS_SCHEMA = 1
-GAME_VERSION = "2.11.0"
-BOT_VERSION = "3.3.0"
+GAME_VERSION = "2.12.0"
+BOT_VERSION = "3.4.0"
 CATEGORIES = ("Мотив", "Место", "Способ")
 MARKS = {"echo": "Эхо", "silence": "Тишина", "seal": "Печать"}
 MODES = {
@@ -326,7 +326,58 @@ class Game:
         if before != player["hand"]:
             self.trace("refill", pid=pid, before=before, after=player["hand"])
 
+    def prepare_ghost_deal(self):
+        """Bounded initial-deal balancing, never a mid-game search of the deck."""
+        if (self.d.get("difficulty", "normal") == "easy" or self.d["players"][0]["local"]
+                or self.d["round"] or self.d["letters"] or any(p["hand"] for p in self.d["players"])):
+            return
+        deck = self.d["deck"]
+        if len(deck) < 6:
+            return
+        # Only the undealt deck is available here. Preserve the board, truth, and
+        # multiset of cards. At most two exchanges, preserving useful coverage.
+        hand = deck[-5:]
+        before = hand[:]
+        margins = {c: self.ghost_margins(c) for c in deck}
+        def quality(cards):
+            return [max((margins[c][i] for c in cards if min(margins[c]) >= -0.28), default=0.0)
+                    for i in range(len(self.d["truth"]))]
+        swaps = []
+        for _ in range(2):
+            old_quality = quality(hand)
+            missing = [i for i, value in enumerate(old_quality) if value < 0.32]
+            if not missing:
+                break
+            options = []
+            for index, candidate in enumerate(deck[:-5]):
+                m = margins[candidate]
+                if min(m) < -0.28 or not any(m[i] >= 0.32 for i in missing):
+                    continue
+                for slot, removed in enumerate(hand):
+                    proposed = hand[:]
+                    proposed[slot] = candidate
+                    new_quality = quality(proposed)
+                    if any(old_quality[i] >= 0.32 and new_quality[i] < 0.32
+                           for i in range(len(old_quality))):
+                        continue
+                    improved = sum(new_quality[i] >= 0.32 for i in missing)
+                    # First cover another category, then prefer a stronger distinctive clue.
+                    # The final tie-break respects the shuffled deck order.
+                    if improved:
+                        options.append((improved, sum(min(1.0, new_quality[i]) for i in missing),
+                                        index, -slot, removed, candidate))
+            if not options:
+                break
+            _, _, index, neg_slot, removed, candidate = max(options)
+            slot = -neg_slot
+            deck[index], deck[len(deck) - 5 + slot] = removed, candidate
+            hand[slot] = candidate
+            swaps.append(dict(removed=removed, added=candidate))
+        self.trace("ghost_deal", before=before, after=hand, swaps=swaps,
+                   coverage_before=quality(before), coverage_after=quality(hand))
+
     def move_to_opening(self):
+        self.prepare_ghost_deal()
         for pid in range(len(self.d["players"])):
             self.refill(pid)
         if self.d["players"][0]["local"]:
@@ -505,6 +556,11 @@ class Game:
             uncertain = any(n["card"] != truth or n["confidence"] < 1.0 or
                             n["round"] < self.d["round"] - 1 for n in human)
             local_present = any(p["local"] for p in self.d["players"][1:])
+            scores = context["scores"][i]
+            gap = scores[truth] - max(v for c, v in scores.items() if c != truth)
+            # Do not repeat an already decisive clue just because a human stayed silent.
+            if gap >= 1.25 and not any(n["card"] != truth and n["round"] >= self.d["round"] - 1 for n in human):
+                continue
             if public[truth] < 0.86 or uncertain or (local_present and not human):
                 # Favor understandable direct associations over merely accumulated scores.
                 result.append((i, min(0.42, 0.10 + 0.42 * margins[i])))
@@ -521,6 +577,19 @@ class Game:
             before = scores[truth] - max(v for c, v in scores.items() if c != truth)
             after = scores[truth] + signals[truth] - max(v + signals[c] for c, v in scores.items() if c != truth)
             gain = after - before
+            # The leading-gap metric alone misses elimination of one of several
+            # equally plausible alternatives. Explicit Silence can narrow the row
+            # even when another alternative remains tied. Do not infer negatives
+            # from unopened mail or use Silence in unmarked games.
+            if negative and self.marked:
+                rivals = [c for c in board[i] if c != truth]
+                plausible = [c for c in rivals if scores[c] >= max(scores.values()) - 0.65]
+                if plausible:
+                    pair_gains = [signals[truth] - signals[c] for c in plausible]
+                    elimination = sum(max(0.0, x) for x in pair_gains) / len(plausible)
+                    harm = max(0.0, -min(pair_gains))
+                    if harm <= 0.10:
+                        gain += (0.40 if context["difficulty"] == "normal" else 0.55) * elimination
             # Correct popular false theories at both adaptive difficulties.
             rival = max((c for c in board[i] if c != truth), key=lambda c: (public[c], scores[c]))
             disagreement = max(0.0, public[rival] - public[truth])
@@ -614,14 +683,18 @@ class Game:
             # Save cards useful for the weakest unresolved category.
             # Never inspect the hidden deck.
             priorities = self.ghost_priorities(context)
-            focus = max(range(len(priorities)), key=priorities.__getitem__)
-            truth = self.d["truth"][focus]
-            row = self.d["board"][focus]
-            signals = [hint_signal(self.d["board"], c, focus, cid) for c in row if c != truth]
-            own_signal = hint_signal(self.d["board"], truth, focus, cid)
-            direct = own_signal - max(signals)
-            # Own cards can only be positive seals; silence applies to incoming mail.
-            return max(0.0, direct) * priorities[focus] + 0.30 * max(0.0, gain(cid))
+            margins = self.ghost_margins(cid)
+            # Retain a distinct clue for ANY unresolved category, not just the
+            # current maximum priority (which can change after the next discussion).
+            useful = []
+            for i, truth in enumerate(self.d["truth"]):
+                scores = context["scores"][i]
+                gap = scores[truth] - max(v for c, v in scores.items() if c != truth)
+                if gap < 1.25:
+                    useful.append(max(0.0, margins[i]) * priorities[i])
+            # Redundant cards should make room for new draws using the legal
+            # one-card discard, even if another category has a small gain.
+            return max(useful, default=0.0) + 0.15 * max(0.0, gain(cid))
 
         discard = min(pool, key=retention) if pool else None
         if discard is not None and (retention(discard) >= 0.12 or (context is not None and context["remaining"] <= 1)):
@@ -1021,12 +1094,14 @@ class Game:
             factors["unsupported_shift"] = 0.0
             factors["claim_alignment"] = 0.0
             factors["verified_conflict"] = 0.0
+            factors["unbacked_churn"] = 0.0
         claims = sorted((note for note in knowledge["notes"] if note["pid"] == target), key=lambda n: n["round"])
         previous = {}
         if adaptive:
             # Use evidence available at the time of a statement.
             # A wrong guess under weak evidence is not deception.
             repeated = Counter()
+            distinct = {}
             for note in claims:
                 visible = public_evidence_at(knowledge, note["round"])
                 for key, cid in note["leads"].items():
@@ -1044,12 +1119,18 @@ class Game:
                         if repeated[(key, cid)] > 1:
                             factors["persistence"] += 0.65 * conflict
                     old = previous.get(key)
+                    seen = distinct.setdefault(key, set())
                     if old is not None and old != cid:
                         delta = scores[cid] - scores[old]
                         if delta > 0.18:
                             factors["revision"] -= min(0.10, delta * 0.08)
                         elif delta < -0.18 and confidence > 0.18:
                             factors["unsupported_shift"] += min(0.30, -delta * 0.22)
+                        # Three distinct endorsed versions with no evidence gain
+                        # are a weak signal only; honest uncertainty remains legal.
+                        if cid not in seen and len(seen) >= 2 and delta <= 0.18:
+                            factors["unbacked_churn"] += 0.12
+                    seen.add(cid)
                     previous[key] = cid
                 claim = note["claim"]
                 tests = note["tests"]
@@ -1062,7 +1143,7 @@ class Game:
                     if target != pid and claim in receipt.get("sent_cards", [receipt.get("sent")]):
                         factors["verified_conflict"] += 1.5
             for key, limit in (("evidence_conflict", 0.55), ("persistence", 1.0),
-                               ("unsupported_shift", 0.9), ("claim_alignment", 0.24)):
+                               ("unsupported_shift", 0.9), ("claim_alignment", 0.24), ("unbacked_churn", 0.24)):
                 factors[key] = min(limit, factors[key])
             factors["revision"] = max(-0.20, factors["revision"])
             factors["verified_conflict"] = min(3.0, factors["verified_conflict"])
