@@ -18,6 +18,8 @@ STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state"))
 CATEGORIES = ("Мотив", "Место", "Способ")
 MARKS = {"echo": "Эхо", "silence": "Тишина", "seal": "Печать"}
 MODES = {
+    "classic": "Классическая партия",
+    "coop": "Кооператив",
     "killer": "Один убийца",
     "accomplice": "Убийца и сообщник",
     "witness": "Убийца и свидетель",
@@ -76,15 +78,24 @@ class Game:
         self.d = data
 
     @classmethod
-    def new(cls, mode, total, humans, human_ghost, *, seed=None):
+    def new(cls, mode, total, humans, human_ghost, *, marked=False, seed=None):
         if (mode not in MODES or type(total) is not int or type(humans) is not int
-                or not 4 <= total <= 12 or not 1 <= humans <= total
-                or type(human_ghost) is not bool or (human_ghost and humans < 2)
+                or not (2 if mode == "coop" else 4) <= total <= 12 or not 1 <= humans <= total
+                or type(marked) is not bool or type(human_ghost) is not bool
                 or (not human_ghost and humans == total)):
             raise ValueError("Неверный состав стола.")
         seed = random.SystemRandom().randrange(1 << 48) if seed is None else seed
         rng = random.Random(seed)
-        roles = ["killer"] + ([mode] if mode != "killer" else [])
+        if mode == "coop":
+            roles = []
+        elif mode == "classic":
+            roles = ["killer"]
+            if total >= 7:
+                roles += ["accomplice", "witness"]
+            if total >= 10:
+                roles += ["accomplice", "expert"]
+        else:
+            roles = ["killer"] + ([mode] if mode != "killer" else [])
         roles += ["detective"] * (total - len(roles) - 1)
         rng.shuffle(roles)
         nicknames = list(NAMES)
@@ -102,6 +113,9 @@ class Game:
         rng.shuffle(deck)
         board = []
         for _ in CATEGORIES:
+            if mode in ("classic", "coop"):
+                board.append([deck.pop() for _ in range(4)])
+                continue
             row, themes = [], set()
             for cid in tuple(deck):
                 main = CARDS[cid]["main"]
@@ -112,10 +126,11 @@ class Game:
                     if len(row) == 4:
                         break
             board.append(row)
-        rounds = 5 if total == 4 else 4 if total <= 7 else 3 if total <= 10 else 2
+        rounds = 5 if total <= 4 else 4 if total <= 7 else 3 if total <= 10 else 2
         return cls(dict(
             id=uuid.uuid4().hex, rev=0, seed=seed, mode=mode, phase="role", queue=local[:],
             players=players, local=local, board=board, deck=deck, discard=[], truth=[],
+            schema=2, marked=marked, sequential=True, exposed_role=None, winners=[],
             rounds=rounds, round=0, letters=[], mail=[], notes=[], history=[], archive=[],
             ballots={}, counts=[], decided={}, tie=[], pass_no=0, arrested=None,
             excluded=[], successes=0, solved=False, winner="", exposed=None,
@@ -131,6 +146,21 @@ class Game:
 
     def role_id(self, role):
         return next((i for i, p in enumerate(self.d["players"]) if p["role"] == role), None)
+
+    def role_ids(self, role):
+        return [i for i, p in enumerate(self.d["players"]) if p["role"] == role]
+
+    @property
+    def marked(self):
+        return self.d.get("marked", True)
+
+    @property
+    def cooperative(self):
+        return self.d["mode"] == "coop"
+
+    @property
+    def duel(self):
+        return len(self.d["players"]) == 2
 
     def name(self, pid):
         return self.d["players"][pid]["name"]
@@ -178,11 +208,14 @@ class Game:
         offset = (self.d["round"] - 1) % len(local) if local else 0
         self.set_phase("intro")
         self.d["writers"] = local[offset:] + local[:offset]
+        self.d["first_sender"] = None
 
     def advance(self):
         if self.phase == "board":
             killer = self.role_id("killer")
-            if killer in self.d["local"]:
+            if self.cooperative and 0 in self.d["local"]:
+                self.set_phase("truth", [0])
+            elif killer in self.d["local"]:
                 self.set_phase("truth", [killer])
             else:
                 self.d["truth"] = [row[int(self.noise("secret", i) * len(row))]
@@ -194,7 +227,7 @@ class Game:
                 self.collect_bot_mail()
         elif self.phase == "reveal":
             order = list(range(1, len(self.d["players"])))
-            first = self.d["writers"][0]
+            first = self.d.get("first_sender") or order[0]
             offset = order.index(first)
             self.d["speakers"] = order[offset:] + order[:offset]
             self.next_speaker()
@@ -204,7 +237,7 @@ class Game:
             if self.d["round"] < self.d["rounds"]:
                 self.start_round()
             else:
-                self.start_vote(["0", "1", "2", "suspect"])
+                self.start_vote(["0"] if self.d.get("sequential") else ["0", "1", "2", "suspect"])
         elif self.phase == "appeal":
             self.start_vote(self.d["tie"], retry=True)
         elif self.phase == "arrest":
@@ -229,8 +262,10 @@ class Game:
             for entry in self.d["letters"]:
                 for hint in entry["echo"]:
                     score += 0.56 * affinity(cid, hint)
+                for hint in entry.get("extra", []):
+                    score += 0.56 * affinity(cid, hint)
                 if entry["seal"] is not None:
-                    score += 0.43 * affinity(cid, entry["seal"])
+                    score += (0.43 if self.marked else 0.56) * affinity(cid, entry["seal"])
                 for hint in entry["silence"]:
                     score -= 0.36 * affinity(cid, hint)
             if role in ("killer", "accomplice", "expert"):
@@ -242,12 +277,16 @@ class Game:
             results[cid] = score + self.noise(purpose, pid, category, cid) * spread
         return results
 
-    def post(self, pid, cid, discard, check=None):
+    def post(self, pid, cid, discard, check=None, second=None):
         hand = self.d["players"][pid]["hand"]
         round_mail = self.d.setdefault("mail_log", {}).setdefault(str(self.d["round"]), {})
-        round_mail[str(pid)] = dict(sent=cid, hand=hand[:], check=check)
-        self.d["mail"].append(cid)
-        hand.remove(cid)
+        sent = [cid] if second is None else [cid, second]
+        round_mail[str(pid)] = dict(sent=cid, sent_cards=sent, hand=hand[:], check=check)
+        if self.d.get("first_sender") is None:
+            self.d["first_sender"] = pid
+        self.d["mail"].extend(sent)
+        for card in sent:
+            hand.remove(card)
         if discard is not None:
             hand.remove(discard)
             self.d["discard"].append(discard)
@@ -273,32 +312,49 @@ class Game:
                 best = max(p["hand"], key=lambda cid: max(affinity(cid, lead) for lead in leads)
                            + self.noise("send", pid, cid))
             remaining = [cid for cid in p["hand"] if cid != best]
+            second = None
+            if self.duel:
+                second = max(remaining, key=lambda cid: max(affinity(cid, lead) for lead in leads))
+                remaining.remove(second)
             discard = min(remaining, key=lambda cid: self.noise("discard", pid, cid))
-            self.post(pid, best, discard if self.noise("redraw", pid) < 0.55 else None, check)
+            self.post(pid, best, discard if self.noise("redraw", pid) < 0.55 else None, check, second)
         self.d["mail"].sort(key=lambda cid: self.noise("envelope", cid))
         if self.d["players"][0]["local"]:
             self.set_phase("sort", [0])
             return
         sent = self.d["mail"]
+        if not self.marked:
+            hints = [cid for cid in sent if max(affinity(cid, target) for target in self.d["truth"]) > 0
+                     and self.relative(cid) > 0.6]
+            hand = sorted(self.d["players"][0]["hand"], key=self.relative, reverse=True)
+            own = [cid for cid in hand[:2 if self.duel else 1] if self.relative(cid) >= 1.5]
+            self.publish(hints, None, own[0] if own else None, extra=own[1:])
+            return
         best = max(sent, key=self.relative)
         echo = best if self.relative(best) > 0.6 else None
         available = [cid for cid in sent if cid != echo]
-        most_misleading = min(available, key=self.relative)
-        silence = most_misleading if self.relative(most_misleading) < -0.6 else None
+        most_misleading = min(available, key=self.relative) if available else None
+        silence = most_misleading if most_misleading is not None and self.relative(most_misleading) < -0.6 else None
         hand = self.d["players"][0]["hand"]
         seal = max(hand, key=self.relative)
         if self.relative(seal) < (1.5 if echo is None else 2.6):
             seal = None
-        self.publish(echo, silence, seal)
+        extra = []
+        if self.duel:
+            others = sorted((cid for cid in hand if cid != seal), key=self.relative, reverse=True)
+            if seal is not None and self.relative(others[0]) >= 1.5:
+                extra = [others[0]]
+        self.publish(echo, silence, seal, extra=extra)
 
-    def publish(self, echo, silence, seal, discard=None, comments=None):
-        missing = [cid for cid in self.d["mail"] if cid not in (echo, silence)]
-        self.d["letters"].append(dict(round=self.d["round"], echo=[] if echo is None else [echo],
-                                      silence=[] if silence is None else [silence], seal=seal,
+    def publish(self, echo, silence, seal, discard=None, comments=None, *, extra=()):
+        hints = echo if isinstance(echo, list) else ([] if echo is None else [echo])
+        missing = [cid for cid in self.d["mail"] if cid not in hints and cid != silence]
+        self.d["letters"].append(dict(round=self.d["round"], echo=hints,
+                                      silence=[] if silence is None else [silence], seal=seal, extra=list(extra),
                                       missing=len(missing), comments=comments or {}))
         self.d["archive"].append(missing)
         hand = self.d["players"][0]["hand"]
-        for cid in (seal, discard):
+        for cid in (seal, discard, *extra):
             if cid is not None:
                 hand.remove(cid)
         if discard is not None:
@@ -323,15 +379,16 @@ class Game:
             scores = self.theories(pid, category, "talk")
             leads[str(category)] = max(scores, key=scores.get)
         suspect = None
-        if final_round or self.noise("name a suspect", pid) < 0.48:
+        if not self.cooperative and (final_round or self.noise("name a suspect", pid) < 0.48):
             suspects = [i for i in range(1, len(self.d["players"])) if i != pid]
             suspect = max(suspects, key=lambda target: self.suspicion(pid, target))
         receipt = self.mail_receipt(pid)
         claim = receipt.get("sent")
-        if claim is not None and self.d["players"][pid]["role"] in ("killer", "accomplice"):
+        if claim is not None and self.d["players"][pid]["role"] in ("killer", "accomplice") and not self.claim_opened(claim):
             if self.noise("bluff in discussion", pid) < 0.72:
-                alternatives = [cid for cid in receipt["hand"] if cid != claim]
-                claim = max(alternatives, key=lambda cid: max(affinity(cid, lead) for lead in leads.values()))
+                alternatives = [cid for cid in receipt["hand"] if cid != claim and not self.claim_opened(cid)]
+                if alternatives:
+                    claim = max(alternatives, key=lambda cid: max(affinity(cid, lead) for lead in leads.values()))
         tests = []
         if claim is not None and receipt.get("check") is None:
             tests = [max(leads.values(), key=lambda cid: affinity(claim, cid))]
@@ -362,7 +419,7 @@ class Game:
             ids = [pid for pid in range(1, len(self.d["players"])) if pid not in self.d["excluded"]]
         else:
             ids = self.d["board"][int(key)]
-        if self.d["pass_no"]:
+        if self.d["pass_no"] and not self.d.get("sequential"):
             leaders = self.d["leaders"][key]
             ids = [cid for cid in ids if cid in leaders]
         return ids
@@ -403,7 +460,7 @@ class Game:
             highest = max(votes.values())
             tied = [value for value, count in votes.items() if count == highest]
             chair = self.d["ballots"].get(str(self.d["local"][0]), {}).get(key)
-            if len(self.d["local"]) == 1 and chair in tied:
+            if not self.d.get("sequential") and len(self.d["local"]) == 1 and chair in tied:
                 tied = [chair]
             if len(tied) == 1:
                 self.d["decided"][key] = tied[0]
@@ -419,27 +476,38 @@ class Game:
             self.d["tie"] = list(leaders)
             self.set_phase("appeal")
             return
-        suspect = self.d["decided"]["suspect"]
-        if suspect is not None and suspect == self.role_id("accomplice"):
-            self.d["excluded"] = [suspect]
+        if self.d.get("sequential") and keys[0] != "suspect":
+            index = int(keys[0])
+            if index < 2:
+                self.start_vote([str(index + 1)])
+                return
+            if not self.cooperative:
+                self.start_vote(["suspect"])
+                return
+        suspect = self.d["decided"].get("suspect")
+        if suspect is not None and suspect in self.role_ids("accomplice"):
+            self.d["excluded"].append(suspect)
             self.set_phase("arrest")
             return
         self.d["arrested"] = suspect
         self.d["successes"] = sum(self.d["decided"].get(str(i)) == cid
                                   for i, cid in enumerate(self.d["truth"]))
         killer = self.role_id("killer")
-        self.d["solved"] = self.d["successes"] == 3 or (self.d["successes"] == 2 and suspect == killer)
-        if self.d["solved"] and self.d["mode"] in ("witness", "expert"):
+        self.d["solved"] = self.d["successes"] == 3 or (not self.cooperative and self.d["successes"] == 2 and suspect == killer)
+        special = [role for role in ("witness", "expert") if self.role_ids(role)]
+        if self.d["solved"] and special:
             if self.d["players"][killer]["local"]:
                 self.set_phase("counter", [killer])
                 return
             others = [pid for pid in range(1, len(self.d["players"])) if pid != killer]
-            self.end(max(others, key=self.counter_suspicion))
+            role, target = max(((role, pid) for role in special for pid in others),
+                               key=lambda pair: self.counter_suspicion(pair[1], pair[0]))
+            self.end(target, role)
         else:
             self.end()
 
-    def counter_suspicion(self, candidate):
-        mode = self.d["mode"]
+    def counter_suspicion(self, candidate, role=None):
+        mode = role or self.d["mode"]
         score = self.noise("counter", candidate) * 2.1
         for note in self.d["history"]:
             if note["pid"] == candidate:
@@ -451,10 +519,18 @@ class Game:
                     score += 0.52 * matches / max(1, len(leads))
         return score
 
-    def end(self, exposed=None):
+    def end(self, exposed=None, exposed_role=None):
         self.d["exposed"] = exposed
-        betrayed = exposed is not None and exposed == self.role_id(self.d["mode"])
-        self.d["winner"] = "detectives" if self.d["solved"] and not betrayed else "killer"
+        role = exposed_role or self.d["mode"]
+        self.d["exposed_role"] = role if exposed is not None else None
+        betrayed = exposed is not None and exposed in self.role_ids(role)
+        good = self.d["solved"] and not betrayed
+        self.d["winner"] = "detectives" if good else "killer"
+        self.d["winners"] = [pid for pid, p in enumerate(self.d["players"])
+                             if (good and p["role"] not in ("killer", "accomplice"))
+                             or (not good and p["role"] == "killer")
+                             or (not self.d["solved"] and p["role"] == "accomplice"
+                                 and pid not in self.d["excluded"])]
         self.set_phase("result")
 
     def category(self, key):
@@ -478,7 +554,12 @@ class Game:
         latest = {note["pid"]: note["suspect"] for note in notes if note["suspect"] is not None}
         return Counter(latest.values())
 
+    def claim_opened(self, cid):
+        return any(c["value"] == cid for c in self.view_letter_cards())
+
     def claim_mark(self, cid):
+        if not self.marked:
+            return None
         letter = next((letter for letter in self.d["letters"] if letter["round"] == self.d["round"]), None)
         if letter:
             for key in ("echo", "silence"):
@@ -509,7 +590,7 @@ class Game:
                 player=self.name(note["pid"]),
                 suspect=self.name(suspect) if suspect is not None else None,
                 suspicions=suspicions[suspect] if suspect is not None else 0,
-                claim=card_view(claim, mark=mark, disputed=claim_counts[claim] > 1) if claim is not None else None,
+                claim=card_view(claim, mark=mark, opened=self.claim_opened(claim), disputed=claim_counts[claim] > 1) if claim is not None else None,
                 tests=[card_view(cid) for cid in clue_list(note, "tests", "test")],
                 checking=self.name(check["pid"]) if check is not None else None,
                 clues=[card_view(cid, key=key, category=self.category(key))
@@ -524,9 +605,9 @@ class Game:
             entries = []
             for pid, receipt in sorted(receipts.items(), key=lambda item: int(item[0])):
                 claim = notes.get((number, pid), {}).get("claim")
-                entries.append(dict(player=self.name(int(pid)), sent=CARDS[receipt["sent"]]["name"],
+                entries.append(dict(player=self.name(int(pid)), sent=" · ".join(CARDS[cid]["name"] for cid in receipt.get("sent_cards", [receipt["sent"]])),
                                     claim=CARDS[claim]["name"] if claim is not None else None,
-                                    bluff=claim is not None and claim != receipt["sent"]))
+                                    bluff=claim is not None and claim not in receipt.get("sent_cards", [receipt["sent"]])))
             audit.append(dict(round=int(number), entries=entries))
         return audit
 
@@ -555,8 +636,13 @@ class Game:
         lines = []
         if role in ("accomplice", "witness"):
             lines.append(tally_line("Убийца", self.name(self.role_id("killer"))))
-        if role == "killer" and self.d["mode"] == "accomplice":
-            lines.append(tally_line("Твой сообщник", self.name(self.role_id("accomplice"))))
+        if role in ("killer", "accomplice"):
+            allies = [self.name(i) for i in self.role_ids("accomplice") if i != pid]
+            if allies:
+                lines.append(tally_line("Сообщники", ", ".join(allies)))
+        if role == "ghost":
+            lines += [tally_line(self.name(i), ROLES[p["role"]][0])
+                      for i, p in enumerate(self.d["players"]) if i]
         if role in ("killer", "accomplice", "expert", "ghost"):
             lines += [tally_line(CATEGORIES[i], CARDS[cid]["name"])
                       for i, cid in enumerate(self.d["truth"])]
@@ -582,6 +668,8 @@ class Game:
                 return [group("seal", "Карты на руке", hand, False)]
             if phase == "mail":
                 groups = [group("send", "Из руки в ящик", hand)]
+                if self.duel:
+                    groups.append(group("send2", "Вторая карта", hand))
                 checks = self.last_round_claims(self.actor)
                 if checks:
                     groups.append(group("check", "Чью версию перепроверяешь", [
@@ -590,10 +678,15 @@ class Game:
                         for n in checks], False))
                 return groups + [group("discard", "Сбросить и заменить", hand, False)]
             mail = [card_view(cid) for cid in self.d["mail"]]
-            return [group("echo", "Эхо · связь с истиной", mail, False),
-                    group("silence", "Тишина · ложный след", mail, False),
-                    group("seal", "Личная печать · карта с руки", hand, False),
-                    group("discard", "Сбросить и заменить", hand, False)]
+            groups = ([group("echo", "Эхо · связь с истиной", mail, False),
+                       group("silence", "Тишина · ложный след", mail, False),
+                       group("seal", "Личная печать · карта с руки", hand, False)]
+                      if self.marked else
+                      [group("echo", "Открыть подходящие письма", mail, False, multiple=True),
+                       group("seal", "Добавить карту с руки", hand, False)])
+            if self.duel:
+                groups.append(group("seal2", "Вторая карта с руки", hand, False))
+            return groups + [group("discard", "Сбросить и заменить", hand, False)]
         if phase == "note":
             suspect = group("person", "Кого подозреваешь", self.people(
                 pid for pid in range(1, len(self.d["players"])) if pid != self.actor), False)
@@ -603,7 +696,7 @@ class Game:
             groups = []
             if receipt:
                 available = receipt["hand"] + [c["value"] for c in self.view_letter_cards()
-                                               if c["mark"] in ("Эхо", "Тишина")]
+                                               if not self.marked or c.get("mark") in ("Эхо", "Тишина")]
                 groups.append(group("claim", "Какую карту назовёшь", [
                     card_view(cid, detail="Ты отправил эту карту" if cid == receipt["sent"] else None)
                     for cid in dict.fromkeys(available)], False))
@@ -619,13 +712,17 @@ class Game:
                 for category in categories:
                     category["required"] = False
                 groups.extend(categories)
-            return groups + [suspect]
+            return groups if self.cooperative else groups + [suspect]
         if phase == "ballot":
             return self.ballot_groups()
         if phase == "counter":
-            role = ROLES[self.d["mode"]][0]
-            return [group("person", f"Кто {role.lower()}?",
-                          self.people(pid for pid in range(1, len(self.d["players"])) if pid != self.actor))]
+            special = [role for role in ("witness", "expert") if self.role_ids(role)]
+            groups = [group("person", "Кого раскрыть?", self.people(
+                pid for pid in range(1, len(self.d["players"])) if pid != self.actor))]
+            if len(special) > 1:
+                groups.append(group("role", "Какая тайная роль?", [
+                    dict(value=i, label=ROLES[role][0], glyph="●") for i, role in enumerate(special)]))
+            return groups
         return []
 
     def submit(self, picks):
@@ -661,11 +758,13 @@ class Game:
             self.open_letter(picks.get("seal"), comments.get("seal", ""))
         elif phase == "mail":
             cid, discard = picks["send"], picks.get("discard")
-            if cid == discard:
-                raise ValueError("Для сброса выбери другую карту.")
+            second = picks.get("send2")
+            selected = [c for c in (cid, second, discard) if c is not None]
+            if len(set(selected)) != len(selected):
+                raise ValueError("Выбери разные карты.")
             check = next((dict(pid=n["pid"], clues=clue_list(n, "tests", "test"))
                           for n in self.last_round_claims(pid) if n["pid"] == picks.get("check")), None)
-            self.post(pid, cid, discard, check)
+            self.post(pid, cid, discard, check, second)
             self.d["queue"].pop(0)
             if self.actor is None:
                 self.collect_bot_mail()
@@ -674,9 +773,12 @@ class Game:
             if echo is not None and echo == silence:
                 raise ValueError("Одно письмо может получить только одну отметку.")
             seal, discard = picks.get("seal"), picks.get("discard")
-            if seal is not None and seal == discard:
-                raise ValueError("Для сброса выбери другую карту.")
-            self.publish(echo, silence, seal, discard, self.ghost_comments(picks, MARKS))
+            extra = picks.get("seal2")
+            selected = [c for c in (seal, extra, discard) if c is not None]
+            if len(set(selected)) != len(selected):
+                raise ValueError("Выбери разные карты.")
+            self.publish(echo, silence, seal, discard, self.ghost_comments(picks, (*MARKS, "seal2")),
+                         extra=[] if extra is None else [extra])
         elif phase == "note":
             leads = {g["key"]: picks[g["key"]] for g in groups
                      if g["key"].isdigit() and picks.get(g["key"]) is not None}
@@ -696,7 +798,8 @@ class Game:
             if self.actor is None:
                 self.finish_vote()
         elif phase == "counter":
-            self.end(picks["person"])
+            special = [role for role in ("witness", "expert") if self.role_ids(role)]
+            self.end(picks["person"], special[picks.get("role", 0)])
 
     def ghost_comments(self, picks, marks):
         comments = picks.get("comments", {})
@@ -728,6 +831,7 @@ class Game:
         for entry in self.d["letters"]:
             number = entry["round"]
             marked = [("echo", cid) for cid in entry["echo"]]
+            marked += [("seal2", cid) for cid in entry.get("extra", [])]
             marked += [("silence", cid) for cid in entry["silence"]]
             if entry["seal"] is not None:
                 marked.append(("seal", entry["seal"]))
@@ -747,7 +851,7 @@ class Game:
                         comment = "Я оставил эту карту как подсказку к истинной улике."
                     else:
                         comment = "Прямой связи с истинной уликой не нашлось, но эта карта меньше уводила к ложным версиям."
-                explanations.append(dict(card=card_view(card, mark=MARKS[mark]), comment=comment,
+                explanations.append(dict(card=card_view(card, mark=MARKS.get(mark, "Печать") if self.marked else None), comment=comment,
                                          links=links, other=other))
             archived = [] if number == 0 else self.d["archive"][number - 1]
             if explanations:
@@ -769,11 +873,16 @@ class Game:
                                 correct=vote == cid))
         return verdict
 
-    @staticmethod
-    def letter_cards(entry):
+    def letter_cards(self, entry):
+        if not self.marked:
+            cards = entry["echo"] + entry.get("extra", []) + ([] if entry["seal"] is None else [entry["seal"]])
+            rng = random.Random(repr((self.d["seed"], entry["round"], "public hints")))
+            rng.shuffle(cards)
+            return [card_view(cid) for cid in cards]
         return ([card_view(cid, mark=MARKS["echo"]) for cid in entry["echo"]]
                 + [card_view(cid, mark=MARKS["silence"]) for cid in entry["silence"]]
-                + ([card_view(entry["seal"], mark=MARKS["seal"])] if entry["seal"] is not None else []))
+                + ([card_view(entry["seal"], mark=MARKS["seal"])] if entry["seal"] is not None else [])
+                 + [card_view(cid, mark=MARKS["seal"]) for cid in entry.get("extra", [])])
 
     def view_letter_cards(self):
         if self.d["letters"] and self.d["letters"][-1]["round"] == self.d["round"]:
@@ -788,16 +897,22 @@ class Game:
         if phase == "note" and self.d["round"] == self.d["rounds"]:
             brief = "Расскажи о письме, затем озвучь версии перед голосованием."
         if phase == "intro":
-            brief = "Выберите, какую версию хотите проверить. Карты отправляются тайно, по одной с руки."
+            brief = "Выберите версию. Отправьте две карты тайно." if self.duel else "Выберите версию. Отправьте одну карту тайно."
+        if phase == "board" and self.cooperative:
+            brief = "Придумайте гипотезы для каждой улики. Призрак тайно выберет истину."
+        if phase == "sort" and not self.marked:
+            brief = "Выбери все подходящие письма. Остальные исчезнут. Можно добавить карты с руки."
+        if phase == "mail" and self.duel:
+            brief = "Отправь две разные карты. Можно также сбросить третью. Рука пополнится до пяти."
         if phase == "statement" and not self.d["speakers"]:
             action = "К итогам обсуждения"
         if phase == "ballot" and self.d["pass_no"]:
             title = "Повторное голосование"
-            brief = "Голосование среди лидеров. При повторной ничьей категория останется без ответа."
+            brief = "При повторной ничьей решение не принято." if self.d.get("sequential") else "Голосование среди лидеров. При повторной ничьей категория останется без ответа."
         if phase == "arrest":
-            brief = f'{self.name(self.d["excluded"][0])} — сообщник. Он выбывает из голосования за повторный арест.'
+            brief = f'{self.name(self.d["excluded"][-1])} — сообщник. Он выбывает из голосования за повторный арест.'
         if phase == "counter":
-            brief = f'Дело раскрыто. Выбери, кто играет роль «{ROLES[self.d["mode"]][0]}». У тебя одна попытка.'
+            brief = 'Дело раскрыто. Назови игрока и его тайную роль. У тебя одна попытка.'
         actor = None
         if self.actor is not None:
             p = self.d["players"][self.actor]
@@ -821,7 +936,7 @@ class Game:
         statement = notes[-1] if speaker and notes and notes[-1]["player"] == speaker else None
         return dict(id=self.d["id"], rev=self.d["rev"], phase=phase, title=title, brief=brief,
                     action=action, mode=MODES[self.d["mode"]], round=self.d["round"],
-                    rounds=self.d["rounds"], actor=actor, groups=self.groups(), board=board,
+                    rounds=self.d["rounds"], marked=self.marked, cooperative=self.cooperative, actor=actor, groups=self.groups(), board=board,
                     roster=roster, letters=letters, notes=notes, speaker=speaker, statement=statement,
                     tallies=self.d["counts"] if phase in ("appeal", "arrest", "result") else [],
                     outcome=self.outcome() if result else [],
@@ -832,17 +947,20 @@ class Game:
 
     def outcome(self):
         arrested = self.d["arrested"]
-        lines = [tally_line("Арест", "нет решения" if arrested is None else self.name(arrested)),
-                 tally_line("Убийца", self.name(self.role_id("killer")))]
-        if self.d["excluded"]:
-            lines.append(tally_line("Первый арест", self.name(self.d["excluded"][0]) + " · сообщник"))
+        lines = [] if self.cooperative else [
+            tally_line("Арест", "нет решения" if arrested is None else self.name(arrested)),
+            tally_line("Убийца", self.name(self.role_id("killer")))]
+        for pid in self.d["excluded"]:
+            lines.append(tally_line("Арестован сообщник", self.name(pid)))
+        if "winners" in self.d:
+            lines.append(tally_line("Победители", ", ".join(self.name(pid) for pid in self.d["winners"]) or "нет"))
         if self.d["exposed"] is not None:
             exposed = self.d["exposed"]
-            role = self.d["mode"]
+            role = self.d.get("exposed_role") or self.d["mode"]
             verdict = "роль раскрыта" if exposed == self.role_id(role) else "ошибка"
             killer = self.name(self.role_id("killer"))
             lines.append(tally_line("Последний ход убийцы",
-                                    f"{killer} → {self.name(exposed)} · {verdict}"))
+                                    f"{killer} → {self.name(exposed)} · {ROLES[role][0]} · {verdict}"))
         return lines
 
 
@@ -897,7 +1015,7 @@ def public_view(game):
     view = game.view()
     if game.phase == "result":
         detectives = game.d["winner"] == "detectives"
-        view["title"] = "Детективы победили" if detectives else "Убийца победил"
+        view["title"] = "Детективы победили" if detectives else ("Дело не раскрыто" if game.cooperative else "Убийца победил")
         view["success"] = detectives
         view["brief"] = ("Дело раскрыто." if detectives else
                          "Дело раскрыто, но убийца вычислил особую роль." if game.d["solved"]
