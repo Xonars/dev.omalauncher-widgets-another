@@ -305,7 +305,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
     }
   }
 
-  component PlayingCard(entry, tint = #d7ad74, personal = null, marked = false, voting = false, mini = false) {
+  component PlayingCard(entry, tint = #d7ad74, personal = null, marked = false, voting = false, mini = false, boardColumn = false) {
     let tone = entry.correct ? moss : (entry.voted ? ash : get(markColors, entry.mark, tint))
     let personalTone = personal == "likely" ? moss : (personal == "unlikely" ? ash : tone)
     let detail = entry.mark ?? entry.detail ?? (entry.correct ? "Истинная улика" : (entry.voted ? "Выбор стола" : ""))
@@ -315,10 +315,10 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
         fill: width; gap: 3; padding: 4; radius: 7; border: 1
         borderColor: marked ? tone : (entry.correct || entry.voted || markText != "" ? personalTone : alpha(tone, 0.38))
         background: mix(panel, tone, marked ? 0.28 : 0.075)
-        Image { src: entry.artwork; fill: width; height: mini ? 72 : (showDesk ? 85 : 100); radius: 4; fit: contain; label: entry.label; offset: [0, marked ? -2 : 0]; animate offset: 180ms }
+        Image { src: entry.artwork; fill: width; height: boardColumn ? min(86, max(58, layoutHeight * 0.095)) : (mini ? 72 : (showDesk ? 85 : 100)); radius: 4; fit: contain; label: entry.label; offset: [0, marked ? -2 : 0]; animate offset: 180ms }
         Box {
-          height: mini ? 25 : 32; fill: width; align: center
-          Text { text: entry.label; font: sans; fontSize: mini ? 11 : 13; fontWeight: 700; align: center; maxLines: 2; color: parchment }
+          height: boardColumn ? 26 : (mini ? 25 : 32); fill: width; align: center
+          Text { text: entry.label; font: sans; fontSize: boardColumn ? 12 : (mini ? 11 : 13); fontWeight: 700; align: center; maxLines: 2; color: parchment }
         }
         if marked || detail != "" || markText != "" { Box {
           height: mini ? 20 : 29; fill: width; align: center
@@ -370,8 +370,8 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
     PlayingCard { entry: entry; tint: tint; marked: marked; voting: voting; personal: personal }
   }
 
-  component TableCard(entry, tint = #d7ad74, personal = null, marked = false, mini = true) {
-    PlayingCard { entry: entry; tint: tint; personal: personal; marked: marked; mini: mini }
+  component TableCard(entry, tint = #d7ad74, personal = null, marked = false, mini = true, boardColumn = false) {
+    PlayingCard { entry: entry; tint: tint; personal: personal; marked: marked; mini: mini; boardColumn: boardColumn }
   }
 
   component CategoryLabel(label, tint = #d7ad74) {
@@ -383,20 +383,26 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
   }
 
   component Table(rows, annotate = true) {
-    Column {
-      gap: 7
-      for category in rows {
+    let verticalCategories = illustrated && !showDesk && layoutWidth >= 320 && len(rows) == 3
+    Grid {
+      columns: verticalCategories ? 3 : 1
+      gap: 5
+      for category in rows key category.key {
         let tone = get(categoryColors, category.key, gold)
         Column {
-          gap: 4
+          fill: width; gap: 4
           padding: 5; border: 1; borderColor: alpha(tone, 0.32); radius: 10
           background: linear(0, 0, 1, 1, [mix(shell, tone, 0.09), shell])
-          CategoryLabel { label: category.label; tint: tone }
+          if verticalCategories {
+            Text { text: category.label; color: tone; font: sans; fontSize: 14; fontWeight: 700; align: center; maxLines: 1 }
+          } else {
+            CategoryLabel { label: category.label; tint: tone }
+          }
           Grid {
-            columns: smallCardColumns
+            columns: verticalCategories ? 1 : smallCardColumns
             gap: 4
             for clue in category.cards key clue.value {
-              Box { fill: width; onLongPress: { if illustrated && clue.artwork != null { previewCard = clue } }; TableCard { entry: clue; tint: tone; personal: annotate && canNotebook ? get(game.notebook.marks, "${int(clue.value)}", null) : null } }
+              Box { fill: width; onLongPress: { if illustrated && clue.artwork != null { previewCard = clue } }; TableCard { entry: clue; tint: tone; boardColumn: verticalCategories; personal: annotate && canNotebook ? get(game.notebook.marks, "${int(clue.value)}", null) : null } }
             }
           }
         }
