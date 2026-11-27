@@ -665,6 +665,37 @@ class GhostLettersRules(unittest.TestCase):
             self.assertIn("LettersPanel { letters: sheet.letters }", source)
             self.assertIn("columns: verticalCategories ? 3 : 1", source)
 
+    def test_detective_hand_respects_local_turn_privacy(self):
+        g = Game.new("classic", 6, 1, False, seed=42)
+        pid = g.d["local"][0]
+        g.d["round"] = 1
+        g.refill(pid)
+        g.set_phase("discussion")
+        self.assertEqual([c["value"] for c in g.detective_hand_view()], g.d["players"][pid]["hand"])
+        g.set_phase("role", [pid])
+        self.assertEqual(g.detective_hand_view(), [])
+        multi = Game.new("classic", 6, 2, False, seed=42)
+        multi.d["round"] = 1
+        a, b = multi.d["local"]
+        multi.refill(a)
+        multi.refill(b)
+        multi.set_phase("discussion")
+        self.assertEqual(multi.detective_hand_view(), [])
+        multi.set_phase("mail", [a])
+        self.assertEqual([c["value"] for c in multi.detective_hand_view()], multi.d["players"][a]["hand"])
+        multi.set_phase("mail", [b])
+        self.assertEqual([c["value"] for c in multi.detective_hand_view()], multi.d["players"][b]["hand"])
+
+    def test_unified_table_components(self):
+        for path in (ROOT / "local/phone-widgets/ghost-letters.owl",
+                     ROOT / "apps/xonars/ghost-letters/app.owl"):
+            source = path.read_text()
+            self.assertIn("component DetectiveHand(hand, editable = false)", source)
+            self.assertIn("component DiscardPile(hand)", source)
+            self.assertIn('notebookTab == "people" && game.investigation != null', source)
+            self.assertIn('key: "", label: "Стол"', source)
+            self.assertNotIn('key: "letters", label: "Письма"', source)
+
     def test_package_matches_source(self):
         row = next(x for x in json.loads((ROOT / "store-collection.json").read_text()) if x["source"] == "ghost-letters.owl")
         with zipfile.ZipFile(ROOT / row["resources"]) as z:

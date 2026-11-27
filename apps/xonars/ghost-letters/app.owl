@@ -97,6 +97,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
   state evidence = ""
   state reviewRound = null
   state lettersPanelOpen = true
+  state detectiveHandOpen = true
   state choices = {}
   state ballotPage = null
   state ghostNotes = {}
@@ -524,6 +525,85 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
                   }
                 }
               }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  component DiscardPile(hand) {
+    let chosen = hand.find(c => c.value == choices.discard)
+    Row {
+      fill: width; gap: 5; padding: 5; align: center; radius: 7
+      border: 1; borderColor: handAction == "discard" ? ash : rule
+      background: mix(panel, ash, handAction == "discard" ? 0.20 : 0.05)
+      onTap: { if queued != token { handAction = handAction == "discard" ? "send" : "discard"; detectiveHandOpen = true } }
+      if chosen.artwork != null && illustrated { Image { src: chosen.artwork; size: 30; radius: 3; fit: contain; label: chosen.label } }
+      else { Text { text: "▧"; fontSize: 21; color: ash } }
+      Text { text: chosen != null ? "Сброс: ${chosen.label}" : (handAction == "discard" ? "Выбери карту для сброса" : "Стопка сброса"); color: parchment; font: sans; fontSize: 12; weight: 1; maxLines: 2 }
+      if chosen != null {
+        Box {
+          padding: 5; onTap: { if queued != token { choices = remove(choices, "discard"); handAction = "send" } }
+          Text { text: "Отменить"; color: gold; fontSize: 11 }
+        }
+      }
+    }
+  }
+
+  component DetectiveHand(hand, editable = false) {
+    Column {
+      fill: width; gap: 4; padding: 5; radius: 9; border: 1; borderColor: rule
+      background: mix(panel, gold, 0.055)
+      Row {
+        align: center; gap: 5; onTap: detectiveHandOpen = !detectiveHandOpen
+        Text { text: "Улики детектива · ${len(hand)}"; color: gold; font: sans; fontSize: 14; fontWeight: 700; weight: 1 }
+        Text { text: detectiveHandOpen ? "⌃" : "⌄"; color: gold; fontSize: 16 }
+      }
+      if detectiveHandOpen {
+        if editable {
+          Row {
+            gap: 3
+            for slot in game.groups.filter(g => g.key == "send" || g.key == "send2" || g.key == "discard") key slot.key {
+              let selected = hand.find(c => c.value == get(choices, slot.key, null))
+              Column {
+                weight: 1; gap: 2; padding: 4; radius: 6; border: 1
+                borderColor: handAction == slot.key ? gold : rule
+                background: handAction == slot.key ? plum : shell
+                onTap: { if queued != token { handAction = slot.key } }
+                Text { text: slot.key == "send" ? "Письмо" : (slot.key == "send2" ? "Второе" : "Сброс"); color: slot.key == "discard" ? ash : gold; font: sans; fontSize: 11; align: center }
+                if selected != null { Text { text: selected.label; color: parchment; font: sans; fontSize: 10; align: center; maxLines: 2 } }
+              }
+            }
+          }
+        }
+        Grid {
+          columns: layoutWidth >= 320 ? 5 : 3; gap: 3
+          for option in hand key option.value {
+            let sent = editable && (choices.send == option.value || choices.send2 == option.value)
+            let discarded = editable && choices.discard == option.value
+            let tone = discarded ? ash : gold
+            Column {
+              fill: width; gap: 2; padding: 3; radius: 6; border: 1
+              borderColor: sent || discarded ? tone : rule
+              background: mix(panel, tone, sent || discarded ? 0.27 : 0.04)
+              onLongPress: { if illustrated && option.artwork != null && queued != token { previewCard = option } }
+              onTap: {
+                if editable && queued != token {
+                  let current = get(choices, handAction, null)
+                  if current == option.value { choices = remove(choices, handAction) }
+                  else {
+                    if choices.send == option.value { choices = remove(choices, "send") }
+                    if choices.send2 == option.value { choices = remove(choices, "send2") }
+                    if choices.discard == option.value { choices = remove(choices, "discard") }
+                    choices = set(choices, handAction, option.value)
+                  }
+                } else if illustrated && option.artwork != null { previewCard = option }
+              }
+              if illustrated && option.artwork != null { Image { src: option.artwork; fill: width; height: 43; radius: 3; fit: contain; label: option.label } }
+              else { Text { text: option.glyph; color: tone; fontSize: 18; align: center } }
+              Text { text: option.label; color: parchment; font: sans; fontSize: 10; align: center; maxLines: 2 }
+              if sent || discarded { Text { text: discarded ? "Сброс" : "Письмо"; color: tone; font: sans; fontSize: 10; align: center } }
             }
           }
         }
@@ -1001,7 +1081,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
           }
         }
         Box {
-          fill: width; onTap: { investigationPerson = data.me.pid; investigationRound = null; evidence = "suspects" }
+          fill: width; onTap: { investigationPerson = data.me.pid; investigationRound = null; if canNotebook { notebookMarks = game.notebook.marks ?? {}; notebookSuspects = game.notebook.suspects ?? {}; notebookText = game.notebook.text ?? ""; notebookTab = "people"; evidence = "notebook" } else { evidence = "suspects" } }
           Action { label: "Открыть доску подозрений"; hot: false }
         }
       }
@@ -1031,7 +1111,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
             Text { text: person.outgoing == null ? "Нет заявленного подозрения" : "→ ${person.outgoing} · Р${person.outgoing_round}"; color: person.outgoing == null ? dim : ash; fontSize: 12; maxLines: 2 }
           }
           if canNotebook && person.pid != game.notebook.pid {
-            let flag = get(game.notebook.suspects, "${int(person.pid)}", "neutral")
+            let flag = shownPage == "notebook" ? get(notebookSuspects, "${int(person.pid)}", "neutral") : get(game.notebook.suspects, "${int(person.pid)}", "neutral")
             Text { text: flag == "likely" ? "Подозреваю" : (flag == "unlikely" ? "Доверяю" : ""); color: flag == "likely" ? ash : moss; fontSize: 10 }
           }
           Suspicion { count: person.count }
@@ -1156,6 +1236,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
           }
         }
       }
+      if notebookTab == "people" && game.investigation != null { Investigation { data: game.investigation } }
       if notebookTab == "text" {
       CategoryLabel { label: "Заметки" }
       Input {
@@ -1794,7 +1875,11 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
                   for opinion in sheet.notes key opinion.player { Opinion { player: opinion.player; opinion: opinion } }
                 }
               } else {
-                if !showDesk && len(sheet.board ?? []) > 0 && sheet.phase != "board" && sheet.phase != "intro" && sheet.phase != "result" && sheet.phase != "role" && len(sheet.letters) > 0 { LettersPanel { letters: sheet.letters } }
+                if !showDesk && len(sheet.board ?? []) > 0 && sheet.phase != "result" && sheet.phase != "role" {
+                  if sheet.phase == "mail" { DiscardPile { hand: sheet.groups.find(g => g.key == "send").options } }
+                  LettersPanel { letters: sheet.letters }
+                  Table { rows: sheet.board }
+                }
                 if sheet.phase == "statement" {
                   RuleLabel { heading: "ОБСУЖДЕНИЕ · ${sheet.flow.spoken} / ${sheet.flow.speakers}" }
                   Opinion { player: sheet.speaker; opinion: sheet.statement; spotlight: true }
@@ -1920,10 +2005,6 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
                     Text { text: "Письма ждут отправки"; color: parchment; font: serif; fontSize: 22; align: center }
                     Text { text: "Сопоставь карты на столе и выбери ассоциацию."; color: dim; font: sans; fontSize: 13; align: center }
                   }
-                  if !showDesk {
-                    LettersPanel { letters: sheet.letters }
-                    Table { rows: sheet.board }
-                  }
                 }
                 if sheet.phase == "reveal" && canNotebook {
                   Box {
@@ -1979,7 +2060,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
                 }
                 if phase == "mail" {
                   let hand = sheet.groups.find(g => g.key == "send")
-                  CategoryLabel { label: "Почта · выбери карту"; tint: gold }
+                  if showDesk { CategoryLabel { label: "Почта · выбери карту"; tint: gold } }
                   Row {
                     gap: 6; padding: 7; radius: 7; background: panel; align: center
                     onTap: intentOpen = !intentOpen
@@ -2003,6 +2084,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
                       }
                     }
                   }
+                  if showDesk {
                   Row {
                     gap: 5
                     for slot in sheet.groups.filter(g => g.key == "send" || g.key == "send2" || g.key == "discard") key slot.key {
@@ -2054,6 +2136,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
                         TableCard { entry: set(option, "detail", detail); tint: discarded ? ash : gold; marked: sent || discarded; mini: false }
                       }
                     }
+                  }
                   }
                 }
                 let shownGroups = ballot ? [activeBallot] : (phase == "mail" ? sheet.groups.filter(g => g.key != "send" && g.key != "send2" && g.key != "discard") : sheet.groups)
@@ -2128,10 +2211,6 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
                   }
                 }
                 if sheet.phase == "board" || sheet.phase == "result" {
-                  if !showDesk && sheet.phase == "board" {
-                    LettersPanel { letters: sheet.letters }
-                    Table { rows: sheet.board }
-                  }
                   Roster { players: sheet.roster }
                 }
                 if len(sheet.tallies) > 0 {
@@ -2146,6 +2225,9 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
                 }
               }
             }
+          }
+          if !showDesk && shownPage == "" && len(game.detective_hand ?? []) > 0 {
+            DetectiveHand { hand: game.detective_hand; editable: phase == "mail" }
           }
           if conflicting && shownPage == "" {
             Text { text: "Выбери разные карты."; color: ash; fontSize: 13; align: center }
@@ -2174,7 +2256,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
               }
             }
           } else if shownPage != "" {
-            Box { fill: width; onTap: evidence = ""; Action { label: phase == "result" ? "Вернуться к итогам" : "Вернуться к ходу"; hot: false } }
+            Box { fill: width; onTap: evidence = ""; Action { label: phase == "result" ? "Вернуться к итогам" : "Вернуться к столу"; hot: false } }
           } else if phase == "result" {
             Box {
               fill: width
@@ -2217,7 +2299,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
           if game.round > 0 && phase != "result" && phase != "opening" && shownPage != "notebook" {
             Row {
               gap: 3
-              for tab in [{key: "", label: "Ход", glyph: "◆"}, {key: "board", label: "Стол", glyph: "▦"}, {key: "letters", label: "Письма", glyph: "✉"}, {key: "history", label: "История", glyph: "↻"}, {key: "suspects", label: "Люди", glyph: "◎"}, {key: "notebook", label: "Заметки", glyph: "▤"}].filter(t => (!showDesk || (t.key != "board" && t.key != "letters")) && (t.key != "notebook" || canNotebook) && (t.key != "suspects" || game.investigation != null)) key tab.label {
+              for tab in [{key: "", label: "Стол", glyph: "▦"}, {key: "history", label: "История", glyph: "↻"}, {key: "notebook", label: "Блокнот", glyph: "▤"}, {key: "suspects", label: "Люди", glyph: "◎"}].filter(t => (t.key != "notebook" || canNotebook) && (t.key != "suspects" || (!canNotebook && game.investigation != null))) key tab.label {
                 Column {
                   weight: 1; gap: 2; padding: 4; radius: 7; border: 1
                   borderColor: shownPage == tab.key ? gold : rule
@@ -2226,6 +2308,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
                     if !fastDiscussion && queued == "" {
                       if tab.key == "notebook" {
                         notebookTab = phase == "discussion" && !game.cooperative ? "people" : "clues"
+                        investigationPerson = game.investigation.me.pid; investigationRound = null
                         notebookMarks = game.notebook.marks ?? {}
                         notebookSuspects = game.notebook.suspects ?? {}
                         notebookText = game.notebook.text ?? ""
