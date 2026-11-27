@@ -1,5 +1,5 @@
 app "Письма призрака" {
-  meta { owl: 18; description: "Карточное расследование с тайной перепиской"; version: "2.9.0"; category: "games" }
+  meta { owl: 18; description: "Карточное расследование с тайной перепиской"; version: "2.13.0"; category: "games" }
   title: "Письма призрака"
   icon: appIcon
   requires { pacman: ["python"] }
@@ -29,6 +29,9 @@ app "Письма призрака" {
   state markedHints = false
   state difficulty = "normal"
   state handAction = "send"
+  state investigationPerson = null
+  state investigationRound = null
+  state notebookTab = "clues"
   state notebookMarks = {}
   state notebookSuspects = {}
   state notebookText = ""
@@ -456,10 +459,10 @@ app "Письма призрака" {
       }
       if opinion == null { Copy { body: "Пропускает ход." } }
       if opinion.speech != null && opinion.speech != "" {
-        if spotlight || get(fullSpeech, player, false) {
+        if get(fullSpeech, player, false) {
           Copy { body: opinion.speech; shade: parchment }
         }
-        if !spotlight {
+        if opinion.speech != "" {
           Box {
             fill: width; padding: 5; radius: 5; background: alpha(gold, 0.06)
             onTap: fullSpeech = set(fullSpeech, player, !get(fullSpeech, player, false))
@@ -518,7 +521,10 @@ app "Письма призрака" {
           Text { text: opinion.suspect; color: parchment; font: sans; fontSize: spotlight ? 18 : 15; fontWeight: 700; weight: 1 }
           Suspicion { count: opinion.suspicions }
         }
+        if opinion.reason != null && opinion.reason != "" { Copy { body: opinion.reason } }
       }
+      if opinion.stance != null { Text { text: opinion.stance; color: dim; fontSize: 12 } }
+      if opinion.defense != null { Text { text: "Ответ: ${opinion.defense}"; color: gold; fontSize: 12 } }
       Grid {
         columns: len(opinion.clues ?? []) >= 3 && (!showDesk || roomyDesk) ? 3 : 1; gap: 5
         for clue in (opinion.clues ?? []).filter(c => len(opinion.clues) > 1 || !(opinion.tests ?? []).any(t => t.value == c.value)) key clue.key {
@@ -849,12 +855,128 @@ app "Письма призрака" {
     }
   }
 
+  component InvestigationNotice(data) {
+    if data != null {
+      Column {
+        gap: 5; padding: 9; radius: 9; background: panel; border: 1; borderColor: rule
+        Text { text: "ПОИСК УБИЙЦЫ · ${data.new_accusations} подозрений в раунде"; color: ash; fontSize: 12; fontWeight: 700 }
+        if data.me != null {
+          Text { text: "Вас подозревают · ${data.me.count}"; color: data.me.count > 0 ? ash : dim; font: serif; fontSize: 20 }
+          for accusation in data.me.incoming key accusation.pid {
+            Text { text: "${accusation.source} → вы · Р${accusation.round}"; color: parchment; fontSize: 12 }
+          }
+        }
+        Box {
+          fill: width; onTap: { investigationPerson = data.me.pid; investigationRound = null; evidence = "suspects" }
+          Action { label: "Открыть доску подозрений"; hot: false }
+        }
+      }
+    }
+  }
+
+  component Investigation(data) {
+    Column {
+      gap: 10
+      SceneTitle { heading: "Доска подозрений"; description: "Только публичные заявления. Стрелка — подозрение, а не доказательство." }
+      if data.me != null {
+        Box {
+          fill: width; onTap: { investigationPerson = data.me.pid; investigationRound = null }
+          Action { label: "Меня подозревают · ${data.me.count}"; hot: data.me.count > 0 }
+        }
+      }
+      CategoryLabel { label: "Кто кого подозревает"; tint: ash }
+      for person in data.people key person.pid {
+        Row {
+          align: center; gap: 6; padding: 9; radius: 8; border: 1
+          borderColor: investigationPerson == person.pid ? gold : rule
+          background: panel
+          onTap: { investigationPerson = person.pid; investigationRound = null }
+          Column {
+            weight: 1; gap: 3
+            Text { text: person.name; color: parchment; font: serif; fontSize: 18 }
+            Text { text: person.outgoing == null ? "Нет заявленного подозрения" : "→ ${person.outgoing} · Р${person.outgoing_round}"; color: person.outgoing == null ? dim : ash; fontSize: 12; maxLines: 2 }
+          }
+          if canNotebook && person.pid != game.notebook.pid {
+            let flag = get(game.notebook.suspects, "${int(person.pid)}", "neutral")
+            Text { text: flag == "likely" ? "Подозреваю" : (flag == "unlikely" ? "Доверяю" : ""); color: flag == "likely" ? ash : moss; fontSize: 10 }
+          }
+          Suspicion { count: person.count }
+        }
+      }
+      let selected = data.people.find(p => p.pid == investigationPerson) ?? data.me ?? first(data.people)
+      if selected != null {
+        CategoryLabel { label: "Досье · ${selected.name}"; tint: gold }
+        if len(selected.incoming) == 0 { Copy { body: "Нет действующих публичных подозрений." } }
+        for accusation in selected.incoming key accusation.pid {
+          Column {
+            gap: 4; padding: 9; radius: 8; background: alpha(ash, 0.09); border: 1; borderColor: rule
+            Text { text: "${accusation.source} → ${selected.name} · Раунд ${accusation.round}"; color: ash; fontSize: 13; fontWeight: 700 }
+            Copy { body: accusation.reason }
+            if accusation.speech != "" {
+              Box {
+                fill: width; onTap: fullSpeech = set(fullSpeech, "acc-${int(accusation.pid)}", !get(fullSpeech, "acc-${int(accusation.pid)}", false))
+                Text { text: get(fullSpeech, "acc-${int(accusation.pid)}", false) ? "Свернуть реплику" : "Читать исходную реплику"; color: gold; fontSize: 12 }
+              }
+              if get(fullSpeech, "acc-${int(accusation.pid)}", false) { Copy { body: accusation.speech } }
+            }
+          }
+        }
+        if len(selected.incoming) > 1 { Copy { body: "Повторение одного аргумента не делает его независимым доказательством." } }
+        CategoryLabel { label: "История версий · ${selected.name}" }
+        Flow {
+          gap: 5
+          for item in selected.rounds key item.round {
+            Box {
+              padding: 7; radius: 7; border: 1; borderColor: investigationRound == item.round ? gold : rule; background: panel
+              onTap: investigationRound = item.round
+              Text { text: "Р${item.round} · ${item.suspect ?? (item.spoken ? "—" : "…")}"; color: item.suspect != null ? ash : dim; fontSize: 12 }
+            }
+          }
+        }
+        for opinion in selected.opinions.filter(o => investigationRound == null || o.round == investigationRound) key opinion.round {
+          RuleLabel { heading: "Раунд ${opinion.round}" }
+          Opinion { player: selected.name; opinion: opinion }
+        }
+      }
+      CategoryLabel { label: "Матрица публичных подозрений" }
+      for person in data.people key person.pid {
+        Column {
+          gap: 4; padding: 6; radius: 7; background: panel
+          Text { text: person.name; color: parchment; fontSize: 13; fontWeight: 700 }
+          Flow {
+            gap: 4
+            for item in person.rounds key item.round {
+              Box {
+                padding: 6; radius: 5; background: alpha(item.suspect == null ? dim : ash, 0.12)
+                onTap: { investigationPerson = person.pid; investigationRound = item.round }
+                Text { text: "Р${item.round} · ${item.suspect ?? (item.spoken ? "—" : "…")}"; color: parchment; fontSize: 11 }
+              }
+            }
+          }
+        }
+      }
+      Copy { body: "— не назвал подозреваемого; … ещё не высказался. Последнее заявление заменяет прежнее." }
+      Box {
+        fill: width; onTap: { reviewRound = null; evidence = "history" }
+        Action { label: "Полная история обсуждений"; hot: false }
+      }
+    }
+  }
+
   component Notebook(rows, people) {
     Column {
       gap: 10
       SceneTitle { heading: "Личный блокнот"; description: "Только твои предположения. Призрак не подтверждает эти отметки." }
       RuleLabel { heading: game.notebook.owner }
+      Row {
+        gap: 4
+        for tab in [{key: "clues", label: "Улики"}, {key: "people", label: "Люди"}, {key: "text", label: "Записи"}].filter(t => t.key != "people" || !game.cooperative) key tab.key {
+          Box { weight: 1; onTap: notebookTab = tab.key; Action { label: tab.label; hot: notebookTab == tab.key } }
+        }
+      }
+      if notebookTab == "clues" {
       Copy { body: "Нажми улику: ? → вероятно → исключить → ?." }
+      if len(game.letters) > 0 { Post { letters: game.letters.take(1) } }
       for category in rows key category.key {
         let tone = get(categoryColors, category.key, gold)
         CategoryLabel { label: category.label; tint: tone }
@@ -877,7 +999,8 @@ app "Письма призрака" {
           }
         }
       }
-      if !game.cooperative {
+      }
+      if notebookTab == "people" && !game.cooperative {
         CategoryLabel { label: "Мои подозрения"; tint: ash }
         for player in people.filter(p => p.value != 0 && p.value != game.notebook.pid) key player.value {
           let k = "${int(player.value)}"
@@ -892,11 +1015,13 @@ app "Письма призрака" {
           }
         }
       }
+      if notebookTab == "text" {
       CategoryLabel { label: "Заметки" }
       Input {
         text: notebookText; lines: 5; fontSize: 15
         placeholder: "Связи между письмами, сомнения, версии…"
         onChange: notebookText = sub(value, 0, 2000)
+      }
       }
       Copy { body: "Отметки и текст сохраняются только после нажатия кнопки внизу." }
     }
@@ -1509,6 +1634,8 @@ app "Письма призрака" {
               gap: 12
               if shownPage == "notebook" && canNotebook {
                 Notebook { rows: sheet.board; people: sheet.roster }
+              } else if shownPage == "suspects" && sheet.investigation != null {
+                Investigation { data: sheet.investigation }
               } else if shownPage == "history" {
                 DiscussionHistory { rounds: sheet.history; letters: sheet.letters }
               } else if shownPage == "debrief" {
@@ -1653,6 +1780,13 @@ app "Письма призрака" {
                   }
                   if !showDesk { Table { rows: sheet.board } }
                 }
+                if sheet.phase == "reveal" && canNotebook {
+                  Box {
+                    fill: width
+                    onTap: { notebookMarks = game.notebook.marks ?? {}; notebookSuspects = game.notebook.suspects ?? {}; notebookText = game.notebook.text ?? ""; notebookTab = "clues"; evidence = "notebook" }
+                    Action { label: "Обновить гипотезы в блокноте"; hot: false }
+                  }
+                }
                 if !showDesk && (sheet.phase == "reveal" || sheet.phase == "note" || sheet.phase == "discussion") {
                   Post { letters: sheet.letters.take(1) }
                 }
@@ -1662,6 +1796,23 @@ app "Письма призрака" {
                 }
                 if sheet.phase == "discussion" {
                   RoundSummary { flow: sheet.flow; roster: sheet.roster }
+                  InvestigationNotice { data: sheet.investigation }
+                  if sheet.investigation.can_respond {
+                    CategoryLabel { label: "Ответить на обвинения"; tint: ash }
+                    for response in sheet.investigation.responses key response.value {
+                      Box {
+                        fill: width
+                        onTap: {
+                          if queued != token {
+                            queued = token; problem = ""; receipt = ""
+                            receipt = run("${script} defend ${sh(token)} ${sh(toJson({choice: int(response.value)}))}")
+                          }
+                        }
+                        Action { label: response.label; hot: false; allowed: queued != token }
+                      }
+                    }
+                    Copy { body: "Ответ публичный. Боты учитывают его вместе с твоими действиями." }
+                  } else if sheet.investigation.response != null { Copy { body: "Твой публичный ответ: ${sheet.investigation.response}" } }
                   CategoryLabel { label: "Реплики участников" }
                   Grid {
                     columns: showDesk && layoutWidth >= 1200 ? 2 : 1
@@ -1679,6 +1830,7 @@ app "Письма призрака" {
                     Text { text: "Под вариантами — кто их поддержал в обсуждении."; color: dim; font: sans; fontSize: 12 }
                   }
                   if activeBallot.key == "suspect" {
+                    InvestigationNotice { data: sheet.investigation }
                     Text { text: "Число рядом с именем — сколько игроков его подозревают."; color: dim; font: sans; fontSize: 12 }
                   }
                   if sheet.brief != "" { Copy { body: sheet.brief } }
@@ -1798,7 +1950,7 @@ app "Письма призрака" {
                           }
                           let personal = canNotebook && (ballot || phase == "note") ?
                               (section.key == "suspect" || section.key == "person" ? get(game.notebook.suspects, "${int(option.value)}", null) :
-                               (section.key == "claim" ? null : get(game.notebook.marks, "${int(option.value)}", null))) : null
+                               (section.key == "claim" || section.key == "stance" || section.key == "reason" ? null : get(game.notebook.marks, "${int(option.value)}", null))) : null
                           let picked = section.multiple ? checked.any(x => x == option.value) : selected == option.value
                           if illustrated && !showDesk && (len(section.options) >= 3 && !ballot || phase == "note") && option.artwork != null {
                             TableCard { entry: option; tint: tone; marked: picked; personal: personal }
@@ -1920,7 +2072,7 @@ app "Письма призрака" {
           if game.round > 0 && phase != "result" && phase != "opening" && shownPage != "notebook" {
             Row {
               gap: 3
-              for tab in [{key: "", label: "Ход", glyph: "◆"}, {key: "board", label: "Стол", glyph: "▦"}, {key: "letters", label: "Письма", glyph: "✉"}, {key: "history", label: "История", glyph: "↻"}, {key: "notebook", label: "Заметки", glyph: "▤"}].filter(t => (!showDesk || (t.key != "board" && t.key != "letters")) && (t.key != "notebook" || canNotebook)) key tab.label {
+              for tab in [{key: "", label: "Ход", glyph: "◆"}, {key: "board", label: "Стол", glyph: "▦"}, {key: "letters", label: "Письма", glyph: "✉"}, {key: "history", label: "История", glyph: "↻"}, {key: "suspects", label: "Люди", glyph: "◎"}, {key: "notebook", label: "Заметки", glyph: "▤"}].filter(t => (!showDesk || (t.key != "board" && t.key != "letters")) && (t.key != "notebook" || canNotebook) && (t.key != "suspects" || game.investigation != null)) key tab.label {
                 Column {
                   weight: 1; gap: 2; padding: 4; radius: 7; border: 1
                   borderColor: shownPage == tab.key ? gold : rule
@@ -1928,15 +2080,17 @@ app "Письма призрака" {
                   onTap: {
                     if !fastDiscussion && queued == "" {
                       if tab.key == "notebook" {
+                        notebookTab = phase == "discussion" && !game.cooperative ? "people" : "clues"
                         notebookMarks = game.notebook.marks ?? {}
                         notebookSuspects = game.notebook.suspects ?? {}
                         notebookText = game.notebook.text ?? ""
                       }
                       if tab.key == "history" { reviewRound = null }
+                       if tab.key == "suspects" { investigationPerson = game.investigation.me.pid; investigationRound = null }
                       evidence = tab.key
                     }
                   }
-                  Text { text: tab.glyph; color: shownPage == tab.key ? gold : dim; fontSize: 17; align: center }
+                  Text { text: tab.key == "suspects" && game.investigation.me.count > 0 ? "◎ ${game.investigation.me.count}" : tab.glyph; color: tab.key == "suspects" && game.investigation.me.count > 0 ? ash : (shownPage == tab.key ? gold : dim); fontSize: 17; align: center }
                   Text { text: tab.label; color: parchment; font: sans; fontSize: 11; align: center }
                 }
               }
