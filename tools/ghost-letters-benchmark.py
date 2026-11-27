@@ -51,16 +51,19 @@ def play(module, seed, mode, total, marked, difficulty):
                 rounds=d["rounds"], ties=sum(1 for tally in d["counts"])- (3 if mode=="coop" else 4) - len(d["excluded"])), d
 
 
-def run(engine, count):
+def run(engine, count, seed_start=0, difficulty=None):
     module = load(engine)
-    configs = scenarios()
+    configs = [c for c in scenarios() if difficulty is None or c[-1] == difficulty]
     rows = defaultdict(Counter)
     roles = defaultdict(Counter)
-    for seed in range(count):
-        mode, total, marked, difficulty = configs[seed % len(configs)]
+    levels = defaultdict(Counter)
+    for index in range(count):
+        seed = seed_start + index
+        mode, total, marked, difficulty = configs[index % len(configs)]
         metrics, data = play(module, seed, mode, total, marked, difficulty)
         key = f"{mode}/{total}/{int(marked)}/{difficulty}"
         rows[key].update(metrics)
+        levels[difficulty].update(metrics)
         for pid, player in enumerate(data["players"]):
             roles[player["role"]]["games"] += 1
             roles[player["role"]]["wins"] += pid in data["winners"]
@@ -68,7 +71,8 @@ def run(engine, count):
     for row in rows.values():
         overall.update(row)
     return {"overall": dict(overall), "by_configuration": {k:dict(v) for k,v in sorted(rows.items())},
-            "by_role": {k:dict(v) for k,v in sorted(roles.items())}}
+            "by_role": {k:dict(v) for k,v in sorted(roles.items())},
+            "by_difficulty": {k:dict(v) for k,v in sorted(levels.items())}}
 
 
 def main():
@@ -76,13 +80,25 @@ def main():
     p.add_argument("--engine", type=Path, required=True)
     p.add_argument("--games", type=int, default=5000)
     p.add_argument("--output", type=Path, required=True)
+    p.add_argument("--seed-start", type=int, default=0)
+    p.add_argument("--difficulty", choices=("easy", "normal", "hard"))
+    p.add_argument("--replay-seed", type=int)
+    p.add_argument("--mode", choices=("classic", "coop"), default="classic")
+    p.add_argument("--players", type=int, default=6)
+    p.add_argument("--marked", action="store_true")
     args = p.parse_args()
     if args.games < 1:
         p.error("--games must be positive")
-    result = run(args.engine, args.games)
+    if args.replay_seed is not None:
+        metrics, data = play(load(args.engine), args.replay_seed, args.mode, args.players,
+                             args.marked, args.difficulty or "normal")
+        result = {"overall": metrics, "replay": data}
+    else:
+        result = run(args.engine, args.games, args.seed_start, args.difficulty)
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result["overall"], ensure_ascii=False))
-    print(json.dumps(result["by_role"], ensure_ascii=False))
+    if "by_difficulty" in result:
+        print(json.dumps(result["by_difficulty"], ensure_ascii=False))
 
 
 if __name__ == "__main__":
