@@ -728,6 +728,8 @@ class GhostLettersRules(unittest.TestCase):
             self.assertIn('selectingCategory', source)
             self.assertIn('state dynamicFlow = false', source)
             self.assertIn('component TablePlayers(players)', source)
+            self.assertIn('component LiveStatement(player, opinion, progress)', source)
+            self.assertIn('lettersPanelOpen ? letters : [first(letters)]', source)
             self.assertIn('if spotlight || get(fullSpeech, player, false)', source)
             self.assertNotIn('onTap: intentOpen = !intentOpen', source)
             self.assertNotIn('height: mini ? 20 : 29', source)

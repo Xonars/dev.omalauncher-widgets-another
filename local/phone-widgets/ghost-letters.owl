@@ -48,7 +48,7 @@ app "Письма призрака" {
   state revealed = ""
   state evidence = ""
   state reviewRound = null
-  state lettersPanelOpen = true
+  state lettersPanelOpen = false
   state detectiveHandOpen = true
   state boardPanelOpen = true
   state replySection = ""
@@ -140,7 +140,7 @@ app "Письма призрака" {
       notebookError = false
       detectiveHandOpen = phase == "mail"
       boardPanelOpen = true
-      lettersPanelOpen = true
+      lettersPanelOpen = false
       replySection = ""
       replyMode = game.groups.any(g => g.key == "0") ? "version" : "letter"
       handAction = "send"
@@ -393,7 +393,7 @@ app "Письма призрака" {
               let k = "${int(clue.value)}"
               let flag = editable ? get(notebookMarks, k, "neutral") : (annotate && canNotebook ? get(game.notebook.marks, k, "neutral") : "neutral")
               let testAllowed = testGroup != null && testGroup.options.any(o => o.value == clue.value)
-              let testPicks = get(choices, testGroup.key, []) ?? []
+              let testPicks = get(choices, testGroup.key ?? "", []) ?? []
               let categoryAllowed = categoryGroup != null && categoryGroup.options.any(o => o.value == clue.value)
               let selectingTest = interactive && phase == "note" && replyMode == "letter"
               let selectingCategory = interactive && categoryAllowed && (phase == "truth" || (phase == "note" && replyMode == "version") || (ballot && activeBallot.key == category.key))
@@ -415,7 +415,8 @@ app "Письма призрака" {
                     } else if illustrated && clue.artwork != null { previewCard = clue }
                   } else if illustrated && clue.artwork != null { previewCard = clue }
                 }
-                TableCard { entry: clue; tint: tone; boardColumn: compactBoard; personal: flag; marked: selected || spoken }
+                let ballotOption = (categoryGroup.options ?? []).find(o => o.value == clue.value)
+                TableCard { entry: ballot && interactive && activeBallot.key == category.key && ballotOption != null ? ballotOption : clue; tint: tone; boardColumn: compactBoard; personal: flag; marked: selected || spoken }
               }
             }
           }
@@ -484,15 +485,16 @@ app "Письма призрака" {
         Text { text: "✉"; color: gold; fontSize: 16 }
         Text { text: "Письма призрака"; color: gold; font: sans; fontSize: 14; fontWeight: 700; weight: 1; maxLines: 1 }
         Text { text: "${len(letters)}"; color: dim; font: sans; fontSize: 12 }
-        Text { text: lettersPanelOpen ? "⌃" : "⌄"; color: gold; fontSize: 16 }
+        if len(letters) > 1 { Text { text: lettersPanelOpen ? "⌃" : "⌄"; color: gold; fontSize: 16 } }
       }
-      if lettersPanelOpen {
+      Column {
+        gap: 3
         if len(letters) == 0 {
           Text { text: "Первая зацепка ещё не открыта."; color: dim; font: sans; fontSize: 12 }
         } else {
           Column {
-            height: min(132, max(44, len(letters) * 44)); scroll: true; gap: 3
-            for letter in letters key letter.round {
+            gap: 3
+            for letter in (lettersPanelOpen ? letters : [first(letters)]) key letter.round {
               Row {
                 fill: width; gap: 6; padding: 4; align: center; radius: 6
                 background: alpha(gold, 0.045)
@@ -745,6 +747,30 @@ app "Письма призрака" {
           Text { text: line.value; font: sans; color: parchment; fontSize: 14 }
         }
       }
+    }
+  }
+
+  component LiveStatement(player, opinion, progress) {
+    Column {
+      fill: width; gap: 5; padding: 9; radius: 8; background: panel; border: 1; borderColor: gold
+      Row {
+        align: center; gap: 5
+        Box { size: 30; radius: 15; align: center; background: plum; Text { text: sub(player ?? "?", 0, 1); color: gold; font: serif; fontSize: 18 } }
+        Text { text: player; color: parchment; font: sans; fontSize: 15; fontWeight: 700; weight: 1 }
+        Text { text: progress; color: dim; font: sans; fontSize: 11 }
+      }
+      if opinion != null && opinion.speech != null && opinion.speech != "" {
+        Copy { body: opinion.speech; shade: parchment }
+        if opinion.suspect != null {
+          Text { text: "Подозревает → ${opinion.suspect}${opinion.reason != "" ? ": " + opinion.reason : ""}"; color: ash; font: sans; fontSize: 12 }
+        }
+        if get(fullSpeech, "details-" + player, false) { Opinion { player: player; opinion: opinion } }
+        Box {
+          fill: width; padding: 4
+          onTap: fullSpeech = set(fullSpeech, "details-" + player, !get(fullSpeech, "details-" + player, false))
+          Text { text: get(fullSpeech, "details-" + player, false) ? "Скрыть детали" : "Карты и аргументы ›"; color: gold; font: sans; fontSize: 12 }
+        }
+      } else { Opinion { player: player; opinion: opinion; spotlight: true } }
     }
   }
 
@@ -1227,8 +1253,6 @@ app "Письма призрака" {
         }
       }
       CategoryLabel { label: "Кто кого подозревает"; tint: ash }
-      Flow {
-        gap: 4
       for person in data.people key person.pid {
         Row {
           align: center; gap: 6; padding: 9; radius: 8; border: 1
@@ -1246,7 +1270,6 @@ app "Письма призрака" {
           }
           Suspicion { count: person.count }
         }
-      }
       }
       let selected = data.people.find(p => p.pid == investigationPerson) ?? data.me ?? first(data.people)
       if selected != null {
@@ -1397,6 +1420,7 @@ app "Письма призрака" {
         LettersPanel { letters: game.letters }
         Table { rows: rows; editable: true }
       }
+      if notebookTab == "people" && game.investigation != null { Investigation { data: game.investigation } }
       if notebookTab == "people" && !game.cooperative && canNotebook {
         CategoryLabel { label: "Мои подозрения"; tint: ash }
         for player in people.filter(p => p.value != 0 && p.value != game.notebook.pid) key player.value {
@@ -1412,7 +1436,6 @@ app "Письма призрака" {
           }
         }
       }
-      if notebookTab == "people" && game.investigation != null { Investigation { data: game.investigation } }
       if notebookTab == "history" { NotebookJournal { rounds: game.history; letters: game.letters } }
       if notebookTab == "text" && canNotebook {
       CategoryLabel { label: "Заметки" }
@@ -2059,14 +2082,24 @@ app "Письма призрака" {
                 }
               } else {
                 if sheet.phase == "note" { ReplyModes { groups: sheet.groups } }
+                if ballot {
+                  RuleLabel { heading: "ОБВИНИТЕЛЬНОЕ ЗАКЛЮЧЕНИЕ · ${sheet.flow.vote_step} ИЗ ${sheet.flow.vote_total}" }
+                  BallotTabs { sections: ballotSections; active: activeBallot.key }
+                  if activeBallot.key != "suspect" { Copy { body: "Выбери допустимую улику прямо на столе." } }
+                }
+                if sheet.phase == "statement" {
+                  LiveStatement { player: sheet.speaker; opinion: sheet.statement; progress: "${sheet.flow.spoken} / ${sheet.flow.speakers}" }
+                }
+                if sheet.phase == "reveal" {
+                  RuleLabel { heading: "✉ ПРИЗРАК ОТВЕТИЛ" }
+                  Copy { body: "Изучи новое письмо, затем начинай обсуждение." }
+                }
                 if !showDesk && len(sheet.board ?? []) > 0 && sheet.phase != "result" && sheet.phase != "role" {
                   LettersPanel { letters: sheet.letters }
                   Table { rows: sheet.board; interactive: true }
                 }
                 if sheet.phase == "note" { ReplyEditor { groups: sheet.groups } }
                 if sheet.phase == "statement" {
-                  RuleLabel { heading: "ОБСУЖДЕНИЕ · ${sheet.flow.spoken} / ${sheet.flow.speakers}" }
-                  Opinion { player: sheet.speaker; opinion: sheet.statement; spotlight: true }
                   if solo && len(sheet.notes) < len(sheet.roster) - 1 {
                     Box {
                       fill: width; onTap: {
@@ -2191,8 +2224,8 @@ app "Письма призрака" {
                   }
                 }
                 if sheet.phase == "note" && len(sheet.notes) > 0 {
-                  CategoryLabel { label: "Уже высказались" }
-                  for opinion in sheet.notes key opinion.player { Opinion { player: opinion.player; opinion: opinion } }
+                  let lastOpinion = sheet.notes[len(sheet.notes) - 1]
+                  LiveStatement { player: lastOpinion.player; opinion: lastOpinion; progress: "Последняя реплика" }
                 }
                 if sheet.phase == "discussion" {
                   RoundSummary { flow: sheet.flow; roster: sheet.roster }
@@ -2224,9 +2257,7 @@ app "Письма призрака" {
                   if len(sheet.notes) == 0 { Copy { body: "Никто не предложил версию." } }
                 }
                 if ballot {
-                  RuleLabel { heading: "ГОЛОСОВАНИЕ · ${sheet.flow.vote_step} ИЗ ${sheet.flow.vote_total}" }
-                  BallotTabs { sections: ballotSections; active: activeBallot.key }
-                  if activeBallot.options.any(c => len(c.supporters) > 0) {
+                  if activeBallot.key == "suspect" && activeBallot.options.any(c => len(c.supporters) > 0) {
                     Text { text: "Под вариантами — кто их поддержал в обсуждении."; color: dim; font: sans; fontSize: 12 }
                   }
                   if activeBallot.key == "suspect" {
