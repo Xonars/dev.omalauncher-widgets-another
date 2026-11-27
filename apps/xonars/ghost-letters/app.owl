@@ -51,7 +51,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/160d
 """
   let storeInstall = "python -c ${sh(storeBootstrap)}"
 
-  meta { owl: 18; description: "Карточное расследование с тайной перепиской · ресурсы при первом запуске"; version: "2.5.1"; category: "games" ; license: "MIT" }
+  meta { owl: 18; description: "Карточное расследование с тайной перепиской · ресурсы при первом запуске"; version: "2.5.3"; category: "games" ; license: "MIT" }
   title: "Письма призрака"
   icon: appIcon
   requires { pacman: ["python"] }
@@ -266,7 +266,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/160d
     }
   }
 
-  component PlayingCard(entry, tint = #d7ad74, personal = null, marked = false, voting = false, mini = false, preview = true) {
+  component PlayingCard(entry, tint = #d7ad74, personal = null, marked = false, voting = false, mini = false) {
     let tone = entry.correct ? moss : (entry.voted ? ash : get(markColors, entry.mark, tint))
     let personalTone = personal == "likely" ? moss : (personal == "unlikely" ? ash : tone)
     let detail = entry.mark ?? entry.detail ?? (entry.correct ? "Истинная улика" : (entry.voted ? "Выбор стола" : ""))
@@ -276,7 +276,6 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/160d
         fill: width; gap: 3; padding: 4; radius: 7; border: 1
         borderColor: marked ? tone : (entry.correct || entry.voted || markText != "" ? personalTone : alpha(tone, 0.38))
         background: mix(panel, tone, marked ? 0.28 : 0.075)
-        onLongPress: { if preview { previewCard = entry } }
         Image { src: entry.artwork; fill: width; height: mini ? 65 : (showDesk ? 85 : 100); radius: 4; fit: contain; label: entry.label; offset: [0, marked ? -2 : 0]; animate offset: 180ms }
         Box {
           height: 32; fill: width; align: center
@@ -358,7 +357,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/160d
             columns: smallCardColumns
             gap: 4
             for clue in category.cards key clue.value {
-              TableCard { entry: clue; tint: tone; personal: canNotebook ? get(game.notebook.marks, "${int(clue.value)}", null) : null }
+              Box { fill: width; onLongPress: { if illustrated && clue.artwork != null { previewCard = clue } }; TableCard { entry: clue; tint: tone; personal: canNotebook ? get(game.notebook.marks, "${int(clue.value)}", null) : null } }
             }
           }
         }
@@ -693,7 +692,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/160d
                 Box { weight: 1 }
                 Column {
                   width: min(200, layoutWidth * 0.45); gap: 4
-                  TableCard { entry: first(letter.cards); mini: false }
+                  Box { fill: width; onLongPress: { if illustrated && first(letter.cards).artwork != null { previewCard = first(letter.cards) } }; TableCard { entry: first(letter.cards); mini: false } }
                 }
                 Box { weight: 1 }
               }
@@ -701,7 +700,13 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/160d
               Grid {
                 columns: illustrated ? min(smallCardColumns, max(2, len(letter.cards))) : 2
                 gap: 5
-                for clue in letter.cards key clue.value { TableCard { entry: clue; mini: len(letter.cards) > 2 } }
+                for clue in letter.cards key clue.value {
+   Box {
+     fill: width
+     onLongPress: { if illustrated && clue.artwork != null { previewCard = clue } }
+     TableCard { entry: clue; mini: len(letter.cards) > 2 }
+   }
+ }
               }
             }
           } else {
@@ -749,7 +754,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/160d
           Column {
             gap: 4; padding: 5; radius: 8; border: 1; borderColor: alpha(tone, 0.3)
             Text { text: category.label; color: tone; font: sans; fontSize: 12; fontWeight: 700; align: center }
-            TableCard { entry: category.truth; tint: moss }
+            Box { fill: width; onLongPress: { if illustrated && category.truth.artwork != null { previewCard = category.truth } }; TableCard { entry: category.truth; tint: moss } }
             Text { text: category.correct ? "✓ Угадано" : (category.voted == null ? "Ничья" : "Промах"); color: category.correct ? moss : ash; font: sans; fontSize: 11; align: center }
           }
         }
@@ -810,6 +815,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/160d
             let tint = flag == "likely" ? moss : (flag == "unlikely" ? ash : tone)
             Box {
               fill: width
+              onLongPress: { if illustrated && clue.artwork != null && !notebookSaving { previewCard = clue } }
               onTap: {
                 if !notebookSaving {
                   notebookMarks = set(notebookMarks, k, flag == "neutral" ? "likely" : (flag == "likely" ? "unlikely" : "neutral"))
@@ -908,7 +914,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/160d
             Column {
               gap: 5
               padding: 8; radius: 9; background: shell; border: 1; borderColor: alpha(tone, 0.24)
-              Clue { entry: item.card }
+              Box { fill: width; onLongPress: { if illustrated && item.card.artwork != null { previewCard = item.card } }; Clue { entry: item.card } }
               if item.comment != "" { Copy { body: item.comment; shade: parchment } }
               else { Copy { body: "К этой карте Призрак не оставил пояснения." } }
               if len(item.links) > 0 { Links { items: item.links; tint: tone } }
@@ -1439,6 +1445,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/160d
                       let detail = sent ? "В письмо" : (discarded ? "В сброс" : null)
                       Box {
                         fill: width; radius: 9
+                        onLongPress: { if illustrated && option.artwork != null && queued != token { previewCard = option } }
                         onTap: {
                           let current = get(choices, handAction, null)
                           if current == option.value {
@@ -1479,6 +1486,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/160d
                         Box {
                           fill: width
                           radius: 9
+                          onLongPress: { if illustrated && option.artwork != null && queued != token { previewCard = option } }
                           onTap: {
                             if canExplain { ghostNotes = remove(ghostNotes, section.key) }
                             if section.multiple {
