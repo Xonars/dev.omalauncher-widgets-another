@@ -47,11 +47,11 @@ def install(url, digest, entry):
                 os.replace(temporary, target)
         marker.write_text(digest)
 
-install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/a152d296a081203de6fc72be91239ec38e56232786c8e4864406594d0b3e31cf.zip', 'a152d296a081203de6fc72be91239ec38e56232786c8e4864406594d0b3e31cf', 'xonars-ghost-letters')
+install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/f865ce505f709c9b0204c26a0e1e9f3101908f75f2d1ed356295423053a042e2.zip', 'f865ce505f709c9b0204c26a0e1e9f3101908f75f2d1ed356295423053a042e2', 'xonars-ghost-letters')
 """
   let storeInstall = "python -c ${sh(storeBootstrap)}"
 
-  meta { owl: 18; description: "Карточное расследование с тайной перепиской · ресурсы при первом запуске"; version: "2.10.0"; category: "games" ; license: "MIT" }
+  meta { owl: 18; description: "Карточное расследование с тайной перепиской · ресурсы при первом запуске"; version: "2.11.0"; category: "games" ; license: "MIT" }
   title: "Письма призрака"
   icon: appIcon
   requires { pacman: ["python"] }
