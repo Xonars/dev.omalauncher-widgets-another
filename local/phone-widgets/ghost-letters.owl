@@ -44,6 +44,7 @@ app "Письма призрака" {
   state revealed = ""
   state evidence = ""
   state reviewRound = null
+  state lettersPanelOpen = true
   state choices = {}
   state ballotPage = null
   state ghostNotes = {}
@@ -400,6 +401,77 @@ app "Письма призрака" {
             gap: 4
             for clue in category.cards key clue.value {
               ReferenceCard { entry: clue; tint: tone; focused: clue.value == focus || tested.any(card => card.value == clue.value); personal: canNotebook ? get(game.notebook.marks, "${int(clue.value)}", null) : null }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Public letters arrive newest first from game.py; preserve their order.
+  component LettersPanel(letters) {
+    Column {
+      fill: width; gap: 5; padding: 6; radius: 9; border: 1; borderColor: rule
+      background: mix(panel, gold, 0.055)
+      Row {
+        gap: 6; align: center
+        Row {
+          weight: 1; align: center; gap: 6
+          onTap: lettersPanelOpen = !lettersPanelOpen
+          Text { text: "✉"; color: gold; fontSize: 18 }
+          Text { text: "Письма призрака"; color: gold; font: sans; fontSize: 14; fontWeight: 700; weight: 1 }
+          Text { text: "${len(letters)}"; color: dim; font: sans; fontSize: 12 }
+          Text { text: lettersPanelOpen ? "⌃" : "⌄"; color: gold; fontSize: 16 }
+        }
+        if len(letters) > 0 {
+          Box {
+            padding: 5; radius: 5; background: alpha(gold, 0.09)
+            onTap: evidence = "letters"
+            Text { text: "Все"; color: gold; font: sans; fontSize: 12 }
+          }
+        }
+      }
+      if lettersPanelOpen {
+        if len(letters) == 0 {
+          Text { text: "Первая зацепка ещё не открыта."; color: dim; font: sans; fontSize: 12 }
+        } else {
+          Column {
+            height: min(160, max(56, len(letters) * 56)); scroll: true; gap: 4
+            for letter in letters key letter.round {
+              Row {
+                fill: width; gap: 6; padding: 4; align: center; radius: 6
+                background: alpha(gold, 0.045)
+                Column {
+                  width: 72; gap: 2
+                  Text { text: letter.round == 0 ? "Первая зацепка" : "Раунд ${letter.round}"; color: gold; font: sans; fontSize: 12; fontWeight: 700; maxLines: 2 }
+                  if letter.round > 0 { Text { text: "Архив · ${letter.missing}"; color: dim; font: sans; fontSize: 10 } }
+                }
+                if len(letter.cards) == 0 {
+                  Text { text: "Без новых подсказок"; color: dim; font: sans; fontSize: 12; weight: 1; maxLines: 2 }
+                } else {
+                  Column {
+                    weight: 1
+                    Grid {
+                      columns: len(letter.cards) > 1 && layoutWidth >= 340 ? 2 : 1
+                      gap: 3
+                      for clue in letter.cards key clue.value {
+                        let tone = get(markColors, clue.mark, gold)
+                        Row {
+                          fill: width; gap: 4; align: center; padding: 3; radius: 5; background: mix(panel, tone, 0.10)
+                          onTap: { if illustrated && clue.artwork != null { previewCard = clue } }
+                          if illustrated && clue.artwork != null { Image { src: clue.artwork; size: 29; radius: 3; fit: contain; label: clue.label } }
+                          else { Text { text: clue.glyph; color: tone; fontSize: 14 } }
+                          Column {
+                            weight: 1; gap: 1
+                            Text { text: clue.label; color: parchment; font: sans; fontSize: 11; maxLines: 2 }
+                            if clue.mark != null { Text { text: clue.mark; color: tone; font: sans; fontSize: 10; maxLines: 1 } }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
             }
           }
         }
@@ -1662,6 +1734,7 @@ app "Письма призрака" {
               } else if shownPage == "letters" {
                 Post { letters: sheet.letters }
               } else if shownPage == "board" {
+                if !showDesk { LettersPanel { letters: sheet.letters } }
                 Table { rows: sheet.board }
                 Roster { players: sheet.roster }
                 if sheet.phase == "ballot" && len(sheet.notes) > 0 {
@@ -1669,10 +1742,10 @@ app "Письма призрака" {
                   for opinion in sheet.notes key opinion.player { Opinion { player: opinion.player; opinion: opinion } }
                 }
               } else {
+                if !showDesk && len(sheet.board ?? []) > 0 && sheet.phase != "board" && sheet.phase != "intro" && sheet.phase != "result" && sheet.phase != "role" && len(sheet.letters) > 0 { LettersPanel { letters: sheet.letters } }
                 if sheet.phase == "statement" {
                   RuleLabel { heading: "ОБСУЖДЕНИЕ · ${sheet.flow.spoken} / ${sheet.flow.speakers}" }
                   Opinion { player: sheet.speaker; opinion: sheet.statement; spotlight: true }
-                  if !showDesk && len(sheet.letters) > 0 { Post { letters: sheet.letters.take(1) } }
                   if solo && len(sheet.notes) < len(sheet.roster) - 1 {
                     Box {
                       fill: width; onTap: {
@@ -1795,7 +1868,10 @@ app "Письма призрака" {
                     Text { text: "Письма ждут отправки"; color: parchment; font: serif; fontSize: 22; align: center }
                     Text { text: "Сопоставь карты на столе и выбери ассоциацию."; color: dim; font: sans; fontSize: 13; align: center }
                   }
-                  if !showDesk { Table { rows: sheet.board } }
+                  if !showDesk {
+                    LettersPanel { letters: sheet.letters }
+                    Table { rows: sheet.board }
+                  }
                 }
                 if sheet.phase == "reveal" && canNotebook {
                   Box {
@@ -1803,9 +1879,6 @@ app "Письма призрака" {
                     onTap: { notebookMarks = game.notebook.marks ?? {}; notebookSuspects = game.notebook.suspects ?? {}; notebookText = game.notebook.text ?? ""; notebookTab = "clues"; evidence = "notebook" }
                     Action { label: "Обновить гипотезы в блокноте"; hot: false }
                   }
-                }
-                if !showDesk && (sheet.phase == "reveal" || sheet.phase == "note" || sheet.phase == "discussion") {
-                  Post { letters: sheet.letters.take(1) }
                 }
                 if sheet.phase == "note" && len(sheet.notes) > 0 {
                   CategoryLabel { label: "Уже высказались" }
@@ -2003,7 +2076,10 @@ app "Письма призрака" {
                   }
                 }
                 if sheet.phase == "board" || sheet.phase == "result" {
-                  if !showDesk && sheet.phase == "board" { Table { rows: sheet.board } }
+                  if !showDesk && sheet.phase == "board" {
+                    LettersPanel { letters: sheet.letters }
+                    Table { rows: sheet.board }
+                  }
                   Roster { players: sheet.roster }
                 }
                 if len(sheet.tallies) > 0 {

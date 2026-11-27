@@ -656,6 +656,15 @@ class GhostLettersRules(unittest.TestCase):
                          'key: "suspects"', 'notebookTab', 'defend ${sh(token)}'):
                 self.assertIn(text, source)
 
+    def test_mobile_board_has_round_letters_panel(self):
+        for path in (ROOT / "local/phone-widgets/ghost-letters.owl",
+                     ROOT / "apps/xonars/ghost-letters/app.owl"):
+            source = path.read_text()
+            self.assertIn("component LettersPanel(letters)", source)
+            self.assertIn("Первая зацепка", source)
+            self.assertIn("LettersPanel { letters: sheet.letters }", source)
+            self.assertIn("columns: verticalCategories ? 3 : 1", source)
+
     def test_package_matches_source(self):
         row = next(x for x in json.loads((ROOT / "store-collection.json").read_text()) if x["source"] == "ghost-letters.owl")
         with zipfile.ZipFile(ROOT / row["resources"]) as z:
