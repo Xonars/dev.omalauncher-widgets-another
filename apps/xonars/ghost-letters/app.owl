@@ -325,85 +325,6 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/96ed
     }
   }
 
-  component Notebook(rows, people) {
-    Column {
-      gap: 10
-      SceneTitle { heading: "Личный блокнот"; description: "Только твои предположения. Призрак не подтверждает эти отметки." }
-      RuleLabel { heading: game.notebook.owner }
-      Copy { body: "Нажми улику: ? → вероятно → исключить → ?." }
-      for category in rows key category.key {
-        let tone = get(categoryColors, category.key, gold)
-        CategoryLabel { label: category.label; tint: tone }
-        Grid {
-          columns: 2; gap: 6
-          for clue in category.cards key clue.value {
-            let k = "${int(clue.value)}"
-            let flag = get(notebookMarks, k, "neutral")
-            let tint = flag == "likely" ? moss : (flag == "unlikely" ? ash : tone)
-            Box {
-              fill: width
-              onTap: {
-                if !notebookSaving {
-                  notebookMarks = set(notebookMarks, k, flag == "neutral" ? "likely" : (flag == "likely" ? "unlikely" : "neutral"))
-                }
-              }
-              Clue { entry: set(clue, "detail", flag == "likely" ? "✓  Вероятно" : (flag == "unlikely" ? "×  Исключаю" : "?  Неясно")); tint: tint }
-            }
-          }
-        }
-      }
-      if !game.cooperative {
-        CategoryLabel { label: "Мои подозрения"; tint: ash }
-        for player in people.filter(p => p.value != 0 && p.value != game.notebook.pid) key player.value {
-          let k = "${int(player.value)}"
-          let flag = get(notebookSuspects, k, "neutral")
-          Row {
-            gap: 6; padding: 9; radius: 8; border: 1; borderColor: rule; background: panel
-            onTap: {
-              if !notebookSaving { notebookSuspects = set(notebookSuspects, k, flag == "neutral" ? "likely" : (flag == "likely" ? "unlikely" : "neutral")) }
-            }
-            Text { text: player.name; color: parchment; weight: 1; fontSize: 14 }
-            Text { text: flag == "likely" ? "Подозреваю" : (flag == "unlikely" ? "Доверяю" : "Неясно"); color: flag == "likely" ? ash : (flag == "unlikely" ? moss : dim); fontSize: 12 }
-          }
-        }
-      }
-      CategoryLabel { label: "Заметки" }
-      Input {
-        text: notebookText; lines: 5; fontSize: 15
-        placeholder: "Связи между письмами, сомнения, версии…"
-        onChange: notebookText = sub(value, 0, 2000)
-      }
-      Copy { body: "Отметки и текст сохраняются только после нажатия кнопки внизу." }
-    }
-  }
-
-  component DiscussionHistory(rounds, letters) {
-    let active = reviewRound ?? first(rounds).round
-    Column {
-      gap: 9
-      SceneTitle { heading: "История дела"; description: "Сравнивай версии игроков с письмами соответствующего раунда." }
-      if len(rounds) == 0 { Copy { body: "Обсуждений пока не было." } }
-      Flow {
-        gap: 5
-        for log in rounds key log.round {
-          Box {
-            width: 78; height: 36; align: center; radius: 7; background: active == log.round ? gold : panel
-            onTap: reviewRound = log.round
-            Text { text: "Раунд ${log.round}"; font: sans; align: center; color: active == log.round ? ink : parchment }
-          }
-        }
-      }
-      if len(rounds) > 0 {
-        Post { letters: letters.filter(letter => letter.round == active) }
-        for log in rounds.filter(item => item.round == active) key log.round {
-          for opinion in log.entries key opinion.player {
-            Opinion { player: opinion.player; opinion: opinion }
-          }
-        }
-      }
-    }
-  }
-
   component ReferenceCard(entry, tint = #d7ad74, focused = false) {
     let tone = entry.correct ? moss : (entry.voted ? ash : get(markColors, entry.mark, tint))
     Row {
@@ -746,6 +667,85 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/96ed
       gap: 5
       Text { text: heading; font: serif; fontSize: 30; color: parchment; maxLines: 3 }
       if description != "" { Copy { body: description } }
+    }
+  }
+
+  component Notebook(rows, people) {
+    Column {
+      gap: 10
+      SceneTitle { heading: "Личный блокнот"; description: "Только твои предположения. Призрак не подтверждает эти отметки." }
+      RuleLabel { heading: game.notebook.owner }
+      Copy { body: "Нажми улику: ? → вероятно → исключить → ?." }
+      for category in rows key category.key {
+        let tone = get(categoryColors, category.key, gold)
+        CategoryLabel { label: category.label; tint: tone }
+        Grid {
+          columns: 2; gap: 6
+          for clue in category.cards key clue.value {
+            let k = "${int(clue.value)}"
+            let flag = get(notebookMarks, k, "neutral")
+            let tint = flag == "likely" ? moss : (flag == "unlikely" ? ash : tone)
+            Box {
+              fill: width
+              onTap: {
+                if !notebookSaving {
+                  notebookMarks = set(notebookMarks, k, flag == "neutral" ? "likely" : (flag == "likely" ? "unlikely" : "neutral"))
+                }
+              }
+              Clue { entry: set(clue, "detail", flag == "likely" ? "✓  Вероятно" : (flag == "unlikely" ? "×  Исключаю" : "?  Неясно")); tint: tint }
+            }
+          }
+        }
+      }
+      if !game.cooperative {
+        CategoryLabel { label: "Мои подозрения"; tint: ash }
+        for player in people.filter(p => p.value != 0 && p.value != game.notebook.pid) key player.value {
+          let k = "${int(player.value)}"
+          let flag = get(notebookSuspects, k, "neutral")
+          Row {
+            gap: 6; padding: 9; radius: 8; border: 1; borderColor: rule; background: panel
+            onTap: {
+              if !notebookSaving { notebookSuspects = set(notebookSuspects, k, flag == "neutral" ? "likely" : (flag == "likely" ? "unlikely" : "neutral")) }
+            }
+            Text { text: player.name; color: parchment; weight: 1; fontSize: 14 }
+            Text { text: flag == "likely" ? "Подозреваю" : (flag == "unlikely" ? "Доверяю" : "Неясно"); color: flag == "likely" ? ash : (flag == "unlikely" ? moss : dim); fontSize: 12 }
+          }
+        }
+      }
+      CategoryLabel { label: "Заметки" }
+      Input {
+        text: notebookText; lines: 5; fontSize: 15
+        placeholder: "Связи между письмами, сомнения, версии…"
+        onChange: notebookText = sub(value, 0, 2000)
+      }
+      Copy { body: "Отметки и текст сохраняются только после нажатия кнопки внизу." }
+    }
+  }
+
+  component DiscussionHistory(rounds, letters) {
+    let active = reviewRound ?? first(rounds).round
+    Column {
+      gap: 9
+      SceneTitle { heading: "История дела"; description: "Сравнивай версии игроков с письмами соответствующего раунда." }
+      if len(rounds) == 0 { Copy { body: "Обсуждений пока не было." } }
+      Flow {
+        gap: 5
+        for log in rounds key log.round {
+          Box {
+            width: 78; height: 36; align: center; radius: 7; background: active == log.round ? gold : panel
+            onTap: reviewRound = log.round
+            Text { text: "Раунд ${log.round}"; font: sans; align: center; color: active == log.round ? ink : parchment }
+          }
+        }
+      }
+      if len(rounds) > 0 {
+        Post { letters: letters.filter(letter => letter.round == active) }
+        for log in rounds.filter(item => item.round == active) key log.round {
+          for opinion in log.entries key opinion.player {
+            Opinion { player: opinion.player; opinion: opinion }
+          }
+        }
+      }
     }
   }
 
