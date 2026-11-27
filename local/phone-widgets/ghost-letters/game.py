@@ -23,8 +23,8 @@ import uuid
 HERE = Path(__file__).resolve().parent
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "ghost-letters"
 ANALYTICS_SCHEMA = 1
-GAME_VERSION = "2.8.0"
-BOT_VERSION = "3.0.0"
+GAME_VERSION = "2.9.0"
+BOT_VERSION = "3.1.0"
 CATEGORIES = ("Мотив", "Место", "Способ")
 MARKS = {"echo": "Эхо", "silence": "Тишина", "seal": "Печать"}
 MODES = {
@@ -125,6 +125,12 @@ def evidence_score(knowledge, cid, category):
     return score
 
 
+def public_evidence_at(knowledge, number):
+    """Reconstruct public evidence at a statement's round, without private mail."""
+    return dict(knowledge, round=number, own_mail=[],
+                letters=[entry for entry in knowledge["letters"] if entry["round"] <= number])
+
+
 def belief_scores(knowledge, category, purpose, noise):
     profile = PROFILES[knowledge["profile"]]
     _, spread, skill = DIFFICULTIES[knowledge["difficulty"]]
@@ -150,7 +156,8 @@ def belief_scores(knowledge, category, purpose, noise):
         score = profile[0] * skill * evidence_score(knowledge, cid, category)
         # Cap social influence; repeated opinions are not independent evidence.
         agreement = sum(lead == cid for lead in opinions.values()) / max(1, len(opinions))
-        score += profile[1] * agreement
+        # Social agreement cannot substitute for independent card evidence.
+        score += profile[1] * agreement * (0.55 if adaptive else 1.0)
         score += (0.18 + 0.18 * profile[3]) * (knowledge["own_leads"].get(str(category)) == cid)
         if role == "expert":
             # An expert knows the answer but avoids advertising perfect knowledge in discussion.
@@ -165,7 +172,8 @@ def belief_scores(knowledge, category, purpose, noise):
                 score += 0.35 * (cid == correct)  # maintain plausible public cover
         if purpose == "vote":
             score += 0.14 * (knowledge["own_leads"].get(str(category)) == cid)
-        scores[cid] = score + noise(cid) * spread * (1.3 if knowledge["profile"] == "intuitive" else 0.75 + 0.4 * profile[3])
+        uncertainty = 1.0 if not adaptive else (0.60 if knowledge["difficulty"] == "normal" else 0.40)
+        scores[cid] = score + noise(cid) * spread * uncertainty * (1.3 if knowledge["profile"] == "intuitive" else 0.75 + 0.4 * profile[3])
     return scores
 
 
@@ -459,12 +467,14 @@ class Game:
             before = scores[truth] - max(v for c, v in scores.items() if c != truth)
             after = scores[truth] + signals[truth] - max(v + signals[c] for c, v in scores.items() if c != truth)
             gain = after - before
-            if context["difficulty"] == "hard":
-                # Explicitly distinguish the true clue from the currently popular false theory.
-                rival = max((c for c in board[i] if c != truth), key=lambda c: (public[c], scores[c]))
-                gain = 0.7 * gain + 0.3 * (signals[truth] - signals[rival])
+            # Correct popular false theories at both adaptive difficulties.
+            rival = max((c for c in board[i] if c != truth), key=lambda c: (public[c], scores[c]))
+            disagreement = max(0.0, public[rival] - public[truth])
+            correction = min(0.65, (0.30 if context["difficulty"] == "normal" else 0.45) + 0.20 * disagreement)
+            if disagreement > 0:
+                gain = (1 - correction) * gain + correction * (signals[truth] - signals[rival])
             gains.append(weights[i] * gain)
-        return max(0.0, *gains) + 0.25 * sum(max(0, g) for g in gains) + 0.65 * sum(min(0, g) for g in gains)
+        return max(0.0, *gains) + 0.25 * sum(max(0, g) for g in gains) + 0.85 * sum(min(0, g) for g in gains)
 
     def ghost_apply_hint(self, context, cid, negative=False):
         sign = -1 if negative else 1
@@ -479,7 +489,7 @@ class Game:
             return self.adaptive_ghost_gain(cid, context, negative) if context is not None else self.ghost_gain(cid, coverage, negative)
         def select(pool, threshold, following=()):
             best = max(pool, key=gain)
-            if context is None or context["difficulty"] != "hard":
+            if context is None:
                 return best
             eligible = [cid for cid in pool if gain(cid) > threshold]
             if not eligible:
@@ -489,7 +499,7 @@ class Game:
                 self.ghost_apply_hint(projected, cid)
                 future = max((self.adaptive_ghost_gain(other, projected)
                               for other in following if other != cid), default=0.0)
-                return gain(cid) + 0.35 * max(0.0, future)
+                return gain(cid) + (0.20 if context["difficulty"] == "normal" else 0.35) * max(0.0, future)
             return max(eligible, key=plan)
 
         def snapshot():
@@ -537,12 +547,27 @@ class Game:
             own.append(best)
             add_positive(best)
             pool.remove(best)
-        discard = min(pool, key=gain) if pool else None
-        if discard is not None and gain(discard) >= 0.12:
+        def retention(cid):
+            if context is None:
+                return gain(cid)
+            # Save cards useful for the weakest unresolved category.
+            # Never inspect the hidden deck.
+            priorities = self.ghost_priorities(context)
+            focus = max(range(len(priorities)), key=priorities.__getitem__)
+            truth = self.d["truth"][focus]
+            row = self.d["board"][focus]
+            signals = [hint_signal(self.d["board"], c, focus, cid) for c in row if c != truth]
+            own_signal = hint_signal(self.d["board"], truth, focus, cid)
+            direct = own_signal - max(signals)
+            inverse = min(signals) - own_signal if self.marked else 0.0
+            return max(0.0, direct, inverse) * priorities[focus] + 0.30 * max(0.0, gain(cid))
+
+        discard = min(pool, key=retention) if pool else None
+        if discard is not None and (retention(discard) >= 0.12 or (context is not None and context["remaining"] <= 1)):
             discard = None
         if "analytics" in self.d:
             self.trace("bot_ghost", pid=0, knowledge=self.player_knowledge(0), incoming=sent, decisions=decisions, echo=echo, silence=silence, own=own, discard=discard,
-                       discard_scores={c:gain(c) for c in pool})
+                       discard_scores={c:retention(c) for c in pool})
         return echo, silence, own, discard
 
     def bot_profile(self, pid):
@@ -843,10 +868,50 @@ class Game:
                        social=0.0, revision=0.0, evidence_conflict=0.0, claim_conflict=0.0, role=0.0)
         factors["social"] = max(0, profile[1]) * self.public_suspicions()[target] / max(1, len(self.d["players"]) - 1)
         if adaptive:
-            factors["social"] *= 0.20
+            factors["noise"] *= 0.22 if knowledge["difficulty"] == "normal" else 0.12
+            factors["social"] *= 0.15
+            factors["persistence"] = 0.0
+            factors["unsupported_shift"] = 0.0
+            factors["claim_alignment"] = 0.0
         claims = sorted((note for note in knowledge["notes"] if note["pid"] == target), key=lambda n: n["round"])
         previous = {}
-        for note in claims:
+        if adaptive:
+            # Use evidence available at the time of a statement.
+            # A wrong guess under weak evidence is not deception.
+            repeated = Counter()
+            for note in claims:
+                visible = public_evidence_at(knowledge, note["round"])
+                for key, cid in note["leads"].items():
+                    i = int(key)
+                    if cid not in visible["board"][i]:
+                        continue
+                    scores = {c: evidence_score(visible, c, i) for c in visible["board"][i]}
+                    ranking = sorted(scores.values(), reverse=True)
+                    gap = max(scores.values()) - scores[cid]
+                    confidence = ranking[0] - ranking[1]
+                    conflict = min(1.0, max(0.0, gap - 0.18)) * min(1.0, confidence / 0.65)
+                    if conflict > 0:
+                        factors["evidence_conflict"] += 0.65 * conflict
+                        repeated[(key, cid)] += 1
+                        if repeated[(key, cid)] > 1:
+                            factors["persistence"] += 0.55 * conflict
+                    old = previous.get(key)
+                    if old is not None and old != cid:
+                        delta = scores[cid] - scores[old]
+                        if delta > 0.18:
+                            factors["revision"] -= min(0.25, delta * 0.20)
+                        elif delta < -0.18 and confidence > 0.18:
+                            factors["unsupported_shift"] += min(0.55, -delta * 0.40)
+                    previous[key] = cid
+                claim = note["claim"]
+                tests = note["tests"]
+                if claim is not None and tests and all(affinity(claim, c) == 0 for c in tests):
+                    factors["claim_alignment"] += 0.08
+            for key, limit in (("evidence_conflict", 1.8), ("persistence", 1.0),
+                               ("unsupported_shift", 0.9), ("claim_alignment", 0.24)):
+                factors[key] = min(limit, factors[key])
+            factors["revision"] = max(-0.65, factors["revision"])
+        for note in ([] if adaptive else claims):
             for key, cid in note["leads"].items():
                 if key in previous and previous[key] != cid:
                     if not adaptive:
@@ -854,7 +919,7 @@ class Game:
                     elif evidence_score(knowledge, cid, int(key)) > evidence_score(knowledge, previous[key], int(key)):
                         factors["revision"] -= 0.08
                 previous[key] = cid
-        for key, cid in previous.items():
+        for key, cid in ({} if adaptive else previous).items():
             scores = [evidence_score(knowledge, other, int(key)) for other in knowledge["board"][int(key)]]
             factors["evidence_conflict"] += min(0.55, max(0, max(scores) - evidence_score(knowledge, cid, int(key))) * (0.20 if adaptive else 0.12))
         # A contradictory claim is evidence of possible deception, never access to private mail.
