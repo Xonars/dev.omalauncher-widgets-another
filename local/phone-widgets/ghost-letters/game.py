@@ -86,13 +86,13 @@ def clue_list(record, plural, singular):
     return [] if clue is None else [clue]
 
 
-@lru_cache(maxsize=None)
 FUNCTIONAL_LINKS = {
     frozenset(("Ручка", "Блокнот")): (4.0, "записи ручкой в блокноте"),
     frozenset(("Берег", "Маяк")): (4.0, "маяк на берегу"),
     frozenset(("Фонарь", "Маяк")): (4.0, "световой ориентир"),
 }
 
+@lru_cache(maxsize=None)
 def association(left, right):
     direct = FUNCTIONAL_LINKS.get(frozenset((CARDS[left]["name"], CARDS[right]["name"])))
     if direct:
