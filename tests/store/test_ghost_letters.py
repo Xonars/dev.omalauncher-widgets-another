@@ -711,7 +711,19 @@ class GhostLettersRules(unittest.TestCase):
             self.assertIn("component ReplyEditor(groups)", source)
             self.assertIn('detectiveHandOpen = phase == "mail" || phase == "intro"', source)
             self.assertIn("if editable { TurnAction {} }", source)
-            self.assertIn('if phase != "note" && (phase != "mail" || showDesk) { TurnAction {} }', source)
+            self.assertIn('if phase != "mail" || showDesk { TurnAction {} }', source)
+
+    def test_mobile_polish_layout_guards(self):
+        for path in (ROOT / "local/phone-widgets/ghost-letters.owl",
+                     ROOT / "apps/xonars/ghost-letters/app.owl"):
+            source = path.read_text()
+            letters = source.split("  component LettersPanel(", 1)[1].split("  component DiscardPile(", 1)[0]
+            self.assertIn("fill: width; height: 32", letters)
+            self.assertNotIn('text: "Все"', letters)
+            self.assertIn('fontWeight: 700; weight: 1; maxLines: 1', letters)
+            self.assertIn('Table { rows: rows; editable: true }', source)
+            self.assertIn('if replySection == section.key { Flow', source)
+            self.assertNotIn('height: mini ? 20 : 29', source)
 
     def test_package_matches_source(self):
         row = next(x for x in json.loads((ROOT / "store-collection.json").read_text()) if x["source"] == "ghost-letters.owl")

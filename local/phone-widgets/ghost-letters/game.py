@@ -23,7 +23,7 @@ import uuid
 HERE = Path(__file__).resolve().parent
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "ghost-letters"
 ANALYTICS_SCHEMA = 1
-GAME_VERSION = "2.14.0"
+GAME_VERSION = "2.14.1"
 BOT_VERSION = "3.6.0"
 CATEGORIES = ("Мотив", "Место", "Способ")
 STANCES = ("Проверяю гипотезу", "Предварительная версия", "Уверенная версия")
