@@ -1,5 +1,5 @@
 app "Письма призрака" {
-  meta { owl: 18; description: "Карточное расследование с тайной перепиской"; version: "2.3.0"; category: "games" }
+  meta { owl: 18; description: "Карточное расследование с тайной перепиской"; version: "2.4.0"; category: "games" }
   title: "Письма призрака"
   icon: appIcon
   requires { pacman: ["python"] }
