@@ -73,6 +73,8 @@ def main():
  for item in json.loads((LOCAL/'ATTRIBUTION.json').read_text()):
   if item['kind'] not in ('widget','app'): continue
   filename=item['file']; source=LOCAL/filename; kind=item['kind']; group=kind+'s'
+  # Fetch is maintained by the upstream OWL store; keep the historical source only.
+  if filename == 'market-simonschubert-fetch.owl': continue
   if selected and filename not in selected and filename in previous:
    manifest.append(previous[filename])
    continue
