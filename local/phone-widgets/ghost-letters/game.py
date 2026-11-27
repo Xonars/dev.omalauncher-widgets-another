@@ -418,12 +418,17 @@ class Game:
             for key, cid in note["leads"].items():
                 i = int(key)
                 if cid in rows[i]:
-                    opinions[i][note["pid"]] = (cid, note["round"])
+                    opinions[i][note["pid"]] = (cid, note["round"], 1.0)
+            # A stated test is a weaker signal than an endorsed lead.
+            for cid in note["tests"]:
+                for i, row in enumerate(rows):
+                    if cid in row and str(i) not in note["leads"]:
+                        opinions[i][note["pid"]] = (cid, note["round"], 0.35)
         public = []
         for i, row in enumerate(rows):
             counts = {c: 0.0 for c in row}
-            for cid, number in opinions[i].values():
-                counts[cid] += 0.75 ** max(0, knowledge["round"] - number - 1)
+            for cid, number, confidence in opinions[i].values():
+                counts[cid] += confidence * 0.75 ** max(0, knowledge["round"] - number - 1)
             total = sum(counts.values())
             public.append({c: counts[c] / total if total else 0.0 for c in row})
         return dict(scores=scores, public=public, difficulty=knowledge["difficulty"],
@@ -472,6 +477,21 @@ class Game:
         context = self.ghost_context() if self.d.get("difficulty", "normal") != "easy" else None
         def gain(cid, negative=False):
             return self.adaptive_ghost_gain(cid, context, negative) if context is not None else self.ghost_gain(cid, coverage, negative)
+        def select(pool, threshold, following=()):
+            best = max(pool, key=gain)
+            if context is None or context["difficulty"] != "hard":
+                return best
+            eligible = [cid for cid in pool if gain(cid) > threshold]
+            if not eligible:
+                return best
+            def plan(cid):
+                projected = dict(context, scores=[dict(row) for row in context["scores"]])
+                self.ghost_apply_hint(projected, cid)
+                future = max((self.adaptive_ghost_gain(other, projected)
+                              for other in following if other != cid), default=0.0)
+                return gain(cid) + 0.35 * max(0.0, future)
+            return max(eligible, key=plan)
+
         def snapshot():
             if context is None:
                 return {}
@@ -487,7 +507,7 @@ class Game:
                 self.ghost_apply_hint(context, cid)
         pool = list(sent)
         while pool:
-            best = max(pool, key=lambda cid: gain(cid))
+            best = select(pool, 0.16, hand if self.marked else pool + list(hand))
             if "analytics" in self.d:
                 decisions.append(dict(stage="echo", coverage=coverage[:], **snapshot(), scores={c:gain(c) for c in pool}, best=best, threshold=0.16))
             if gain(best) <= 0.16:
@@ -509,7 +529,7 @@ class Game:
         for _ in range(2 if self.duel else 1):
             if not pool:
                 break
-            best = max(pool, key=lambda cid: gain(cid))
+            best = select(pool, 0.24 if echo else 0.16, pool if self.duel and not own else ())
             if "analytics" in self.d:
                 decisions.append(dict(stage="seal", coverage=coverage[:], **snapshot(), scores={c:gain(c) for c in pool}, best=best, threshold=0.24 if echo else 0.16))
             if gain(best) <= (0.24 if echo else 0.16):
@@ -643,13 +663,13 @@ class Game:
                 planned.append(target2)
                 remaining.remove(second)
             discard = min(remaining, key=lambda cid: max(affinity(cid, lead) for lead in leads))
+            if adaptive and check and not any(c in check["clues"] for c in planned):
+                check = None
             if "analytics" in self.d:
                 self.trace("bot_mail", pid=pid, knowledge=knowledge, rankings=rankings, targets=leads,
                            candidates=[dict(card=c, target=t, score=mail_score(c,t)) for c in p["hand"] for t in leads],
                            selected=[best] if second is None else [best,second], planned=planned, check=check,
                            uncertainty=uncertainty if adaptive else None, second_target_bonus=0.25 if self.duel else None)
-            if adaptive and check and not any(c in check["clues"] for c in planned):
-                check = None
             self.post(pid, best, discard if self.noise("redraw", pid) < 0.55 else None, check, second, planned)
         self.d["mail"].sort(key=lambda cid: self.noise("envelope", cid))
         if self.d["players"][0]["local"]:
@@ -1461,6 +1481,9 @@ class Game:
         lines = [] if self.cooperative else [
             tally_line("Арест", "нет решения" if arrested is None else self.name(arrested)),
             tally_line("Убийца", self.name(self.role_id("killer")))]
+        if not self.cooperative:
+            lines.append(tally_line("Убийца пойман", "да" if arrested == self.role_id("killer") else "нет"))
+            lines.append(tally_line("Все три улики раскрыты", "да" if self.d["successes"] == 3 else "нет"))
         for pid in self.d["excluded"]:
             lines.append(tally_line("Арестован сообщник", self.name(pid)))
         if "winners" in self.d:
@@ -1558,6 +1581,7 @@ def case_summary(data):
         duration=max(0,end-start) if start is not None and end is not None else None,
         players=len(data["players"]), humans=len(data["local"]), round=data["round"], rounds=data["rounds"],
         successes=data["successes"], solved=data["solved"], winner=data["winner"],
+        killer_arrested=None if data["mode"] == "coop" else any(p["role"] == "killer" and pid == data.get("arrested") for pid, p in enumerate(data["players"])),
         partial=a.get("partial",True), version=a.get("version","legacy"),
         people=[dict(role=data["players"][pid]["role"], label=ROLES[data["players"][pid]["role"]][0],
                      won=pid in data["winners"]) for pid in data["local"]])
@@ -1573,6 +1597,9 @@ def statistics(records, role=None):
     participants=[p for r in rows for p in r["people"] if not role or p["role"]==role]
     return dict(total=len(rows), wins=sum(p["won"] for p in participants), attempts=len(participants),
                 solved=sum(r["solved"] for r in rows), correct=sum(r["successes"] for r in rows),
+                all_clues=sum(r["successes"] == 3 for r in rows),
+                killer_arrests=sum(r["killer_arrested"] is True for r in rows),
+                arrest_games=sum(r["killer_arrested"] is not None for r in rows),
                 clues=3*len(rows), average_seconds=round(sum(times)/len(times)) if times else None,
                 timed_games=len(times), roles=roles,
                 empty_rounds=sum(not (l["echo"] or l["silence"] or l["seal"] is not None or l.get("extra")) for d in records for l in d["letters"] if l["round"]>0),
