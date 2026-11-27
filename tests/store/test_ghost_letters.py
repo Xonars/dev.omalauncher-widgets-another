@@ -249,6 +249,54 @@ class GhostLettersRules(unittest.TestCase):
         self.assertIn("evidence_conflict", factors)
         self.assertIn("claim_conflict", factors)
 
+    def test_social_deduction_uses_time_and_persistence(self):
+        from unittest.mock import patch
+        g = Game.new("classic", 6, 1, False, difficulty="normal", seed=42)
+        pid = g.role_id("detective")
+        target, other = [i for i in range(1, 6) if i != pid][:2]
+        right, wrong = g.d["board"][0][:2]
+        g.d["round"] = 3
+        def statement(who, number, card):
+            return dict(pid=who, round=number, leads={"0": card},
+                        suspect=None, claim=None, tests=[])
+        g.d["history"] = [statement(target, n, wrong) for n in (1, 2, 3)]
+        g.d["history"] += [statement(other, 1, wrong), statement(other, 2, right),
+                           statement(other, 3, right)]
+        # In round one nothing distinguished either card; later evidence is strong.
+        def score(knowledge, cid, category):
+            return float(knowledge["round"] >= 2 and cid == right)
+        with patch.object(mod, "evidence_score", side_effect=score):
+            persistent = g.suspicion_factors(pid, target)
+            revised = g.suspicion_factors(pid, other)
+        self.assertGreater(persistent["persistence"], 0)
+        self.assertGreater(persistent["evidence_conflict"], revised["evidence_conflict"])
+        self.assertEqual(revised["evidence_conflict"], 0)
+        self.assertLess(revised["revision"], 0)
+        self.assertGreater(sum(persistent.values()), sum(revised.values()))
+        self.assertLessEqual(persistent["noise"], 0.95 * 0.22)
+
+    def test_social_deduction_does_not_read_private_roles_or_mail(self):
+        g = Game.new("classic", 6, 1, False, difficulty="hard", seed=42)
+        pid = g.role_id("detective")
+        target = next(i for i in range(1, 6) if i != pid)
+        before = g.suspicion_factors(pid, target)
+        g.d["players"][target]["role"] = "killer"
+        g.d["players"][target]["hand"] = [0, 1, 2]
+        g.d["truth"] = [row[1] for row in g.d["board"]]
+        self.assertEqual(before, g.suspicion_factors(pid, target))
+
+    def test_public_evidence_snapshot_excludes_future_and_private_mail(self):
+        g = Game.new("classic", 6, 1, False, difficulty="normal", seed=42)
+        pid = g.role_id("detective")
+        knowledge = g.player_knowledge(pid)
+        knowledge["letters"] = [dict(round=n, hints=[(0, 1)]) for n in (0, 1, 2)]
+        knowledge["own_mail"] = [dict(round=1, missing=[1])]
+        snapshot = mod.public_evidence_at(knowledge, 1)
+        self.assertEqual([letter["round"] for letter in snapshot["letters"]], [0, 1])
+        self.assertEqual(snapshot["own_mail"], [])
+        self.assertEqual(snapshot["round"], 1)
+        self.assertEqual(len(knowledge["letters"]), 3)
+
     def test_knowledge_deduplicates_completed_discussion(self):
         g = Game.new("classic", 5, 1, False, seed=2)
         pid = g.role_id("detective")
