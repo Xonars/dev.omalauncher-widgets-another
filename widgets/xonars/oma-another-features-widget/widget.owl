@@ -47,11 +47,11 @@ def install(url, digest, entry):
                 os.replace(temporary, target)
         marker.write_text(digest)
 
-install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/155991598134309e83fb2b8366913fc61d6983b3ed432d67fdb3f8e140e83885.zip', '155991598134309e83fb2b8366913fc61d6983b3ed432d67fdb3f8e140e83885', 'xonars-oma-another-features-widget')
+install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/78df1e46b04531ea623f248201ab2b8149ebef388fc6e8d0b58a7afd742e999c.zip', '78df1e46b04531ea623f248201ab2b8149ebef388fc6e8d0b58a7afd742e999c', 'xonars-oma-another-features-widget')
 """
   let storeInstall = "python -c ${sh(storeBootstrap)}"
 
-  meta { owl: 10; version: "2.0.1"; description: "Количество возможностей OMA Another. Нажмите, чтобы открыть каталог отличий. · ресурсы при первом запуске"; category: "productivity" ; license: "MIT" }
+  meta { owl: 10; version: "2.1.1"; description: "Количество возможностей OMA Another. Нажмите, чтобы открыть каталог отличий. · ресурсы при первом запуске"; category: "productivity" ; license: "MIT" }
   requires { pacman: ["python"] }
   page: 1
   size: 3x2
@@ -63,7 +63,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/1559
     Text { text: "OMA ANOTHER"; font: sans; fontSize: 11; letterSpacing: 1; color: accent; bold: true; maxLines: 1 }
     Row { gap: 10; align: center
       Text { text: catalog == null ? "…" : str(total); font: sans; fontSize: 38; color: accent; bold: true }
-      Text { text: "возможностей\nAnother"; font: sans; fontSize: 13; weight: 1 }
+      Text { text: "функций\nв каталоге"; font: sans; fontSize: 13; weight: 1 }
     }
     Text { text: "Открыть обзор →"; font: sans; fontSize: 11; color: muted; maxLines: 1 }
   }

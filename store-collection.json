@@ -45,13 +45,13 @@
     "source": "84-oma-another-features-app.owl",
     "path": "apps/xonars/oma-another-features/app.owl",
     "author": "xonars",
-    "resources": "resources/ca86c002834d7f3ec232b7c14d022ed5eb2f4900492dd34ad06dc7dd72fc56c3.zip"
+    "resources": "resources/3a099fddae72426684ae19d06ec0fb9a96093d1211d088430df041331cb01f35.zip"
   },
   {
     "source": "85-oma-another-features.owl",
     "path": "widgets/xonars/oma-another-features-widget/widget.owl",
     "author": "xonars",
-    "resources": "resources/155991598134309e83fb2b8366913fc61d6983b3ed432d67fdb3f8e140e83885.zip"
+    "resources": "resources/78df1e46b04531ea623f248201ab2b8149ebef388fc6e8d0b58a7afd742e999c.zip"
   },
   {
     "source": "apk-maker-app.owl",
