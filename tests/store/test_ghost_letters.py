@@ -507,6 +507,64 @@ class GhostLettersRules(unittest.TestCase):
         options = g.ballot_groups()[0]["options"]
         self.assertNotIn(pid, [o["value"] for o in options])
 
+    def test_kremlin_seed_initial_deal_recovers_missing_clue(self):
+        seed = 141717134229087
+        for difficulty in ("normal", "hard", "easy"):
+            g = Game.new("classic", 6, 1, False, difficulty=difficulty, seed=seed)
+            self.assertEqual(g.d["board"], [[51, 6, 65, 94], [32, 105, 49, 117], [20, 125, 57, 106]])
+            g.d["truth"] = [94, 117, 20]
+            before = g.d["deck"][:]
+            self.assertTrue(all(g.ghost_margins(c)[2] <= 0 for c in before[-5:]))
+            g.enable_analytics()
+            g.prepare_ghost_deal()
+            self.assertCountEqual(before, g.d["deck"])
+            if difficulty == "easy":
+                self.assertEqual(before, g.d["deck"])
+                continue
+            self.assertLessEqual(len(set(g.d["deck"][-5:]) - set(before[-5:])), 2)
+            self.assertTrue(any(g.ghost_margins(c)[2] >= 0.32 and
+                                min(g.ghost_margins(c)) >= -0.28 for c in g.d["deck"][-5:]))
+            self.assertTrue(any(g.ghost_margins(c)[1] >= 0.32 for c in g.d["deck"][-5:]))
+            event = g.d["analytics"]["events"][-1]
+            self.assertEqual(event["kind"], "ghost_deal")
+            self.assertGreater(event["coverage_after"][2], event["coverage_before"][2])
+            # No hidden deck search after the initial deal.
+            g.refill(0)
+            deck = g.d["deck"][:]
+            g.prepare_ghost_deal()
+            self.assertEqual(deck, g.d["deck"])
+        human = Game.new("classic", 6, 1, True, seed=seed)
+        human.d["truth"] = [row[0] for row in human.d["board"]]
+        before = human.d["deck"][:]
+        human.prepare_ghost_deal()
+        self.assertEqual(before, human.d["deck"])
+
+    def test_silence_can_eliminate_one_of_tied_alternatives(self):
+        from unittest.mock import patch
+        g = Game.new("classic", 6, 1, False, seed=42)
+        g.d["truth"] = [row[0] for row in g.d["board"]]
+        rival = g.d["board"][2][1]
+        context = g.ghost_context()
+        hint = g.d["deck"][-1]
+        def signal(board, cid, category, card):
+            return 2.0 if category == 2 and cid == rival else 0.0
+        with patch.object(mod, "hint_signal", side_effect=signal):
+            g.d["marked"] = False
+            self.assertEqual(g.adaptive_ghost_gain(hint, context, negative=True), 0)
+            g.d["marked"] = True
+            self.assertGreater(g.adaptive_ghost_gain(hint, context, negative=True), 0.22)
+
+    def test_unbacked_churn_is_weak_and_not_a_single_revision(self):
+        g = Game.new("classic", 6, 1, False, seed=42)
+        pid = g.role_id("detective")
+        target = next(i for i in range(1, 6) if i != pid)
+        g.d["round"] = 3
+        for n, cid in enumerate(g.d["board"][2][:3], 1):
+            g.d["history"].append(dict(pid=target, round=n, leads={"2": cid},
+                                       suspect=None, claim=None, tests=[]))
+            factor = g.suspicion_factors(pid, target)["unbacked_churn"]
+            self.assertEqual(factor, 0.12 if n == 3 else 0.0)
+
     def test_package_matches_source(self):
         row = next(x for x in json.loads((ROOT / "store-collection.json").read_text()) if x["source"] == "ghost-letters.owl")
         with zipfile.ZipFile(ROOT / row["resources"]) as z:
