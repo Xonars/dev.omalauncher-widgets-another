@@ -691,7 +691,7 @@ class GhostLettersRules(unittest.TestCase):
                      ROOT / "apps/xonars/ghost-letters/app.owl"):
             source = path.read_text()
             self.assertIn("component DetectiveHand(hand, editable = false)", source)
-            self.assertIn("component DiscardPile(hand)", source)
+            self.assertIn("component DiscardPile(hand, count = 0, editable = false)", source)
             self.assertIn('notebookTab == "people" && game.investigation != null', source)
             self.assertIn('key: "", label: "Стол"', source)
             self.assertNotIn('key: "letters", label: "Письма"', source)

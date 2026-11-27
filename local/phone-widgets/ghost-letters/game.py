@@ -1982,7 +1982,7 @@ class Game:
                     action=action, mode=MODES[self.d["mode"]], round=self.d["round"],
                     rounds=self.d["rounds"], marked=self.marked, cooperative=self.cooperative,
                     flow=self.flow_view(), local_count=len(self.d["local"]), difficulty=self.d.get("difficulty", "normal"), actor=actor, groups=self.groups(), board=board,
-                    notebook=self.notebook_view(), detective_hand=self.detective_hand_view(), history=self.history_view(), investigation=self.investigation_view(),
+                    notebook=self.notebook_view(), detective_hand=self.detective_hand_view(), discard_count=len(self.d["discard"]), history=self.history_view(), investigation=self.investigation_view(),
                     roster=roster, letters=letters, notes=notes, speaker=speaker, statement=statement,
                     tallies=self.d["counts"] if phase in ("appeal", "arrest", "result") else [],
                     outcome=self.outcome() if result else [],

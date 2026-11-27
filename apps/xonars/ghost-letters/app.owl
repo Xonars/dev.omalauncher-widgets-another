@@ -532,16 +532,20 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
     }
   }
 
-  component DiscardPile(hand) {
-    let chosen = hand.find(c => c.value == choices.discard)
+  component DiscardPile(hand, count = 0, editable = false) {
+    let chosen = editable ? hand.find(c => c.value == choices.discard) : null
     Row {
-      fill: width; gap: 5; padding: 5; align: center; radius: 7
-      border: 1; borderColor: handAction == "discard" ? ash : rule
-      background: mix(panel, ash, handAction == "discard" ? 0.20 : 0.05)
-      onTap: { if queued != token { handAction = handAction == "discard" ? "send" : "discard"; detectiveHandOpen = true } }
-      if chosen.artwork != null && illustrated { Image { src: chosen.artwork; size: 30; radius: 3; fit: contain; label: chosen.label } }
-      else { Text { text: "▧"; fontSize: 21; color: ash } }
-      Text { text: chosen != null ? "Сброс: ${chosen.label}" : (handAction == "discard" ? "Выбери карту для сброса" : "Стопка сброса"); color: parchment; font: sans; fontSize: 12; weight: 1; maxLines: 2 }
+      fill: width; gap: 5; padding: 4; align: center; radius: 7
+      border: 1; borderColor: editable && handAction == "discard" ? ash : rule
+      background: mix(panel, ash, editable && handAction == "discard" ? 0.20 : 0.05)
+      Row {
+        weight: 1; gap: 5; align: center
+        onTap: { if editable && queued != token { handAction = handAction == "discard" ? "send" : "discard"; detectiveHandOpen = true } }
+        if chosen.artwork != null && illustrated { Image { src: chosen.artwork; size: 26; radius: 3; fit: contain; label: chosen.label } }
+        else { Text { text: "▧"; fontSize: 19; color: ash } }
+        Text { text: chosen != null ? "Сброс: ${chosen.label}" : (editable && handAction == "discard" ? "Выбери карту для сброса" : "Стопка сброса"); color: parchment; font: sans; fontSize: 12; weight: 1; maxLines: 2 }
+        Text { text: "${count}"; color: dim; font: sans; fontSize: 11 }
+      }
       if chosen != null {
         Box {
           padding: 5; onTap: { if queued != token { choices = remove(choices, "discard"); handAction = "send" } }
@@ -1876,7 +1880,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
                 }
               } else {
                 if !showDesk && len(sheet.board ?? []) > 0 && sheet.phase != "result" && sheet.phase != "role" {
-                  if sheet.phase == "mail" { DiscardPile { hand: sheet.groups.find(g => g.key == "send").options } }
+                  DiscardPile { hand: sheet.detective_hand ?? []; count: sheet.discard_count ?? 0; editable: sheet.phase == "mail" }
                   LettersPanel { letters: sheet.letters }
                   Table { rows: sheet.board }
                 }
