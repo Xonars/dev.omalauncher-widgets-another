@@ -23,10 +23,10 @@ import uuid
 HERE = Path(__file__).resolve().parent
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "ghost-letters"
 ANALYTICS_SCHEMA = 1
-GAME_VERSION = "2.14.1"
-BOT_VERSION = "3.6.0"
+GAME_VERSION = "3.1.0"
+BOT_VERSION = "3.7.0"
 CATEGORIES = ("Мотив", "Место", "Способ")
-STANCES = ("Проверяю гипотезу", "Предварительная версия", "Уверенная версия")
+STANCES = ("Пока не уверен", "Предварительная версия", "Уверенная версия")
 DEFENSES = ("Я проверял гипотезу", "Я пересмотрел версию", "Я сохраняю свою версию")
 ACCUSATION_REASONS = ("Противоречие письмам", "Необоснованная смена версии", "Противоречие в заявленных письмах", "Недостаточно оснований, хочу проверить")
 MARKS = {"echo": "Эхо", "silence": "Тишина", "seal": "Печать"}
@@ -86,8 +86,17 @@ def clue_list(record, plural, singular):
     return [] if clue is None else [clue]
 
 
+FUNCTIONAL_LINKS = {
+    frozenset(("Ручка", "Блокнот")): (4.0, "записи ручкой в блокноте"),
+    frozenset(("Берег", "Маяк")): (4.0, "маяк на берегу"),
+    frozenset(("Фонарь", "Маяк")): (4.0, "световой ориентир"),
+}
+
 @lru_cache(maxsize=None)
 def association(left, right):
+    direct = FUNCTIONAL_LINKS.get(frozenset((CARDS[left]["name"], CARDS[right]["name"])))
+    if direct:
+        return direct
     a, b = CARDS[left]["tags"], CARDS[right]["tags"]
     links = sorted(((min(a[tag], b[tag]), tag) for tag in a.keys() & b.keys()),
                    key=lambda pair: (-pair[0], pair[1]))
@@ -121,10 +130,7 @@ def evidence_score(knowledge, cid, category):
         age = max(0, knowledge["round"] - entry["round"])
         for hint, sign in entry["hints"]:
             score += sign * (0.91 ** age) * hint_signal(board, cid, category, hint)
-    for entry in knowledge["own_mail"]:
-        age = max(0, knowledge["round"] - entry["round"])
-        for hint in entry["missing"]:
-            score -= 0.14 * (0.85 ** age) * hint_signal(board, cid, category, hint)
+    # Unopened mail is inconclusive, not negative evidence.
     return score
 
 
@@ -432,8 +438,7 @@ class Game:
                 self.collect_bot_mail()
         elif self.phase == "reveal":
             order = list(range(1, len(self.d["players"])))
-            first = self.d.get("first_sender") or order[0]
-            offset = order.index(first)
+            offset = (self.d["round"] - 1) % len(order)
             self.d["speakers"] = order[offset:] + order[:offset]
             self.next_speaker()
         elif self.phase == "statement":
@@ -494,22 +499,16 @@ class Game:
         scores = [{c: evidence_score(knowledge, c, i) for c in row}
                   for i, row in enumerate(rows)]
         opinions = [{} for _ in rows]
-        tested = [{} for _ in rows]
+        tested = [set() for _ in rows]
         for note in sorted(knowledge["notes"], key=lambda n: n["round"]):
             for key, cid in note["leads"].items():
                 i = int(key)
                 if cid in rows[i]:
                     opinions[i][note["pid"]] = (cid, note["round"], 0.25 if note.get("stance") == 0 else 1.0)
-            # A stated test is a weaker signal than an endorsed lead.
+            # A test identifies a category to clarify, never an endorsed card.
             for i, row in enumerate(rows):
-                candidates = [cid for cid in note["tests"] if cid in row]
-                if len(candidates) == 1 and str(i) not in note["leads"]:
-                    # Multiple hypotheses in one category are not an endorsement.
-                    tested[i][note["pid"]] = (candidates[0], note["round"], 0.25)
-        # Tests inform uncertainty, but never overwrite a stated public version.
-        for i, row in enumerate(rows):
-            for pid, test in tested[i].items():
-                opinions[i].setdefault(pid, test)
+                if note["round"] >= knowledge["round"] - 1 and any(cid in row for cid in note["tests"]):
+                    tested[i].add(note["pid"])
         public = []
         for i, row in enumerate(rows):
             counts = {c: 0.0 for c in row}
@@ -525,6 +524,7 @@ class Game:
                                confidence=opinions[i][pid][2], round=opinions[i][pid][1])
                           for pid in sorted(local_ids) if pid in opinions[i]])
         return dict(scores=scores, public=public, human=human, confirmed=[],
+                    tested=[len(pids) for pids in tested],
                     difficulty=knowledge["difficulty"],
                     remaining=max(1, knowledge["rounds"] - knowledge["round"] + 1))
 
@@ -545,6 +545,8 @@ class Game:
                 weight = max(weight, 0.35) * 1.35
             elif any(n["card"] != truth for n in context.get("human", [[] for _ in self.d["truth"]])[i]):
                 weight = max(weight, 0.22)
+            if context.get("tested", [0] * len(self.d["truth"]))[i] and gap < 0.55:
+                weight *= 1.10
             if context["difficulty"] == "hard":
                 weight *= 1.0 + (0.75 + 0.5 / context["remaining"]) * disagreement
             weights.append(weight)
@@ -669,7 +671,15 @@ class Game:
             best = select(pool, 0.16, hand if self.marked else pool + list(hand))
             if "analytics" in self.d:
                 decisions.append(dict(stage="echo", coverage=coverage[:], **snapshot(), scores={c:gain(c) for c in pool}, best=best, threshold=0.16))
-            if gain(best) <= 0.16:
+            threshold = 0.16
+            if context is not None and not echo and gain(best) <= threshold:
+                safe = [c for c in pool if min(self.ghost_margins(c)) >= -0.10
+                        and max(self.ghost_margins(c)) >= 0.22 and gain(c) > 0.09]
+                if safe:
+                    best, threshold = max(safe, key=gain), 0.09
+                    if "analytics" in self.d:
+                        decisions[-1].update(best=best, threshold=threshold)
+            if gain(best) <= threshold:
                 break
             echo.append(best)
             add_positive(best)
@@ -970,7 +980,7 @@ class Game:
                     claim, tests = alternative, [target]
         speech = self.bot_speech(knowledge, claim, tests, leads, receipt.get("check"), suspect=suspect)
         reason = self.public_reason(pid, suspect) if suspect is not None else ""
-        if suspect is not None and not hostile and knowledge["difficulty"] != "easy" and not final_round and reason.startswith("Предварительное подозрение"):
+        if suspect is not None and not hostile and knowledge["difficulty"] != "easy" and reason.startswith("Предварительное подозрение"):
             suspect, reason = None, ""
             speech = self.bot_speech(knowledge, claim, tests, leads, receipt.get("check"), suspect=None)
         if "analytics" in self.d:
@@ -1001,24 +1011,27 @@ class Game:
             else:
                 parts.append(f"Я хотел проверить {names(tests)}, но моя ассоциация непрямая.")
         else:
-            parts.append(f"Моя версия началась с карты {names([claim])}.")
+            parts.append(f"Я сообщаю, что отправил {names([claim])}.")
         opened = self.claim_opened(claim)
         if opened and self.claim_mark(claim) == MARKS["silence"]:
-            parts.append("Призрак обозначил ложный след. Эту связь стоит пересмотреть.")
+            parts.append("Призрак явно отметил ложный след. Это повод пересмотреть проверяемую связь.")
         elif opened:
-            parts.append({"analyst": "Карта открыта, это аргумент в пользу версии, но не доказательство.",
+            parts.append({"analyst": "Письмо открыто: связь заслуживает внимания, но не подтверждает конкретную улику.",
                           "skeptic": "Карта открыта, однако она может указывать на другую категорию.",
                           "intuitive": "Карта открыта. Перед голосованием учту и менее очевидные связи." if final_round else "Карта открыта. Попробую поискать и менее очевидные связи.",
-                          "social": "Карта открыта; интересно, увидели ли остальные ту же связь.",
+                          "social": "Письмо открыто. Кто видит другую ассоциацию?",
                           "strategist": "Карта открыта. Проверю, не ведут ли другие письма туда же."}[profile])
         else:
-            parts.append({"analyst": "Карта исчезла, значит вес этой версии пока ниже.",
-                          "skeptic": "Карта исчезла, но это ещё не опровергает версию.",
-                          "intuitive": "Возможно, моя ассоциация оказалась слишком необычной.",
-                          "social": "Карта исчезла. Сравню её с версиями остальных.",
-                          "strategist": "Карта исчезла; перед голосованием стоит пересмотреть эту версию." if final_round else "Карта исчезла; в следующем раунде нужна другая проверка."}[profile])
+            parts.append({"analyst": "Письмо не открыто: результат проверки неизвестен.",
+                          "skeptic": "Призрак не выбрал письмо, но это не опровергает проверяемую улику.",
+                          "intuitive": "Возможно, призрак предпочёл более понятную ассоциацию.",
+                          "social": "Проверка без ответа. Какие открытые письма убедили остальных?",
+                          "strategist": "Перед голосованием опираюсь на открытые письма, а не на отсутствие ответа." if final_round else "Попробую другую проверку; пока результат неизвестен."}[profile])
+        if leads:
+            parts.append("Моя текущая версия по открытым письмам: " +
+                         "; ".join(f"{CATEGORIES[int(k)]} — {names([cid])}" for k, cid in leads.items()) + ".")
         if check:
-            parts.append(f"Перепроверял версию игрока «{self.name(check['pid'])}».")
+            parts.append(f"Перепроверял ассоциацию игрока «{self.name(check['pid'])}».")
         else:
             other = next((n for n in reversed(knowledge["notes"])
                           if n["pid"] != knowledge["pid"] and n["leads"] and
@@ -1064,20 +1077,9 @@ class Game:
                     parts.append(f"{names([cid])} вместо {names([old])} — пока альтернативная версия, не доказательство.")
                 break
             if suspect is not None:
-                prior = [n for n in knowledge["notes"] if n["pid"] == suspect]
-                for n in reversed(prior):
-                    visible = public_evidence_at(knowledge, n["round"])
-                    conflicts = [(k, c) for k, c in n["leads"].items()
-                                 if max(evidence_score(visible, other, int(k)) for other in visible["board"][int(k)]) -
-                                 evidence_score(visible, c, int(k)) > 0.55]
-                    if conflicts:
-                        k, c = conflicts[0]
-                        repeated = sum(old["leads"].get(k) == c for old in prior)
-                        if repeated >= 2:
-                            parts.append(f"Игрок «{self.name(suspect)}» несколько раз отстаивал {names([c])}, хотя письма поддерживали другую версию. Это повод проверить его, не доказательство.")
-                        else:
-                            parts.append(f"Версия игрока «{self.name(suspect)}» о {names([c])} плохо согласовалась с тогдашними письмами. Пока это лишь подозрение.")
-                        break
+                reason = self.public_reason(knowledge["pid"], suspect)
+                if not reason.startswith("Предварительное подозрение"):
+                    parts.append(f"Хочу уточнить показания игрока «{self.name(suspect)}»: {reason}")
         return " ".join(parts)
 
     def show_statement(self, pid, leads, suspect, claim=None, tests=(), *, speech="", stance=1, reason=""):
@@ -1085,6 +1087,8 @@ class Game:
         inherited = clue_list(check, "clues", "clue") if check else []
         tests = list(dict.fromkeys([*inherited, *tests]))
         # Preserve an explicit pass to distinguish silence from an unspoken turn.
+        if not leads:
+            stance = 0
         self.d["notes"].append(dict(pid=pid, leads=leads, suspect=suspect,
                                     round=self.d["round"], claim=claim, tests=tests, check=check, speech=speech, stance=stance, reason=reason))
         self.trace("statement", pid=pid, leads=leads, suspect=suspect, claim=claim, tests=tests, speech=speech, stance=stance, reason=reason)
@@ -1180,16 +1184,20 @@ class Game:
                     conflict = min(1.0, max(0.0, gap - 0.38)) * min(1.0, confidence / 0.85)
                     # A tentative test is weaker evidence than an endorsed claim.
                     stance = note.get("stance", 1)
-                    weight = (0.25, 0.65, 1.0)[stance] if stance in (0, 1, 2) else 0.65
-                    if conflict > 0:
+                    weight = (0.0, 0.45, 1.0)[stance] if stance in (0, 1, 2) else 0.45
+                    if conflict > 0 and confidence > 0.35:
                         age = 0.78 ** max(0, knowledge["round"] - note["round"])
-                        factors["evidence_conflict"] += 0.14 * conflict * weight * age
-                        repeated[(key, cid)] += 1
-                        if repeated[(key, cid)] > 1:
+                        if stance != 0:
+                            repeated[(key, cid)] += 1
+                        # A single mistaken theory is not suspicious.
+                        if repeated[(key, cid)] > 1 and stance != 0:
+                            factors["evidence_conflict"] += 0.14 * conflict * weight * age
                             factors["persistence"] += 0.24 * conflict * weight * age
                     elif confidence > 0.35 and gap < 0.12 and key not in supported:
                         supported.add(key)
                         factors["supported_leads"] -= 0.09 * weight
+                    if stance == 0:
+                        continue
                     old = previous.get(key)
                     seen = distinct.setdefault(key, set())
                     if old is not None and old != cid:
@@ -1197,8 +1205,8 @@ class Game:
                         if delta > 0.18:
                             factors["revision"] -= min(0.10, delta * 0.08)
                             factors["constructive_revision"] -= min(0.18, delta * 0.12)
-                        elif delta < -0.18 and confidence > 0.18:
-                            factors["unsupported_shift"] += min(0.30, -delta * 0.22)
+                        elif delta < -0.18 and confidence > 0.35 and stance == 2:
+                            factors["unsupported_shift"] += min(0.15, -delta * 0.12)
                         # Three distinct endorsed versions with no evidence gain
                         # are a weak signal only; honest uncertainty remains legal.
                         if cid not in seen and len(seen) >= 2 and delta <= 0.18:
@@ -1218,8 +1226,7 @@ class Game:
                         factors["response"] -= 0.08
                 claim = note["claim"]
                 tests = note["tests"]
-                if claim is not None and tests and all(affinity(claim, c) == 0 for c in tests):
-                    factors["claim_alignment"] += 0.04
+                # A weak association is not evidence of a false statement.
                 if claim is not None:
                     # A claimed card actually sent by ME is direct evidence, not a guess.
                     # Only the observer's own receipt is used, never another player's receipt.
@@ -1401,10 +1408,21 @@ class Game:
                                                m["claim"] == n["claim"] for m in knowledge["notes"]):
                 return f'Спорное заявление о письме «{CARDS[n["claim"]]["name"]}».'
         for n in reversed(prior):
+            claim = n.get("claim")
+            receipt = self.d.get("mail_log", {}).get(str(n["round"]), {}).get(str(observer), {})
+            if observer != target and claim is not None and claim in receipt.get("sent_cards", [receipt.get("sent")]):
+                return f'Я сам отправил письмо «{CARDS[claim]["name"]}» в раунде {n["round"]}; его заявление противоречит моему.'
+        conflicts = Counter()
+        for n in prior:
+            if n.get("stance", 1) == 0:
+                continue
             visible = public_evidence_at(knowledge, n["round"])
             for k, c in n["leads"].items():
-                if max(evidence_score(visible, x, int(k)) for x in visible["board"][int(k)]) - evidence_score(visible, c, int(k)) > 0.55:
-                    return f'Версия «{CARDS[c]["name"]}» расходилась с письмами (раунд {n["round"]}).'
+                scores = sorted((evidence_score(visible, x, int(k)) for x in visible["board"][int(k)]), reverse=True)
+                if scores[0] - scores[1] > 0.35 and scores[0] - evidence_score(visible, c, int(k)) > 0.55:
+                    conflicts[(k, c)] += 1
+                    if conflicts[(k, c)] >= 2:
+                        return f'Повторно отстаивал «{CARDS[c]["name"]}», несмотря на открытые письма (раунд {n["round"]}).'
         return "Предварительное подозрение; конкретных доказательств пока нет."
 
     def investigation_view(self):
@@ -1452,7 +1470,7 @@ class Game:
                         arguments_for.append(dict(round=n["round"], text=f'Поддерживает версию «{CARDS[cid]["name"]}», согласующуюся с открытыми письмами.'))
                     if previous is not None and previous in scores and previous != cid and scores[cid] > scores[previous] + 0.18:
                         arguments_for.append(dict(round=n["round"], text=f'Пересмотрел версию в пользу «{CARDS[cid]["name"]}» после писем.'))
-                    if n.get("stance", 1) != 0 and gap > 0.55:
+                    if n.get("stance", 1) != 0 and gap > 0.55 and ranking[0] - ranking[1] > 0.35:
                         conflicts[(key, cid)] += 1
                         if conflicts[(key, cid)] >= 2:
                             arguments_against.append(dict(round=n["round"], text=f'Повторно поддерживает «{CARDS[cid]["name"]}», несмотря на письма.'))
@@ -1479,7 +1497,7 @@ class Game:
                     text = f"{self.name(pid)} подозревает {self.name(new)}."
                 else:
                     text = f"{self.name(pid)}: {self.name(old)} → {self.name(new)}."
-                changes.append(dict(pid=pid, text=text))
+                changes.append(dict(pid=pid, text=text + (" " + n["reason"] if new is not None and n.get("reason") else "")))
         return dict(people=people, me=me, changes=changes, response=DEFENSES[response] if response in range(len(DEFENSES)) else None,
                     can_respond=self.phase == "discussion" and len(self.d["local"]) == 1 and me is not None and
                         any(x["round"] == self.d["round"] for x in me["incoming"]) and response is None,
@@ -1582,7 +1600,7 @@ class Game:
             rows.append(dict(
                 player=self.name(note["pid"]),
                 speech=note.get("speech", ""),
-                reason=note.get("reason", ""), stance=STANCES[note.get("stance", 1)],
+                reason=note.get("reason", ""), stance=STANCES[note.get("stance", 1)] if self.note_leads(note) else "",
                 defense=DEFENSES[self.d["defenses"][str(number)][str(note["pid"])]] if str(note["pid"]) in self.d.get("defenses", {}).get(str(number), {}) else None,
                 suspect=self.name(suspect) if suspect is not None else None,
                 suspicions=suspicions[suspect] if suspect is not None else 0,
@@ -1698,25 +1716,23 @@ class Game:
                 available = sent[:]
                 if can_bluff and not self.claim_opened(receipt["sent"]):
                     available += [cid for cid in receipt["hand"] if not self.claim_opened(cid)]
-                groups.append(group("claim", "Какую карту назовёшь", [
+                groups.append(group("claim", "Какое письмо отправил (показание)", [
                     card_view(cid, detail="Ты отправил эту карту" if cid in sent else None)
                     for cid in dict.fromkeys(available)], False))
             check = receipt.get("check")
             inherited = clue_list(check, "clues", "clue") if check else []
-            key = "test" if self.d["round"] == self.d["rounds"] else "lead"
-            label = "Дополнительные улики" if inherited else "Какие улики хотел проверить"
+            key = "test"
+            label = "Что ещё проверял (не версия)" if inherited else "Что проверял (не версия преступления)"
             options = [option for option in board_options if option["value"] not in inherited]
             if options:
                 groups.append(group(key, label, options, False, multiple=True))
-            if self.d["round"] == self.d["rounds"] or self.d.get("difficulty", "normal") != "easy":
-                categories = self.board_groups()
-                for category in categories:
-                    category["required"] = False
-                    if self.d["round"] < self.d["rounds"]:
-                        category["label"] = "Моя версия · " + category["label"]
-                groups.extend(categories)
+            categories = self.board_groups()
+            for category in categories:
+                category["required"] = False
+                category["label"] = "Моя версия · " + category["label"]
+            groups.extend(categories)
             if not self.cooperative:
-                groups += [group("stance", "Насколько уверен в версии", [dict(value=i, label=label, glyph="·") for i,label in enumerate(STANCES)], False), suspect,
+                groups += [group("stance", "Уверенность только в версии", [dict(value=i, label=label, glyph="·") for i,label in enumerate(STANCES)], False), suspect,
                            group("reason", "Почему подозреваешь (необязательно)", [dict(value=i, label=label, glyph="·") for i,label in enumerate(ACCUSATION_REASONS)], False)]
             return groups
         if phase == "ballot":
@@ -1736,6 +1752,8 @@ class Game:
         if pid is None:
             raise ValueError("Сейчас ходит весь стол.")
         groups = self.groups()
+        if phase == "note" and "lead" in picks and "test" not in picks:
+            picks = dict(picks, test=picks["lead"])
         for g in groups:
             value = picks.get(g["key"])
             if value is None and not g["required"]:
@@ -1776,7 +1794,7 @@ class Game:
                 raise ValueError("Выбери разные карты.")
             check = next((dict(pid=n["pid"], clues=clue_list(n, "tests", "test"))
                           for n in self.last_round_claims(pid) if n["pid"] == picks.get("check")), None)
-            self.post(pid, cid, discard, check, second)
+            self.post(pid, cid, discard, check, second, planned=[] if intent is None else [intent])
             self.d["queue"].pop(0)
             if self.actor is None:
                 self.collect_bot_mail()
@@ -1794,11 +1812,7 @@ class Game:
         elif phase == "note":
             leads = {g["key"]: picks[g["key"]] for g in groups
                      if g["key"].isdigit() and picks.get(g["key"]) is not None}
-            tests = picks.get("test") or picks.get("lead") or []
-            if len(tests) == 1 and self.d["round"] < self.d["rounds"] and self.d.get("difficulty", "normal") == "easy":
-                cid = tests[0]
-                category = next(i for i, row in enumerate(self.d["board"]) if cid in row)
-                leads[str(category)] = cid
+            tests = picks.get("test") or []
             if "speakers" not in self.d:
                 # A saved round from before sequential discussion may already have local versions.
                 self.d["speakers"] = self.d["queue"] + [

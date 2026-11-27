@@ -1,5 +1,5 @@
 app "Письма призрака" {
-  meta { owl: 18; description: "Карточное расследование с тайной перепиской"; version: "3.0.0"; category: "games" }
+  meta { owl: 18; description: "Карточное расследование с тайной перепиской"; version: "3.1.0"; category: "games" }
   title: "Письма призрака"
   icon: appIcon
   requires { pacman: ["python"] }
@@ -52,7 +52,7 @@ app "Письма призрака" {
   state detectiveHandOpen = true
   state boardPanelOpen = true
   state replySection = ""
-  state replyMode = "version"
+  state replyMode = "letter"
   state choices = {}
   state ballotPage = null
   state ghostNotes = {}
@@ -144,7 +144,7 @@ app "Письма призрака" {
       boardPanelOpen = true
       lettersPanelOpen = false
       replySection = ""
-      replyMode = game.groups.any(g => g.key == "0") ? "version" : "letter"
+      replyMode = "letter"
       handAction = "send"
       ballotPage = null
       ghostNotes = {}
@@ -400,7 +400,9 @@ app "Письма призрака" {
               let selectingTest = interactive && phase == "note" && replyMode == "letter"
               let selectingCategory = interactive && categoryAllowed && (phase == "truth" || (phase == "note" && replyMode == "version") || (ballot && activeBallot.key == category.key))
               let selected = interactive && ((phase == "mail" && intentCard.value == clue.value) || (selectingTest && testPicks.any(v => v == clue.value)) || (selectingCategory && get(choices, category.key, null) == clue.value))
-              let spoken = interactive && phase == "statement" && ((game.statement.clues ?? []).any(c => c.value == clue.value) || (game.statement.tests ?? []).any(c => c.value == clue.value))
+              let spokenVersion = interactive && phase == "statement" && (game.statement.clues ?? []).any(c => c.value == clue.value)
+               let spokenTest = interactive && phase == "statement" && (game.statement.tests ?? []).any(c => c.value == clue.value)
+               let spoken = spokenVersion || spokenTest
               Box {
                 fill: width
                 onLongPress: { if illustrated && clue.artwork != null { previewCard = clue } }
@@ -418,7 +420,7 @@ app "Письма призрака" {
                   } else if illustrated && clue.artwork != null { previewCard = clue }
                 }
                 let ballotOption = (categoryGroup.options ?? []).find(o => o.value == clue.value)
-                TableCard { entry: ballot && interactive && activeBallot.key == category.key && ballotOption != null ? ballotOption : clue; tint: tone; boardColumn: compactBoard; personal: flag; marked: selected || spoken }
+                TableCard { entry: ballot && interactive && activeBallot.key == category.key && ballotOption != null ? ballotOption : clue; tint: (selectingTest && selected) || (spokenTest && !spokenVersion) ? violet : tone; boardColumn: compactBoard; personal: flag; marked: selected || spoken }
               }
             }
           }
@@ -594,7 +596,7 @@ app "Письма призрака" {
   component ReplyModes(groups) {
     Row {
       gap: 4
-      for tab in [{key: "version", label: "Версия"}, {key: "letter", label: "Письмо"}, {key: "suspect", label: "Подозрение"}].filter(t => (t.key != "version" || groups.any(g => g.key == "0")) && (t.key != "suspect" || groups.any(g => g.key == "person"))) key tab.key {
+      for tab in [{key: "letter", label: "Показание"}, {key: "version", label: "Версия"}, {key: "suspect", label: "Подозрение"}].filter(t => (t.key != "version" || groups.any(g => g.key == "0")) && (t.key != "suspect" || groups.any(g => g.key == "person"))) key tab.key {
         Box {
           weight: 1; height: 36; align: center; radius: 6; background: replyMode == tab.key ? gold : panel
           onTap: { replyMode = tab.key; replySection = "" }
@@ -602,13 +604,13 @@ app "Письма призрака" {
         }
       }
     }
-    Text { text: replyMode == "version" ? "Выбери версию на столе" : (replyMode == "letter" ? "Отметь на столе проверяемые улики" : "Назови подозреваемого и причину"); color: gold; font: sans; fontSize: 12; maxLines: 2 }
+    Text { text: replyMode == "version" ? "Что, по-твоему, загадал убийца? Можно не выбирать." : (replyMode == "letter" ? "Что отправил и хотел проверить? Это не твоя версия преступления." : "Назови подозреваемого и причину"); color: gold; font: sans; fontSize: 12; maxLines: 2 }
   }
 
   component ReplyEditor(groups) {
     Column {
       fill: width; gap: 6; padding: 7; radius: 8; background: panel
-      for section in groups.filter(g => (replyMode == "letter" && g.key == "claim") || (replyMode == "version" && g.key == "stance") || (replyMode == "suspect" && (g.key == "person" || (g.key == "reason" && choices.person != null)))) key section.key {
+      for section in groups.filter(g => (replyMode == "letter" && g.key == "claim") || (replyMode == "version" && g.key == "stance" && (get(choices, "0", null) != null || get(choices, "1", null) != null || get(choices, "2", null) != null)) || (replyMode == "suspect" && (g.key == "person" || (g.key == "reason" && choices.person != null)))) key section.key {
         let selected = get(choices, section.key, null)
         Text { text: section.label; color: gold; font: sans; fontSize: 12; fontWeight: 700 }
         Flow {
@@ -634,7 +636,8 @@ app "Письма призрака" {
       RuleLabel { heading: "ТВОЯ РЕПЛИКА · ПРЕДПРОСМОТР" }
       Column {
         gap: 3; padding: 7; radius: 6; background: shell
-        if !groups.any(g => get(choices, g.key, null) != null) { Copy { body: "Пока без версии. Можно пропустить реплику." } }
+        if !groups.any(g => get(choices, g.key, null) != null) { Copy { body: "Можно пропустить реплику." } }
+         if !groups.any(g => (g.key == "0" || g.key == "1" || g.key == "2") && get(choices, g.key, null) != null) { Copy { body: "Версию преступления не заявляю." } }
         for section in groups key section.key {
           let selected = get(choices, section.key, null)
           if selected != null {
@@ -809,7 +812,7 @@ app "Письма призрака" {
             }
           }
           if len(opinion.tests ?? []) > 0 {
-            RuleLabel { heading: "Проверял" }
+            RuleLabel { heading: "ПРОВЕРЯЛ · НЕ ВЕРСИЯ" }
             Flow {
               gap: 5
               for clue in opinion.tests key clue.value {
@@ -833,11 +836,11 @@ app "Письма призрака" {
         }
         if opinion.reason != null && opinion.reason != "" { Copy { body: opinion.reason } }
       }
-      if opinion.stance != null { Text { text: opinion.stance; color: dim; fontSize: 12 } }
+      if opinion.stance != null && opinion.stance != "" { Text { text: opinion.stance; color: dim; fontSize: 12 } }
       if opinion.defense != null { Text { text: "Ответ: ${opinion.defense}"; color: gold; fontSize: 12 } }
       Grid {
         columns: len(opinion.clues ?? []) >= 3 && (!showDesk || roomyDesk) ? 3 : 1; gap: 5
-        for clue in (opinion.clues ?? []).filter(c => len(opinion.clues) > 1 || !(opinion.tests ?? []).any(t => t.value == c.value)) key clue.key {
+        for clue in (opinion.clues ?? []) key clue.key {
           let tone = get(categoryColors, clue.key, gold)
           Row {
             align: center; gap: 7; padding: [8, 6]; radius: 7; background: alpha(tone, 0.075)
@@ -1390,10 +1393,10 @@ app "Письма призрака" {
             Row {
               align: center; gap: 5
               Text { text: opinion.player; font: serif; color: gold; fontSize: 17; weight: 1 }
-              if opinion.stance != null { Text { text: opinion.stance; color: dim; font: sans; fontSize: 11; maxLines: 2 } }
+              if opinion.stance != null && opinion.stance != "" { Text { text: opinion.stance; color: dim; font: sans; fontSize: 11; maxLines: 2 } }
             }
             if opinion.claim != null { Text { text: "Назвал письмо: ${opinion.claim.label}"; color: parchment; font: sans; fontSize: 12 } }
-            if len(opinion.tests ?? []) > 0 { Text { text: "Проверял: ${join(opinion.tests.map(c => c.label), ", ")}"; color: dim; font: sans; fontSize: 12 } }
+            if len(opinion.tests ?? []) > 0 { Text { text: "Проверял (не версия): ${join(opinion.tests.map(c => c.label), ", ")}"; color: dim; font: sans; fontSize: 12 } }
             for clue in (opinion.clues ?? []) key clue.key {
               Text { text: "${clue.category}: ${clue.label}"; color: get(categoryColors, clue.key, gold); font: sans; fontSize: 13 }
             }
@@ -1923,7 +1926,7 @@ app "Письма призрака" {
                 Action { label: item.label; hot: false }
               }
             }
-            Text { text: "2.14.1 · Mobile Polish"; color: dim; font: sans; fontSize: 11; align: center }
+            Text { text: "3.1.0 · Показания и версии"; color: dim; font: sans; fontSize: 11; align: center }
           }
         } else if setup {
           Column {
