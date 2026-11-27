@@ -736,6 +736,69 @@ class GhostLettersRules(unittest.TestCase):
             self.assertNotIn('onTap: intentOpen = !intentOpen', source)
             self.assertNotIn('height: mini ? 20 : 29', source)
 
+    def test_testimony_never_endorses_a_candidate_or_creates_suspicion(self):
+        from unittest.mock import patch
+        for difficulty in ("easy", "normal", "hard"):
+            g = Game.new("classic", 6, 1, False, difficulty=difficulty, seed=42)
+            owner = g.d["local"][0]
+            observer = next(i for i in range(1, 6) if i != owner)
+            g.d["round"] = 1
+            g.d["speakers"] = [owner]
+            g.set_phase("note", [owner])
+            wrong, right = g.d["board"][0][:2]
+            g.submit({"test": [wrong]})
+            note = g.d["history"][0]
+            self.assertEqual(note["leads"], {})
+            self.assertEqual(note["tests"], [wrong])
+            self.assertEqual(note["stance"], 0)
+            self.assertEqual(mod.public_opinions(g.player_knowledge(observer), 0), {})
+            context = g.ghost_context()
+            self.assertEqual(sum(context["public"][0].values()), 0)
+            self.assertEqual(context["human"][0], [])
+            self.assertEqual(context["tested"][0], 1)
+            with patch.object(mod, "evidence_score", side_effect=lambda k,c,i: float(c == right)):
+                factors = g.suspicion_factors(observer, owner)
+                self.assertEqual(factors["evidence_conflict"], 0)
+                self.assertTrue(g.public_reason(observer, owner).startswith("Предварительное подозрение"))
+
+    def test_unopened_mail_is_not_negative_evidence(self):
+        g = Game.new("classic", 6, 1, False, seed=42)
+        pid = g.d["local"][0]
+        k = g.player_knowledge(pid)
+        c = k["board"][0][0]
+        baseline = mod.evidence_score(k, c, 0)
+        k["own_mail"] = [dict(round=1, missing=[7, 99])]
+        self.assertEqual(mod.evidence_score(k, c, 0), baseline)
+
+    def test_one_wrong_theory_is_not_a_public_accusation(self):
+        from unittest.mock import patch
+        g = Game.new("classic", 6, 1, False, difficulty="normal", seed=42)
+        owner = g.d["local"][0]
+        observer = next(i for i in range(1, 6) if i != owner)
+        right, wrong = g.d["board"][0][:2]
+        g.d["round"] = 2
+        g.d["history"] = [dict(pid=owner, round=1, leads={"0":wrong},
+                              suspect=None, claim=None, tests=[], stance=2)]
+        with patch.object(mod, "evidence_score", side_effect=lambda k,c,i: float(c == right)):
+            self.assertEqual(g.suspicion_factors(observer, owner)["evidence_conflict"], 0)
+            self.assertTrue(g.public_reason(observer, owner).startswith("Предварительное подозрение"))
+            g.d["history"].append(dict(g.d["history"][0], round=2))
+            self.assertGreater(g.suspicion_factors(observer, owner)["persistence"], 0)
+            self.assertIn("Повторно", g.public_reason(observer, owner))
+
+    def test_direct_functional_associations(self):
+        self.assertEqual(mod.affinity(7, 1), 4.0)
+        self.assertEqual(mod.affinity(99, 110), 4.0)
+        self.assertEqual(mod.affinity(1, 7), mod.affinity(7, 1))
+
+    def test_testimony_is_first_reply_mode(self):
+        for path in (ROOT / "local/phone-widgets/ghost-letters.owl",
+                     ROOT / "apps/xonars/ghost-letters/app.owl"):
+            source = path.read_text()
+            self.assertIn('state replyMode = "letter"', source)
+            self.assertIn('key: "letter", label: "Показание"', source)
+            self.assertIn("Версию преступления не заявляю.", source)
+
     def test_package_matches_source(self):
         row = next(x for x in json.loads((ROOT / "store-collection.json").read_text()) if x["source"] == "ghost-letters.owl")
         with zipfile.ZipFile(ROOT / row["resources"]) as z:
