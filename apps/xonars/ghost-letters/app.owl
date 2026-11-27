@@ -57,6 +57,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/63b2
   requires { pacman: ["python"] }
 
   state mode = "classic"
+  state illustrated = true
   state markedHints = false
   state difficulty = "normal"
   state handAction = "send"
@@ -256,13 +257,18 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/63b2
       border: 1
       borderColor: marked || entry.correct || entry.voted ? tone : mix(rule, tone, 0.19)
       background: mix(panel, tone, marked ? 0.23 : 0.065)
+      if illustrated && entry.artwork != null {
+        Image { src: entry.artwork; fill: width; height: showDesk ? 88 : 110; radius: 6; fit: contain; label: entry.label }
+      }
       Row {
         align: center
         gap: 7
-        Box {
-          size: 30; radius: 7; align: center
-          background: alpha(tone, 0.15)
-          Text { text: entry.glyph; font: sans; fontSize: 17; color: tone; align: center }
+        if !illustrated || entry.artwork == null {
+          Box {
+            size: 30; radius: 7; align: center
+            background: alpha(tone, 0.15)
+            Text { text: entry.glyph; font: sans; fontSize: 17; color: tone; align: center }
+          }
         }
         Text { text: entry.label; font: sans; weight: 1; color: parchment; fontWeight: 650; fontSize: 14; maxLines: 2 }
         if entry.suspicions != null { Suspicion { count: entry.suspicions } }
@@ -337,7 +343,11 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/63b2
       padding: roomyDesk ? [9, 8] : [6, 4]
       radius: 6; background: mix(panel, tone, focused ? 0.24 : 0.10)
       border: 1; borderColor: alpha(tone, focused ? 0.9 : (entry.correct || entry.voted ? 0.65 : 0.2))
-      Text { text: entry.correct ? "✓" : (entry.mark != null ? get(markSymbols, entry.mark, "•") : entry.glyph); font: sans; color: tone; fontSize: 13 }
+      if illustrated && entry.artwork != null {
+        Image { src: entry.artwork; size: roomyDesk ? 48 : 34; radius: 5; fit: cover; label: entry.label }
+      } else {
+        Text { text: entry.correct ? "✓" : (entry.mark != null ? get(markSymbols, entry.mark, "•") : entry.glyph); font: sans; color: tone; fontSize: 13 }
+      }
       Column {
         weight: 1; gap: 1
         Text { text: entry.label; font: sans; color: parchment; fontWeight: 650; fontSize: roomyDesk ? 16 : 13; maxLines: 2 }
@@ -673,7 +683,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/63b2
   component SceneTitle(heading, description) {
     Column {
       gap: 5
-      Text { text: heading; font: serif; fontSize: 30; color: parchment; maxLines: 3 }
+      Text { text: heading; font: serif; fontSize: showDesk ? 24 : 27; color: parchment; maxLines: 3 }
       if description != "" { Copy { body: description } }
     }
   }
@@ -852,6 +862,12 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/63b2
         color: gold; fontWeight: 700; fontSize: 12; letterSpacing: 0.6; weight: 1
       }
       Box {
+        width: 58; height: 36; radius: 8; align: center
+        border: 1; borderColor: illustrated ? gold : rule; background: panel
+        onTap: illustrated = !illustrated
+        Text { text: illustrated ? "Фото" : "Текст"; color: illustrated ? gold : dim; font: sans; fontSize: 12 }
+      }
+      Box {
         width: 46; height: 36; radius: 8; align: center
         border: 1; borderColor: rule; background: panel
         onTap: { overlay = overlay == "help" ? "" : "help" }
@@ -937,8 +953,8 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/63b2
               background: linear(0, 0, 1, 1, [#302735, #211b25])
               border: 1; borderColor: rule; radius: 14; padding: [14, 9, 14, 14]
               gap: 2
-              Envelope {}
-              Text { text: "Письма призрака"; font: serif; fontSize: 33; align: center; color: parchment }
+              if layoutHeight >= 800 { Envelope {} }
+              Text { text: "Письма призрака"; font: serif; fontSize: 29; align: center; color: parchment }
               Text { text: "Карточное расследование"; fontSize: 14; align: center; color: dim }
             }
             RuleLabel { heading: "СОСТАВ ДЕЛА" }
