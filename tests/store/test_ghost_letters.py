@@ -700,6 +700,19 @@ class GhostLettersRules(unittest.TestCase):
             self.assertIn('key: "history", label: "Журнал"', source)
             self.assertIn('text: "Блокнот";', source)
 
+    def test_notebook_autosave_and_contextual_turn_actions(self):
+        for path in (ROOT / "local/phone-widgets/ghost-letters.owl",
+                     ROOT / "apps/xonars/ghost-letters/app.owl"):
+            source = path.read_text()
+            self.assertIn("on notebookRequest {", source)
+            self.assertIn("on notebookReceipt {", source)
+            self.assertIn("notebookPersisted = notebookPending", source)
+            self.assertNotIn("Сохранить и закрыть", source)
+            self.assertIn("component ReplyEditor(groups)", source)
+            self.assertIn('detectiveHandOpen = phase == "mail" || phase == "intro"', source)
+            self.assertIn("if editable { TurnAction {} }", source)
+            self.assertIn('if phase != "note" && (phase != "mail" || showDesk) { TurnAction {} }', source)
+
     def test_package_matches_source(self):
         row = next(x for x in json.loads((ROOT / "store-collection.json").read_text()) if x["source"] == "ghost-letters.owl")
         with zipfile.ZipFile(ROOT / row["resources"]) as z:

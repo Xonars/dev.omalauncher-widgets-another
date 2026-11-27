@@ -88,6 +88,10 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
   state notebookSuspects = {}
   state notebookText = ""
   state notebookSaving = false
+  state notebookPersisted = ""
+  state notebookPending = ""
+  state notebookReceipt = ""
+  state notebookError = false
   state advancedSetup = false
   state seats = 5
   state humans = 1
@@ -98,6 +102,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
   state reviewRound = null
   state lettersPanelOpen = true
   state detectiveHandOpen = true
+  state boardPanelOpen = true
   state choices = {}
   state ballotPage = null
   state ghostNotes = {}
@@ -124,6 +129,9 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
   let solo = game.local_count == 1
   let covered = privateTurn && !solo && revealed != token
   let canNotebook = game.notebook != null && !covered
+  let notebookPayload = toJson({marks: notebookMarks, suspects: notebookSuspects, text: notebookText})
+  let notebookDirty = shownPage == "notebook" && canNotebook && notebookPayload != notebookPersisted
+  let notebookRequest = notebookDirty && !notebookSaving && !notebookError && queued == "" ? notebookPayload : ""
   let config = {mode: mode, total: seats, humans: humans, human_ghost: localGhost, marked: markedHints, difficulty: difficulty}
   let missing = game.groups.any(g => g.required && get(choices, g.key, null) == null)
   let ballot = phase == "ballot"
@@ -177,6 +185,11 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
       notebookSuspects = {}
       notebookText = ""
       notebookSaving = false
+      notebookPersisted = ""
+      notebookPending = ""
+      notebookError = false
+      detectiveHandOpen = phase == "mail" || phase == "intro"
+      boardPanelOpen = phase != "note" && phase != "statement" && phase != "discussion"
       handAction = "send"
       ballotPage = null
       ghostNotes = {}
@@ -192,13 +205,33 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
       let answer = parseJson(value)
       if answer.game != null {
         caseView = answer.game
-        if notebookSaving { evidence = "" }
         if answer.game.phase == "setup" { homeOpen = true; setupOpen = false }
       }
       else { problem = answer.error ?? "Ход не сохранён. Попробуй ещё раз." }
-      notebookSaving = false
       queued = ""
       fastDiscussion = false
+    }
+  }
+
+  // Serialize notebook writes: edits made during a write are sent after its acknowledgement.
+  on notebookRequest {
+    if value != "" && !notebookSaving && canNotebook && shownPage == "notebook" {
+      notebookSaving = true
+      notebookPending = value
+      notebookReceipt = ""
+      notebookReceipt = run("${script} notebook ${sh(token)} ${sh(value)}")
+    }
+  }
+
+  on notebookReceipt {
+    if value != "" && notebookSaving {
+      let answer = parseJson(value)
+      if answer.game != null && "${answer.game.id}:${answer.game.rev}" == token {
+        caseView = answer.game
+        notebookPersisted = notebookPending
+        notebookError = false
+      } else { notebookError = true }
+      notebookSaving = false
     }
   }
 
@@ -229,7 +262,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
     else if overlay != "" { overlay = ""; libraryError = "" }
     else if intentOpen { intentOpen = false }
     else if ballotConfirm { ballotConfirm = false }
-    else if shownPage == "notebook" { if !notebookSaving { evidence = "" } }
+    else if shownPage == "notebook" { if !notebookSaving && !notebookDirty { evidence = "" } }
     else if shownPage != "" || (privateTurn && !solo && !covered) {
       evidence = ""
       revealed = ""
@@ -556,6 +589,79 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
     }
   }
 
+  component TurnAction() {
+    let ready = (ballot ? (!missing || ballotReady) : !missing) && !conflicting && queued != token && !fastDiscussion
+    Box {
+      fill: width
+      onTap: {
+        if ready && ballot && missing {
+          ballotPage = first(pendingBallot).key
+        } else if ready && ballot && !ballotConfirm {
+          ballotConfirm = true
+        } else if ready {
+          queued = token
+          problem = ""
+          receipt = ""
+          if privateTurn {
+            revealed = ""
+            receipt = run("${script} ${dynamicFlow && solo ? "submit_dynamic" : "submit"} ${sh(token)} ${sh(toJson(set(set(choices, "comments", ghostNotes), "intent", intentCard.value)))}")
+          } else { receipt = run("${script} ${dynamicFlow && solo ? "advance_dynamic" : "advance"} ${sh(token)}") }
+        }
+      }
+      Action {
+        label: queued == token ? "Сохраняем ход…" :
+               (ballot && missing ? (ballotReady ? "Далее · ${first(pendingBallot).label}" : "Выбери вариант") :
+               (ballot && !missing ? (ballotConfirm ? "Подтвердить голос" : "Проверить голос") :
+               (phase == "opening" && choices.seal == null ? "Пропустить первое письмо" :
+               (phase == "note" && !game.groups.any(g => get(choices, g.key, null) != null) ? "Без версии" : game.action))))
+        allowed: ready
+      }
+    }
+  }
+
+  component ReplyEditor(groups) {
+    Column {
+      fill: width; gap: 8; padding: 9; radius: 9; border: 1; borderColor: gold; background: mix(panel, gold, 0.06)
+      RuleLabel { heading: "ТВОЯ ОЧЕРЕДЬ · РЕПЛИКА" }
+      Copy { body: "Назови письмо, проверь ассоциации и сформулируй версию. Все поля необязательны." }
+      for section in groups key section.key {
+        let tone = get(categoryColors, section.key, gold)
+        let selected = get(choices, section.key, null)
+        let checked = section.multiple ? (selected ?? []) : []
+        if section.key != "reason" || choices.person != null {
+          Column {
+            gap: 4
+            Text { text: section.label; font: sans; color: tone; fontSize: 12; fontWeight: 700 }
+            Flow {
+              gap: 4
+              for option in section.options key option.value {
+                let picked = section.multiple ? checked.any(x => x == option.value) : selected == option.value
+                Row {
+                  gap: 3; align: center; padding: [6, 5]; radius: 5; border: 1
+                  borderColor: picked ? tone : rule; background: mix(panel, tone, picked ? 0.26 : 0.04)
+                  onLongPress: { if illustrated && option.artwork != null && queued != token { previewCard = option } }
+                  onTap: {
+                    if queued != token {
+                      if section.multiple {
+                        let updated = checked.any(x => x == option.value) ? checked.filter(x => x != option.value) : checked + [option.value]
+                        choices = len(updated) > 0 ? set(choices, section.key, updated) : remove(choices, section.key)
+                      } else if selected == option.value { choices = remove(choices, section.key) }
+                      else { choices = set(choices, section.key, option.value) }
+                      if section.key == "person" { choices = remove(choices, "reason") }
+                    }
+                  }
+                  if illustrated && option.artwork != null { Image { src: option.artwork; size: 23; radius: 3; fit: contain; label: option.label } }
+                  Text { text: option.label; color: parchment; font: sans; fontSize: 12; maxLines: 2 }
+                }
+              }
+            }
+          }
+        }
+      }
+      TurnAction {}
+    }
+  }
+
   component DetectiveHand(hand, editable = false) {
     Column {
       fill: width; gap: 4; padding: 5; radius: 9; border: 1; borderColor: rule
@@ -612,6 +718,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
             }
           }
         }
+        if editable { TurnAction {} }
       }
     }
   }
@@ -1086,7 +1193,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
           }
         }
         Box {
-          fill: width; onTap: { investigationPerson = data.me.pid; investigationRound = null; if canNotebook { notebookMarks = game.notebook.marks ?? {}; notebookSuspects = game.notebook.suspects ?? {}; notebookText = game.notebook.text ?? "" }; notebookTab = "people"; evidence = "notebook" }
+          fill: width; onTap: { investigationPerson = data.me.pid; investigationRound = null; if canNotebook { notebookMarks = game.notebook.marks ?? {}; notebookSuspects = game.notebook.suspects ?? {}; notebookText = game.notebook.text ?? ""; notebookPersisted = toJson({marks: game.notebook.marks ?? {}, suspects: game.notebook.suspects ?? {}, text: game.notebook.text ?? ""}); notebookError = false }; notebookTab = "people"; evidence = "notebook" }
           Action { label: "Открыть доску подозрений"; hot: false }
         }
       }
@@ -1197,7 +1304,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
       Row {
         gap: 4
         for tab in [{key: "clues", label: "Улики"}, {key: "people", label: "Люди"}, {key: "history", label: "Журнал"}, {key: "text", label: "Записи"}].filter(t => (t.key != "people" || !game.cooperative) && (canNotebook || (t.key != "clues" && t.key != "text"))) key tab.key {
-          Box { weight: 1; onTap: { if !notebookSaving { notebookTab = tab.key; if tab.key == "history" { reviewRound = null } } }; Action { label: tab.label; hot: notebookTab == tab.key } }
+          Box { weight: 1; onTap: { notebookTab = tab.key; if tab.key == "history" { reviewRound = null } }; Action { label: tab.label; hot: notebookTab == tab.key } }
         }
       }
       if notebookTab == "clues" && canNotebook {
@@ -1216,9 +1323,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
               fill: width
               onLongPress: { if illustrated && clue.artwork != null && !notebookSaving { previewCard = clue } }
               onTap: {
-                if !notebookSaving {
-                  notebookMarks = set(notebookMarks, k, flag == "neutral" ? "likely" : (flag == "likely" ? "unlikely" : "neutral"))
-                }
+                notebookMarks = set(notebookMarks, k, flag == "neutral" ? "likely" : (flag == "likely" ? "unlikely" : "neutral"))
               }
               TableCard { entry: clue; tint: tint; personal: flag }
             }
@@ -1234,7 +1339,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
           Row {
             gap: 6; padding: 9; radius: 8; border: 1; borderColor: rule; background: panel
             onTap: {
-              if !notebookSaving { notebookSuspects = set(notebookSuspects, k, flag == "neutral" ? "likely" : (flag == "likely" ? "unlikely" : "neutral")) }
+              notebookSuspects = set(notebookSuspects, k, flag == "neutral" ? "likely" : (flag == "likely" ? "unlikely" : "neutral"))
             }
             Text { text: player.name; color: parchment; weight: 1; fontSize: 14 }
             Text { text: flag == "likely" ? "Подозреваю" : (flag == "unlikely" ? "Доверяю" : "Неясно"); color: flag == "likely" ? ash : (flag == "unlikely" ? moss : dim); fontSize: 12 }
@@ -1251,7 +1356,12 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
         onChange: notebookText = sub(value, 0, 2000)
       }
       }
-      if canNotebook { Copy { body: "Личные отметки и текст сохраняются кнопкой внизу. Журнал ведётся автоматически." } }
+      if canNotebook {
+        Text { text: notebookError ? "Не удалось сохранить изменения." : (notebookSaving || notebookDirty ? "Сохраняем записи…" : "Все записи сохранены"); color: notebookError ? ash : dim; font: sans; fontSize: 11 }
+        if notebookError {
+          Box { fill: width; onTap: notebookError = false; Action { label: "Повторить автосохранение"; hot: false } }
+        }
+      }
     }
   }
 
@@ -1947,8 +2057,16 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
                 if !showDesk && len(sheet.board ?? []) > 0 && sheet.phase != "result" && sheet.phase != "role" {
                   DiscardPile { hand: sheet.detective_hand ?? []; count: sheet.discard_count ?? 0; editable: sheet.phase == "mail" }
                   LettersPanel { letters: sheet.letters }
-                  Table { rows: sheet.board }
+                  if sheet.phase == "note" || sheet.phase == "statement" || sheet.phase == "discussion" {
+                    Row {
+                      align: center; gap: 5; padding: 5; onTap: boardPanelOpen = !boardPanelOpen
+                      Text { text: "Улики преступления"; color: gold; font: sans; fontSize: 13; weight: 1 }
+                      Text { text: boardPanelOpen ? "⌃" : "⌄"; color: gold; fontSize: 15 }
+                    }
+                    if boardPanelOpen { Table { rows: sheet.board } }
+                  } else { Table { rows: sheet.board } }
                 }
+                if sheet.phase == "note" { ReplyEditor { groups: sheet.groups } }
                 if sheet.phase == "statement" {
                   RuleLabel { heading: "ОБСУЖДЕНИЕ · ${sheet.flow.spoken} / ${sheet.flow.speakers}" }
                   Opinion { player: sheet.speaker; opinion: sheet.statement; spotlight: true }
@@ -2201,7 +2319,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
                   }
                   }
                 }
-                let shownGroups = ballot ? [activeBallot] : (phase == "mail" ? sheet.groups.filter(g => g.key != "send" && g.key != "send2" && g.key != "discard") : sheet.groups)
+                let shownGroups = phase == "note" ? [] : (ballot ? [activeBallot] : (phase == "mail" ? sheet.groups.filter(g => g.key != "send" && g.key != "send2" && g.key != "discard") : sheet.groups))
                 for section in shownGroups key section.key {
                   let tone = get(categoryColors, section.key, (section.key == "echo" ? moss :
                                 (section.key == "silence" || section.key == "person" || section.key == "suspect" ? ash : (section.key == "seal" ? violet : gold))))
@@ -2294,28 +2412,11 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
           if conflicting && shownPage == "" {
             Text { text: "Выбери разные карты."; color: ash; fontSize: 13; align: center }
           }
-          if shownPage == "notebook" && canNotebook {
-            Row {
-              gap: 6
-              Box {
-                weight: 1
-                onTap: { if !notebookSaving { evidence = "" } }
-                Action { label: "Закрыть без сохранения"; hot: false; allowed: !notebookSaving }
-              }
-              Box {
-                weight: 1
-                onTap: {
-                  if !notebookSaving && queued != token {
-                    notebookSaving = true
-                    queued = token
-                    problem = ""
-                    receipt = ""
-                    let payload = {marks: notebookMarks, suspects: notebookSuspects, text: notebookText}
-                    receipt = run("${script} notebook ${sh(token)} ${sh(toJson(payload))}")
-                  }
-                }
-                Action { label: notebookSaving ? "Сохраняем…" : "Сохранить и закрыть"; allowed: !notebookSaving && queued != token }
-              }
+          if shownPage == "notebook" {
+            Box {
+              fill: width
+              onTap: { if !notebookSaving && !notebookDirty { evidence = "" } }
+              Action { label: notebookSaving || notebookDirty ? "Сохраняем записи…" : "Закрыть блокнот"; hot: false; allowed: !notebookSaving && !notebookDirty }
             }
           } else if shownPage != "" {
             Box { fill: width; onTap: evidence = ""; Action { label: phase == "result" ? "Вернуться к итогам" : "Вернуться к столу"; hot: false } }
@@ -2330,33 +2431,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
               Action { label: "Новое дело" }
             }
           } else {
-            let ready = (ballot ? (!missing || ballotReady) : !missing) && !conflicting && queued != token && !fastDiscussion
-            Box {
-              fill: width
-              onTap: {
-                if ready && ballot && missing {
-                  ballotPage = first(pendingBallot).key
-                } else if ready && ballot && !ballotConfirm {
-                  ballotConfirm = true
-                } else if ready {
-                  queued = token
-                  problem = ""
-                  receipt = ""
-                  if privateTurn {
-                    revealed = ""
-                    receipt = run("${script} ${dynamicFlow && solo ? "submit_dynamic" : "submit"} ${sh(token)} ${sh(toJson(set(set(choices, "comments", ghostNotes), "intent", intentCard.value)))}")
-                  } else { receipt = run("${script} ${dynamicFlow && solo ? "advance_dynamic" : "advance"} ${sh(token)}") }
-                }
-              }
-              Action {
-                label: queued == token ? "Сохраняем ход…" :
-                       (ballot && missing ? (ballotReady ? "Далее · ${first(pendingBallot).label}" : "Выбери вариант") :
-                       (ballot && !missing ? (ballotConfirm ? "Подтвердить голос" : "Проверить голос") :
-                       (phase == "opening" && choices.seal == null ? "Пропустить первое письмо" :
-                       (phase == "note" && !game.groups.any(g => get(choices, g.key, null) != null) ? "Пропустить" : game.action))))
-                allowed: ready
-              }
-            }
+            if phase != "note" && (phase != "mail" || showDesk) { TurnAction {} }
           }
           if game.round > 0 && phase != "result" && phase != "opening" && shownPage == "" {
             Row {
@@ -2369,6 +2444,8 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b890
                     notebookMarks = game.notebook.marks ?? {}
                     notebookSuspects = game.notebook.suspects ?? {}
                     notebookText = game.notebook.text ?? ""
+                    notebookPersisted = toJson({marks: game.notebook.marks ?? {}, suspects: game.notebook.suspects ?? {}, text: game.notebook.text ?? ""})
+                    notebookError = false
                   }
                   evidence = "notebook"
                 }
