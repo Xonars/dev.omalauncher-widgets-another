@@ -65,10 +65,67 @@ class GhostLettersRules(unittest.TestCase):
         self.assertNotIn(a, g.d["winners"])
         self.assertIn(b, g.d["winners"])
 
+    def test_knowledge_isolated(self):
+        g = Game.new("classic", 10, 1, False, seed=12)
+        pid = g.role_id("detective")
+        g.d["truth"] = [row[0] for row in g.d["board"]]
+        first = g.player_knowledge(pid)
+        score = g.theories(pid, 0, "vote")
+        g.d["truth"] = [row[1] for row in g.d["board"]]
+        g.d["archive"] = [[1, 2, 3]]
+        self.assertEqual(first, g.player_knowledge(pid))
+        self.assertEqual(score, g.theories(pid, 0, "vote"))
+        self.assertFalse(first["truth"])
+        self.assertIsNone(first["killer"])
+        self.assertEqual(first["allies"], [])
+
+    def test_card_associations_and_stable_ids(self):
+        names = {c["name"]: c["id"] for c in mod.CARDS}
+        for line, card in zip((SOURCE / "deck.txt").read_text().splitlines(), mod.CARDS):
+            self.assertEqual(line.split("|")[0], card["name"])
+        for a,b in (("Зонт", "Гроза"), ("Крыша", "Стена"), ("Фартук", "Зонт"), ("Батарея", "Гроза")):
+            self.assertGreater(mod.affinity(names[a], names[b]), 0)
+            self.assertEqual(mod.affinity(names[a], names[b]), mod.affinity(names[b], names[a]))
+
+    def test_full_games(self):
+        import random
+        for total in range(2, 13):
+            for marked in (False, True):
+                for seed in range(4):
+                    rng = random.Random(seed)
+                    mode = "coop" if total < 4 else "classic"
+                    ghost = seed % 2 == 0
+                    g = Game.new(mode, total, 1, ghost, marked=marked,
+                                 difficulty=("easy", "normal", "hard")[seed % 3], seed=seed)
+                    for step in range(500):
+                        g.view()
+                        if g.phase == "result":
+                            break
+                        if g.actor is None:
+                            g.advance()
+                            continue
+                        picks = {}
+                        for group in g.groups():
+                            if group["required"]:
+                                options = [o["value"] for o in group["options"]]
+                                if group["key"] == "send2":
+                                    options.remove(picks["send"])
+                                picks[group["key"]] = rng.choice(options)
+                            elif group["key"] == "echo":
+                                picks["echo"] = [o["value"] for o in group["options"]] if group["multiple"] else group["options"][0]["value"]
+                        g.submit(picks)
+                    else:
+                        self.fail(f"Stuck game: {total}, {marked}, {seed}, {g.phase}")
+                    self.assertTrue(g.d["winner"])
+                    self.assertEqual(g.d["round"], g.d["rounds"])
+                    for note in g.d["history"]:
+                        if not g.d["players"][note["pid"]]["local"] and note.get("claim") is not None:
+                            self.assertTrue(note.get("speech"))
+
     def test_package_matches_source(self):
         row = next(x for x in json.loads((ROOT / "store-collection.json").read_text()) if x["source"] == "ghost-letters.owl")
         with zipfile.ZipFile(ROOT / row["resources"]) as z:
-            for name in ("game.py", "deck.txt"):
+            for name in ("game.py", "deck.txt", "deck.json"):
                 self.assertEqual(z.read("widgets/ghost-letters/" + name), (SOURCE / name).read_bytes())
 
 if __name__ == "__main__":
