@@ -565,6 +565,68 @@ class GhostLettersRules(unittest.TestCase):
             factor = g.suspicion_factors(pid, target)["unbacked_churn"]
             self.assertEqual(factor, 0.12 if n == 3 else 0.0)
 
+    def test_investigation_is_public_and_tracks_withdrawal(self):
+        g = Game.new("classic", 6, 1, False, seed=42)
+        g.d["round"] = 2
+        owner = g.d["local"][0]
+        source, other = [i for i in range(1, 6) if i != owner][:2]
+        def note(pid, number, suspect):
+            return dict(pid=pid, round=number, leads={}, suspect=suspect, claim=None,
+                        tests=[], check=None, speech="", reason="Публичное основание")
+        g.d["history"] = [note(source, 1, owner), note(source, 2, None), note(other, 2, owner)]
+        g.d["notes"] = [g.d["history"][-1].copy()]
+        g.set_phase("discussion")
+        g.save_notebook({"text":"private text", "suspects":{str(source):"likely"}})
+        data = g.investigation_view()
+        self.assertEqual(data["me"]["count"], 1)
+        self.assertEqual(data["me"]["incoming"][0]["pid"], other)
+        self.assertEqual(g.public_suspicions()[owner], 1)
+        row = next(p for p in data["people"] if p["pid"] == source)
+        self.assertEqual(row["rounds"][0]["suspect"], g.name(owner))
+        self.assertTrue(row["rounds"][1]["spoken"])
+        self.assertIsNone(row["rounds"][1]["suspect"])
+        self.assertNotIn("private text", json.dumps(data))
+        self.assertNotIn("truth", data)
+        self.assertNotIn("role", row)
+        self.assertNotIn("hand", row)
+        self.assertTrue(data["can_respond"])
+        g.defend({"choice":0})
+        self.assertFalse(g.investigation_view()["can_respond"])
+        self.assertEqual(g.investigation_view()["response"], mod.DEFENSES[0])
+        with self.assertRaises(ValueError):
+            g.defend({"choice":1})
+        self.assertEqual(Game(json.loads(json.dumps(g.d))).investigation_view()["response"], mod.DEFENSES[0])
+
+    def test_tentative_hypothesis_is_not_sustained_sabotage(self):
+        from unittest.mock import patch
+        g = Game.new("classic", 6, 1, False, difficulty="normal", seed=42)
+        observer = g.role_id("detective")
+        target = next(i for i in range(1, 6) if i != observer)
+        correct, wrong = g.d["board"][0][:2]
+        g.d["round"] = 3
+        def note(n, card, stance):
+            return dict(pid=target, round=n, leads={"0":card}, suspect=None, claim=None,
+                        tests=[card], stance=stance)
+        with patch.object(mod, "evidence_score", side_effect=lambda k,c,i: float(c == correct)):
+            g.d["history"] = [note(n, wrong, 0) for n in (1,2,3)]
+            tentative = g.suspicion_factors(observer, target)
+            g.d["history"] = [note(n, wrong, 2) for n in (1,2,3)]
+            persistent = g.suspicion_factors(observer, target)
+            g.d["history"][-1] = note(3, correct, 2)
+            revised = g.suspicion_factors(observer, target)
+        self.assertLess(tentative["persistence"], persistent["persistence"])
+        self.assertLess(tentative["evidence_conflict"], persistent["evidence_conflict"])
+        self.assertLess(revised["constructive_revision"], 0)
+        self.assertLess(sum(revised.values()), sum(persistent.values()))
+
+    def test_investigation_ui_available_in_both_owl_entries(self):
+        for path in (ROOT / "local/phone-widgets/ghost-letters.owl",
+                     ROOT / "apps/xonars/ghost-letters/app.owl"):
+            source = path.read_text()
+            for text in ("component Investigation(data)", "Матрица публичных подозрений",
+                         'key: "suspects"', 'notebookTab', 'defend ${sh(token)}'):
+                self.assertIn(text, source)
+
     def test_package_matches_source(self):
         row = next(x for x in json.loads((ROOT / "store-collection.json").read_text()) if x["source"] == "ghost-letters.owl")
         with zipfile.ZipFile(ROOT / row["resources"]) as z:
