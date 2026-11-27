@@ -213,6 +213,19 @@ class GhostLettersRules(unittest.TestCase):
         with zipfile.ZipFile(ROOT / row["resources"]) as z:
             for name in ("game.py", "deck.txt", "deck.json"):
                 self.assertEqual(z.read("widgets/ghost-letters/" + name), (SOURCE / name).read_bytes())
+            assets = [f"assets/cards/{i:03d}.webp" for i in range(131)]
+            self.assertEqual(len(list((SOURCE / "assets/cards").glob("*.webp"))), 131)
+            for name in assets + ["assets/manifest.json"]:
+                data = (SOURCE / name).read_bytes()
+                self.assertEqual(z.read("widgets/ghost-letters/" + name), data)
+                if name.endswith(".webp"):
+                    self.assertEqual(data[:4], b"RIFF")
+                    self.assertEqual(data[8:12], b"WEBP")
+            for cid in range(131):
+                self.assertEqual(Path(mod.card_view(cid)["artwork"]), SOURCE / assets[cid])
+            g = Game.new("classic", 5, 1, False, seed=2)
+            self.assertTrue(all("artwork" not in p for p in g.people([1,2,3,4])))
+
 
 if __name__ == "__main__":
     unittest.main()

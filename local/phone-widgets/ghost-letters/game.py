@@ -58,7 +58,9 @@ PROFILE_NAMES = {
 
 def card_view(card_id, **fields):
     card = CARDS[card_id]
-    return dict(value=card_id, label=card["name"], glyph=card["glyph"], **fields)
+    artwork = HERE / "assets" / "cards" / f"{card_id:03d}.webp"
+    return dict(value=card_id, label=card["name"], glyph=card["glyph"],
+                artwork=str(artwork) if artwork.is_file() else None, **fields)
 
 
 def group(key, label, options, required=True, *, multiple=False):

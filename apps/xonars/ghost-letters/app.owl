@@ -47,16 +47,17 @@ def install(url, digest, entry):
                 os.replace(temporary, target)
         marker.write_text(digest)
 
-install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/63b26b8611e648dd7a9af2e427be8bf426d967a3e6065a58e45ccb0a8ec1aa47.zip', '63b26b8611e648dd7a9af2e427be8bf426d967a3e6065a58e45ccb0a8ec1aa47', 'xonars-ghost-letters')
+install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/160de587d60230d7a0c19a3c5ba43c28bdc105da0f4912e66779ae8f9778e75e.zip', '160de587d60230d7a0c19a3c5ba43c28bdc105da0f4912e66779ae8f9778e75e', 'xonars-ghost-letters')
 """
   let storeInstall = "python -c ${sh(storeBootstrap)}"
 
-  meta { owl: 18; description: "Карточное расследование с тайной перепиской · ресурсы при первом запуске"; version: "2.3.1"; category: "games" ; license: "MIT" }
+  meta { owl: 18; description: "Карточное расследование с тайной перепиской · ресурсы при первом запуске"; version: "2.4.3"; category: "games" ; license: "MIT" }
   title: "Письма призрака"
   icon: appIcon
   requires { pacman: ["python"] }
 
   state mode = "classic"
+  state illustrated = true
   state markedHints = false
   state difficulty = "normal"
   state handAction = "send"
@@ -112,6 +113,8 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/63b2
   let setup = phase == "setup"
   let loading = caseView == null && caseReport == null
   let failed = caseView == null && !loading && !caseReport.ok
+  let smallCardColumns = illustrated && !showDesk && layoutWidth >= 320 ? 4 : 2
+  let handColumns = illustrated ? (showDesk && layoutWidth >= 1350 ? 5 : 3) : 2
   let parchment = #f1e2c7
   let gold = #d7ad74
   let dim = #bbad9d
@@ -251,18 +254,26 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/63b2
     Column {
       fill: width
       gap: 5
-      padding: [8, 7]
-      radius: 9
+      padding: illustrated && entry.artwork != null ? [5, 5] : [8, 7]
+      radius: 8
       border: 1
-      borderColor: marked || entry.correct || entry.voted ? tone : mix(rule, tone, 0.19)
-      background: mix(panel, tone, marked ? 0.23 : 0.065)
+      borderColor: marked || entry.correct || entry.voted ? tone : mix(rule, tone, 0.35)
+      background: mix(panel, tone, marked ? 0.28 : 0.09)
+      if illustrated && entry.artwork != null {
+        Box {
+          fill: width; padding: 3; radius: 6; background: #17151a
+          Image { src: entry.artwork; fill: width; height: showDesk ? 86 : 110; radius: 4; fit: contain; label: entry.label }
+        }
+      }
       Row {
         align: center
         gap: 7
-        Box {
-          size: 30; radius: 7; align: center
-          background: alpha(tone, 0.15)
-          Text { text: entry.glyph; font: sans; fontSize: 17; color: tone; align: center }
+        if !illustrated || entry.artwork == null {
+          Box {
+            size: 30; radius: 7; align: center
+            background: alpha(tone, 0.15)
+            Text { text: entry.glyph; font: sans; fontSize: 17; color: tone; align: center }
+          }
         }
         Text { text: entry.label; font: sans; weight: 1; color: parchment; fontWeight: 650; fontSize: 14; maxLines: 2 }
         if entry.suspicions != null { Suspicion { count: entry.suspicions } }
@@ -300,6 +311,33 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/63b2
     }
   }
 
+  component TableCard(entry, tint = #d7ad74, personal = null, marked = false, mini = true) {
+    let tone = entry.correct ? moss : (entry.voted ? ash : get(markColors, entry.mark, tint))
+    let status = entry.correct ? (entry.voted ? "✓ Верно" : "Истина") : (entry.voted ? "Выбор" : (entry.mark ?? entry.detail))
+    let personalTone = personal == "likely" ? moss : (personal == "unlikely" ? ash : tone)
+    if illustrated && entry.artwork != null {
+      Column {
+        fill: width; gap: 3; padding: 4; radius: 7; border: 1
+        borderColor: marked || entry.correct || entry.voted || (personal != null && personal != "neutral") ? personalTone : alpha(tone, 0.42)
+        background: mix(panel, tone, marked ? 0.26 : 0.08)
+        Image { src: entry.artwork; fill: width; height: mini ? 61 : 93; radius: 4; fit: contain; label: entry.label }
+        Box {
+          height: 32; fill: width; align: center
+          Text { text: entry.label; font: sans; fontSize: mini ? 11 : 13; fontWeight: 700; align: center; maxLines: 2; color: parchment }
+        }
+        if status != null {
+          Text { text: status; color: tone; font: sans; fontSize: 10; fontWeight: 650; align: center; maxLines: 2 }
+        }
+        if marked { Text { text: "✓ Выбрано"; color: tone; font: sans; fontSize: 10; align: center } }
+        if personal != null && personal != "neutral" {
+          Text { text: personal == "likely" ? "✓ Вероятно" : "× Исключаю"; color: personalTone; font: sans; fontSize: 10; align: center; maxLines: 2 }
+        }
+      }
+    } else {
+      Clue { entry: entry; tint: tint; personal: personal; marked: marked }
+    }
+  }
+
   component CategoryLabel(label, tint = #d7ad74) {
     Row {
       align: center; gap: 8
@@ -310,19 +348,19 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/63b2
 
   component Table(rows) {
     Column {
-      gap: 9
+      gap: 7
       for category in rows {
         let tone = get(categoryColors, category.key, gold)
         Column {
           gap: 7
-          padding: 9; border: 1; borderColor: alpha(tone, 0.2); radius: 11
-          background: alpha(tone, 0.045)
+          padding: 6; border: 1; borderColor: alpha(tone, 0.32); radius: 10
+          background: linear(0, 0, 1, 1, [mix(shell, tone, 0.09), shell])
           CategoryLabel { label: category.label; tint: tone }
           Grid {
-            columns: 2
-            gap: 6
+            columns: smallCardColumns
+            gap: 4
             for clue in category.cards key clue.value {
-              Clue { entry: clue; tint: tone; personal: canNotebook ? get(game.notebook.marks, "${int(clue.value)}", null) : null }
+              TableCard { entry: clue; tint: tone; personal: canNotebook ? get(game.notebook.marks, "${int(clue.value)}", null) : null }
             }
           }
         }
@@ -337,7 +375,11 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/63b2
       padding: roomyDesk ? [9, 8] : [6, 4]
       radius: 6; background: mix(panel, tone, focused ? 0.24 : 0.10)
       border: 1; borderColor: alpha(tone, focused ? 0.9 : (entry.correct || entry.voted ? 0.65 : 0.2))
-      Text { text: entry.correct ? "✓" : (entry.mark != null ? get(markSymbols, entry.mark, "•") : entry.glyph); font: sans; color: tone; fontSize: 13 }
+      if illustrated && entry.artwork != null {
+        Image { src: entry.artwork; size: roomyDesk ? 48 : 34; radius: 5; fit: cover; label: entry.label }
+      } else {
+        Text { text: entry.correct ? "✓" : (entry.mark != null ? get(markSymbols, entry.mark, "•") : entry.glyph); font: sans; color: tone; fontSize: 13 }
+      }
       Column {
         weight: 1; gap: 1
         Text { text: entry.label; font: sans; color: parchment; fontWeight: 650; fontSize: roomyDesk ? 16 : 13; maxLines: 2 }
@@ -442,7 +484,17 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/63b2
           gap: 4; padding: 9; radius: 8; border: 1; borderColor: alpha(gold, 0.22)
           background: alpha(gold, 0.06)
           if opinion.claim != null {
-            Text { text: "«Я отправил: ${opinion.claim.label}»"; color: parchment; font: sans; fontSize: 16; fontWeight: 700 }
+            Row {
+              gap: 8; align: center
+              if illustrated && opinion.claim.artwork != null {
+                Image { src: opinion.claim.artwork; size: 58; radius: 5; fit: cover; label: opinion.claim.label }
+              }
+              Column {
+                weight: 1; gap: 2
+                Text { text: "Заявленное письмо"; color: dim; font: sans; fontSize: 11 }
+                Text { text: opinion.claim.label; color: parchment; font: serif; fontSize: 19; maxLines: 2 }
+              }
+            }
             Text {
               text: opinion.claim.mark != null ? "Призрак открыл · ${opinion.claim.mark}" : (opinion.claim.opened ? "Призрак открыл эту карту" : "Призрак не открыл эту карту")
               color: opinion.claim.opened ? get(markColors, opinion.claim.mark, gold) : dim
@@ -457,9 +509,10 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/63b2
             Flow {
               gap: 5
               for clue in opinion.tests key clue.value {
-                Text {
-                  text: clue.label; color: parchment; font: sans; fontSize: 14
-                  padding: [6, 3]; radius: 5; background: alpha(gold, 0.14)
+                Row {
+                  gap: 4; align: center; padding: [5, 4]; radius: 5; background: alpha(gold, 0.12)
+                  if illustrated && clue.artwork != null { Image { src: clue.artwork; size: 25; radius: 3; fit: cover; label: clue.label } }
+                  Text { text: clue.label; color: parchment; font: sans; fontSize: 12 }
                 }
               }
             }
@@ -476,7 +529,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/63b2
         }
       }
       Grid {
-        columns: spotlight && roomyDesk ? 3 : 1; gap: 5
+        columns: len(opinion.clues ?? []) >= 3 && (!showDesk || roomyDesk) ? 3 : 1; gap: 5
         for clue in (opinion.clues ?? []).filter(c => len(opinion.clues) > 1 || !(opinion.tests ?? []).any(t => t.value == c.value)) key clue.key {
           let tone = get(categoryColors, clue.key, gold)
           Row {
@@ -485,7 +538,8 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/63b2
             Column {
               weight: 1; gap: 1
               Text { text: clue.category; color: tone; font: sans; fontSize: 11 }
-              Text { text: clue.label; color: parchment; font: sans; fontSize: 15; fontWeight: 700 }
+              if illustrated && clue.artwork != null { Image { src: clue.artwork; size: 40; radius: 4; fit: cover; label: clue.label } }
+              Text { text: clue.label; color: parchment; font: sans; fontSize: 12; fontWeight: 700; maxLines: 2 }
             }
           }
         }
@@ -526,15 +580,29 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/63b2
 
   component Roster(players) {
     Column {
-      gap: 6
-      CategoryLabel { label: "Подозрения игроков" }
-      for player in players key player.name {
-        Row {
-          align: center; gap: 6; padding: [7, 3]; radius: 6; background: alpha(ash, 0.05)
-          Text { text: player.name; font: sans; color: parchment; fontSize: 14; weight: 1 }
-          Text { text: player.role != "" ? "${player.seat} · ${player.role}" : player.seat; font: sans; color: dim; fontSize: 12 }
-          if player.won != null { Text { text: player.won ? "✓" : "×"; color: player.won ? moss : ash; fontSize: 14 } }
-          if player.suspicions != null { Suspicion { count: player.suspicions } }
+      gap: 5
+      CategoryLabel { label: "За столом · ${len(players)}" }
+      Grid {
+        columns: showDesk ? 2 : 3; gap: 5
+        for player in players key player.name {
+          Column {
+            fill: width; gap: 3; padding: 6; radius: 8; border: 1
+            borderColor: player.won == true ? moss : (player.won == false ? ash : rule)
+            background: mix(panel, gold, 0.045)
+            Row {
+              align: center; gap: 4
+              Box {
+                size: 25; radius: 12; align: center; background: alpha(gold, 0.15)
+                Text { text: sub(player.name, 0, 1); color: gold; font: serif; fontSize: 15; align: center }
+              }
+              Text { text: player.name; font: sans; color: parchment; fontSize: 12; fontWeight: 700; weight: 1; maxLines: 2 }
+            }
+            Text { text: player.role != "" ? player.role : player.seat; color: dim; font: sans; fontSize: 11; maxLines: 2 }
+            if player.suspicions != null {
+              Text { text: "Подозрения · ${player.suspicions}"; color: player.suspicions > 0 ? ash : dim; font: sans; fontSize: 10; maxLines: 2 }
+            }
+            if player.won != null { Text { text: player.won ? "✓ Победа" : "× Поражение"; color: player.won ? moss : ash; fontSize: 11 } }
+          }
         }
       }
     }
@@ -576,21 +644,25 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/63b2
   component Post(letters) {
     Column {
       gap: 10
-      RuleLabel { heading: "ПИСЬМА" }
+      CategoryLabel { label: "Почтовый ящик" }
       if len(letters) == 0 { Copy { body: "Ящик пока пуст." } }
       for letter in letters key letter.round {
         Column {
-          gap: 5
-          padding: 10
+          gap: 6
+          padding: 7
           radius: 9
           border: 1
           borderColor: rule
-          Text { text: letter.round == 0 ? "Первое письмо" : "Раунд ${letter.round}"; color: parchment; font: sans; fontWeight: 700; fontSize: 15 }
+          Row {
+            align: center
+            Text { text: letter.round == 0 ? "Первое письмо" : "Раунд ${letter.round}"; color: gold; font: sans; fontWeight: 700; fontSize: 14; weight: 1 }
+            Text { text: "Открыто · ${len(letter.cards)}"; color: dim; font: sans; fontSize: 11 }
+          }
           if len(letter.cards) > 0 {
             Grid {
-              columns: 2
-              gap: 6
-              for clue in letter.cards key clue.value { Clue { entry: clue } }
+              columns: smallCardColumns
+              gap: 4
+              for clue in letter.cards key clue.value { TableCard { entry: clue } }
             }
           } else { Copy { body: "Призрак не открыл карт." } }
           if letter.round > 0 {
@@ -673,7 +745,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/63b2
   component SceneTitle(heading, description) {
     Column {
       gap: 5
-      Text { text: heading; font: serif; fontSize: 30; color: parchment; maxLines: 3 }
+      Text { text: heading; font: serif; fontSize: showDesk ? 24 : 27; color: parchment; maxLines: 3 }
       if description != "" { Copy { body: description } }
     }
   }
@@ -688,7 +760,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/63b2
         let tone = get(categoryColors, category.key, gold)
         CategoryLabel { label: category.label; tint: tone }
         Grid {
-          columns: 2; gap: 6
+          columns: smallCardColumns; gap: 4
           for clue in category.cards key clue.value {
             let k = "${int(clue.value)}"
             let flag = get(notebookMarks, k, "neutral")
@@ -700,7 +772,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/63b2
                   notebookMarks = set(notebookMarks, k, flag == "neutral" ? "likely" : (flag == "likely" ? "unlikely" : "neutral"))
                 }
               }
-              Clue { entry: set(clue, "detail", flag == "likely" ? "✓  Вероятно" : (flag == "unlikely" ? "×  Исключаю" : "?  Неясно")); tint: tint }
+              TableCard { entry: clue; tint: tint; personal: flag }
             }
           }
         }
@@ -814,6 +886,31 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/63b2
     }
   }
 
+  component RoleCard(actor) {
+    let tone = actor.role == "Призрак" ? violet : (actor.role == "Убийца" || actor.role == "Сообщник" ? ash : gold)
+    Column {
+      fill: width; gap: 12; padding: 18; radius: 13; border: 1; borderColor: alpha(tone, 0.7)
+      background: linear(0, 0, 1, 1, [mix(panel, tone, 0.16), shell])
+      Text { text: "✦  СЕКРЕТНОЕ ДОСЬЕ  ✦"; color: tone; font: sans; fontSize: 12; align: center; letterSpacing: 1 }
+      Box {
+        fill: width; height: 120; align: center
+        Box {
+          size: 106; radius: 53; border: 1; borderColor: tone; background: alpha(tone, 0.09); align: center
+          Box {
+            size: 83; radius: 42; border: 1; borderColor: alpha(tone, 0.55); align: center
+            Text { text: actor.role == "Призрак" ? "✉" : (actor.role == "Убийца" ? "◆" : (actor.role == "Сообщник" ? "◇" : "✦")); color: tone; font: serif; fontSize: 43; align: center }
+          }
+        }
+      }
+      Text { text: actor.role; color: parchment; font: serif; fontSize: 34; align: center; maxLines: 2 }
+      Text { text: actor.label; color: tone; font: sans; fontSize: 14; align: center }
+      Box { height: 1; fill: width; background: alpha(tone, 0.4) }
+      Copy { body: actor.brief; shade: parchment }
+      Lines { rows: actor.knowledge }
+      Text { text: "Не показывай эту карту другим участникам."; color: dim; font: sans; fontSize: 12; align: center }
+    }
+  }
+
   component Envelope() {
     Canvas {
       fill: width
@@ -850,6 +947,12 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/63b2
       Text {
         text: setup || loading || failed ? "✉  ПОЧТОВЫЙ ЯЩИК" : "${game.mode}"
         color: gold; fontWeight: 700; fontSize: 12; letterSpacing: 0.6; weight: 1
+      }
+      Box {
+        width: 58; height: 36; radius: 8; align: center
+        border: 1; borderColor: illustrated ? gold : rule; background: panel
+        onTap: illustrated = !illustrated
+        Text { text: illustrated ? "Фото" : "Текст"; color: illustrated ? gold : dim; font: sans; fontSize: 12 }
       }
       Box {
         width: 46; height: 36; radius: 8; align: center
@@ -937,9 +1040,9 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/63b2
               background: linear(0, 0, 1, 1, [#302735, #211b25])
               border: 1; borderColor: rule; radius: 14; padding: [14, 9, 14, 14]
               gap: 2
-              Envelope {}
-              Text { text: "Письма призрака"; font: serif; fontSize: 33; align: center; color: parchment }
-              Text { text: "Карточное расследование"; fontSize: 14; align: center; color: dim }
+              Text { text: "✉"; font: serif; fontSize: 30; align: center; color: gold }
+              Text { text: "Письма призрака"; font: serif; fontSize: 29; align: center; color: parchment }
+              Text { text: "Тайна · Ассоциации · Расследование"; font: sans; fontSize: 12; align: center; color: dim }
             }
             RuleLabel { heading: "СОСТАВ ДЕЛА" }
             Grid {
@@ -1049,7 +1152,13 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/63b2
             }
             if phase != "opening" && shownPage != "notebook" {
               Row {
-                gap: 5
+                gap: 4
+                Box {
+                  weight: 1; height: 36; align: center; radius: 7; border: 1
+                  borderColor: shownPage == "" ? gold : rule; background: shownPage == "" ? plum : panel
+                  onTap: evidence = ""
+                  Text { text: "Ход"; color: parchment; font: sans; fontSize: 12; align: center }
+                }
                 if !showDesk {
                 Box {
                   weight: 1; height: 36; align: center; radius: 7
@@ -1116,10 +1225,33 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/63b2
               } else {
                 if sheet.phase == "statement" {
                   Opinion { player: sheet.speaker; opinion: sheet.statement; spotlight: true }
+                } else if sheet.phase == "role" {
+                  RoleCard { actor: sheet.actor }
+                } else if sheet.phase == "result" {
+                  Column {
+                    gap: 8; padding: 15; radius: 12; border: 1; borderColor: sheet.success ? moss : ash
+                    background: linear(0, 0, 1, 1, [mix(panel, sheet.success ? moss : ash, 0.15), shell])
+                    Text { text: "✦  ДЕЛО ЗАКРЫТО  ✦"; color: sheet.success ? moss : ash; font: sans; fontSize: 12; align: center; letterSpacing: 1 }
+                    Text { text: sheet.title; color: parchment; font: serif; fontSize: 30; align: center; maxLines: 3 }
+                    Text { text: sheet.brief; color: dim; font: sans; fontSize: 14; align: center }
+                    Row {
+                      gap: 6
+                      Column {
+                        weight: 1; gap: 3; padding: 8; radius: 8; background: alpha(gold, 0.10)
+                        Text { text: "${sheet.verdict.count(v => v.correct)} / ${len(sheet.verdict)}"; color: gold; font: serif; fontSize: 24; align: center }
+                        Text { text: "Верные улики"; color: dim; font: sans; fontSize: 11; align: center }
+                      }
+                      Column {
+                        weight: 1; gap: 3; padding: 8; radius: 8; background: alpha(gold, 0.10)
+                        Text { text: "${sheet.round} / ${sheet.rounds}"; color: gold; font: serif; fontSize: 24; align: center }
+                        Text { text: "Раунды"; color: dim; font: sans; fontSize: 11; align: center }
+                      }
+                    }
+                  }
                 } else {
-                  SceneTitle { heading: sheet.phase == "discussion" ? "Версии за столом" : sheet.title; description: ballot || sheet.phase == "discussion" ? "" : sheet.brief }
+                  SceneTitle { heading: sheet.phase == "discussion" ? "Версии за столом" : sheet.title; description: ballot || sheet.phase == "discussion" || sheet.phase == "mail" ? "" : sheet.brief }
                 }
-                if privateTurn {
+                if privateTurn && sheet.phase != "role" {
                   Column {
                     gap: 5; padding: 11; radius: 10; border: 1; borderColor: rule; background: panel
                     RuleLabel { heading: sheet.actor.role == "Призрак" ? sheet.actor.label : "${sheet.actor.label} · ${sheet.actor.role}" }
@@ -1151,7 +1283,15 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/63b2
                     }
                   }
                 }
-                if len(sheet.outcome) > 0 {
+                if sheet.phase == "result" {
+                  Verdict { rows: sheet.verdict }
+                  if len(sheet.outcome) > 0 {
+                    Column {
+                      gap: 7; padding: 11; radius: 10; border: 1; borderColor: sheet.success ? moss : ash; background: panel
+                      Lines { rows: sheet.outcome }
+                    }
+                  }
+                  CategoryLabel { label: "Материалы дела" }
                   Box {
                     fill: width; radius: 9
                     onTap: { reviewRound = null; evidence = "debrief" }
@@ -1169,14 +1309,16 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/63b2
                     onTap: { reviewRound = null; evidence = "history" }
                     Action { label: "История обсуждений"; hot: false }
                   }
-                  Verdict { rows: sheet.verdict }
-                  Column {
-                    gap: 7; padding: 11; radius: 10; border: 1; borderColor: sheet.success ? moss : ash; background: panel
-                    Lines { rows: sheet.outcome }
+                  if !showDesk {
+                    Row {
+                      gap: 6
+                      Box { weight: 1; onTap: evidence = "board"; Action { label: "Все улики"; hot: false } }
+                      Box { weight: 1; onTap: evidence = "letters"; Action { label: "Все письма"; hot: false } }
+                    }
                   }
                 }
                 if !showDesk && sheet.phase == "intro" && len(sheet.letters) > 0 { Post { letters: sheet.letters.take(1) } }
-                if !showDesk && (sheet.phase == "reveal" || sheet.phase == "note" || sheet.phase == "statement" || sheet.phase == "discussion") {
+                if !showDesk && (sheet.phase == "reveal" || sheet.phase == "note" || sheet.phase == "discussion") {
                   Post { letters: sheet.letters.take(1) }
                 }
                 if sheet.phase == "discussion" {
@@ -1202,22 +1344,29 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/63b2
                 }
                 if phase == "mail" {
                   let hand = sheet.groups.find(g => g.key == "send")
-                  CategoryLabel { label: "Карты на руке"; tint: gold }
+                  CategoryLabel { label: "Почта · выбери карту"; tint: gold }
                   Row {
                     gap: 5
                     for slot in sheet.groups.filter(g => g.key == "send" || g.key == "send2" || g.key == "discard") key slot.key {
-                      Box {
-                        weight: 1; height: 41; radius: 8; border: 1; align: center
-                        background: handAction == slot.key ? plum : panel
-                        borderColor: handAction == slot.key ? gold : rule
+                      let chosen = hand.options.find(c => c.value == get(choices, slot.key, null))
+                      let tone = slot.key == "discard" ? ash : gold
+                      Column {
+                        weight: 1; gap: 4; padding: 7; radius: 8; border: 1
+                        background: mix(panel, tone, handAction == slot.key ? 0.23 : 0.05)
+                        borderColor: handAction == slot.key ? tone : rule
                         onTap: handAction = slot.key
-                        Text { text: slot.key == "send" ? "Отправить" : (slot.key == "send2" ? "Вторая" : "Сбросить"); color: parchment; fontSize: 13 }
+                        Text { text: slot.key == "send" ? "✉ Письмо" : (slot.key == "send2" ? "✉ Второе" : "× Сброс"); color: tone; font: sans; fontSize: 12; fontWeight: 700; align: center }
+                        if illustrated && chosen.artwork != null {
+                          Image { src: chosen.artwork; fill: width; height: 43; radius: 4; fit: contain; label: chosen.label }
+                        }
+                        Text { text: chosen != null ? chosen.label : (slot.key == "discard" ? "Необязательно" : "Выбери карту"); color: chosen != null ? parchment : dim; font: sans; fontSize: 11; align: center; maxLines: 2 }
                       }
                     }
                   }
-                  Text { text: "Выбери действие и нажми карту. Повторное нажатие снимает выбор."; color: dim; fontSize: 12 }
+                  CategoryLabel { label: "Твоя рука · ${len(hand.options)}"; tint: gold }
+                  Text { text: "Нажми карту, чтобы положить её в выбранное место. Нажми снова, чтобы вернуть."; color: dim; font: sans; fontSize: 11 }
                   Grid {
-                    columns: 2; gap: 6
+                    columns: handColumns; gap: 5
                     for option in hand.options key option.value {
                       let sent = choices.send == option.value || choices.send2 == option.value
                       let discarded = choices.discard == option.value
@@ -1235,7 +1384,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/63b2
                             choices = set(choices, handAction, option.value)
                           }
                         }
-                        Clue { entry: set(option, "detail", detail); tint: discarded ? ash : gold; marked: sent || discarded }
+                        TableCard { entry: set(option, "detail", detail); tint: discarded ? ash : gold; marked: sent || discarded; mini: false }
                       }
                     }
                   }
@@ -1258,7 +1407,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/63b2
                       }
                     }
                     Grid {
-                      columns: 2
+                      columns: illustrated && !showDesk && len(section.options) >= 8 && section.options.any(c => c.artwork != null) ? smallCardColumns : 2
                       gap: 6
                       for option in section.options key option.value {
                         Box {
@@ -1272,10 +1421,15 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/63b2
                             } else if selected == option.value { choices = remove(choices, section.key) }
                             else { choices = set(choices, section.key, option.value) }
                           }
-                          Clue { entry: option; tint: tone; marked: section.multiple ? checked.any(x => x == option.value) : selected == option.value; voting: ballot || section.multiple;
-                            personal: canNotebook && (ballot || phase == "note") ?
+                          let personal = canNotebook && (ballot || phase == "note") ?
                               (section.key == "suspect" || section.key == "person" ? get(game.notebook.suspects, "${int(option.value)}", null) :
-                               (section.key == "claim" ? null : get(game.notebook.marks, "${int(option.value)}", null))) : null }
+                               (section.key == "claim" ? null : get(game.notebook.marks, "${int(option.value)}", null))) : null
+                          let picked = section.multiple ? checked.any(x => x == option.value) : selected == option.value
+                          if illustrated && !showDesk && len(section.options) >= 8 && option.artwork != null {
+                            TableCard { entry: option; tint: tone; marked: picked; personal: personal }
+                          } else {
+                            Clue { entry: option; tint: tone; marked: picked; voting: ballot || section.multiple; personal: personal }
+                          }
                         }
                       }
                     }
@@ -1294,7 +1448,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/63b2
                   }
                 }
                 if sheet.phase == "board" || sheet.phase == "result" {
-                  if !showDesk { Table { rows: sheet.board } }
+                  if !showDesk && sheet.phase == "board" { Table { rows: sheet.board } }
                   Roster { players: sheet.roster }
                 }
                 if len(sheet.tallies) > 0 {
@@ -1307,7 +1461,6 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/63b2
                     }
                   }
                 }
-                if !showDesk && sheet.phase == "result" { Post { letters: sheet.letters } }
               }
             }
           }
