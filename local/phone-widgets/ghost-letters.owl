@@ -15,6 +15,7 @@ app "Письма призрака" {
   state archivedCase = null
   state libraryBusy = false
   state libraryError = ""
+  state lastExport = ""
   state libraryFilter = {}
   state archivePage = "summary"
   state collectionQuery = ""
@@ -140,12 +141,7 @@ app "Письма призрака" {
       else { problem = answer.error ?? "Ход не сохранён. Попробуй ещё раз." }
       notebookSaving = false
       queued = ""
-      if answer.game != null && answer.game.local_count == 1 && answer.game.actor == null && !homeOpen &&
-          ((dynamicFlow && answer.game.phase == "intro") || ((dynamicFlow || fastDiscussion) && answer.game.phase == "statement")) {
-        let nextToken = "${answer.game.id}:${answer.game.rev}"
-        queued = nextToken
-        receipt = run("${script} advance ${sh(nextToken)}")
-      } else { fastDiscussion = false }
+      fastDiscussion = false
     }
   }
 
@@ -155,6 +151,7 @@ app "Письма призрака" {
       libraryBusy = false
       if answer.error != null { libraryError = answer.error }
       else if answer.export != null {
+        lastExport = answer.export
         run("omalauncher share ${sh(answer.export)}")
       } else if answer.case != null {
         archivedCase = answer
@@ -330,7 +327,7 @@ app "Письма призрака" {
     }
   }
 
-  component Table(rows) {
+  component Table(rows, annotate = true) {
     Column {
       gap: 7
       for category in rows {
@@ -344,7 +341,7 @@ app "Письма призрака" {
             columns: smallCardColumns
             gap: 4
             for clue in category.cards key clue.value {
-              Box { fill: width; onLongPress: { if illustrated && clue.artwork != null { previewCard = clue } }; TableCard { entry: clue; tint: tone; personal: canNotebook ? get(game.notebook.marks, "${int(clue.value)}", null) : null } }
+              Box { fill: width; onLongPress: { if illustrated && clue.artwork != null { previewCard = clue } }; TableCard { entry: clue; tint: tone; personal: annotate && canNotebook ? get(game.notebook.marks, "${int(clue.value)}", null) : null } }
             }
           }
         }
@@ -1174,7 +1171,7 @@ app "Письма призрака" {
                 Lines { rows: record.outcome }
                 Roster { players: record.roster }
                 for tally,i in record.tallies { CategoryLabel { label: "Голосование ${i+1}" }; Lines { rows: tally } }
-              } else if archivePage == "board" { Table { rows: record.board } }
+              } else if archivePage == "board" { Table { rows: record.board; annotate: false } }
               else if archivePage == "letters" { Post { letters: record.letters } }
               else if archivePage == "history" { DiscussionHistory { rounds: record.history; letters: record.letters } }
               else if archivePage == "audit" { MailAudit { rounds: record.mail_audit } }
@@ -1184,7 +1181,7 @@ app "Письма призрака" {
               Input { text: collectionQuery; placeholder: "Найти карту"; onChange: collectionQuery = value }
               Grid {
                 columns: smallCardColumns; gap: 5
-                for card in (libraryData.cards ?? []).filter(c => collectionQuery == "" || lower(c.label).contains(lower(collectionQuery))) key card.value {
+                for card in (libraryData.cards ?? []).filter(c => collectionQuery == "" || contains(lower(c.label), lower(collectionQuery))) key card.value {
                   Box {
                     fill: width
                     onTap: { if card.artwork != null { previewCard = card } }
@@ -1251,6 +1248,7 @@ app "Письма призрака" {
                   Action { label: "Экспорт всех дел для анализа"; hot: false; allowed: !libraryBusy }
                 }
                 Copy { body: "ZIP сохраняется в Downloads и открывает Android-панель отправки. Личные заметки исключены." }
+                if lastExport != "" { Copy { body: "Последний экспорт: ${lastExport}" } }
               }
               if libraryError != "" { Copy { body: libraryError; shade: ash } }
             }
@@ -1345,7 +1343,7 @@ app "Письма призрака" {
                 onTap: {
                   homeOpen = false; revealed = ""; evidence = ""
                   if dynamicFlow && solo && game.actor == null && (phase == "intro" || phase == "statement") && queued != token {
-                    queued = token; receipt = ""; receipt = run("${script} advance ${sh(token)}")
+                    queued = token; receipt = ""; receipt = run("${script} advance_dynamic ${sh(token)}")
                   }
                 }
                 Action { label: phase == "result" ? "Итоги текущего дела" : "Продолжить расследование" }
@@ -1478,6 +1476,7 @@ app "Письма призрака" {
           Column {
             weight: 1; justify: center; gap: 9; scroll: true
             if !showDesk || layoutHeight >= 440 { Envelope {} }
+            if game.round > 0 { RuleLabel { heading: "РАУНД ${game.round} · ${phaseLabel}" } }
             Text { text: "Передай телефон"; font: serif; fontSize: showDesk ? 26 : 32; align: center; color: parchment }
             Text { text: game.actor.label; color: gold; fontWeight: 700; fontSize: 19; align: center }
             Text { text: "Личный экран. Открывай, когда телефон у тебя."; color: dim; align: center; fontSize: 14 }
@@ -1538,7 +1537,7 @@ app "Письма призрака" {
                           queued = token
                           problem = ""
                           receipt = ""
-                          receipt = run("${script} advance ${sh(token)}")
+                          receipt = run("${script} advance_fast ${sh(token)}")
                         }
                       }
                       Action { label: fastDiscussion ? "Собираем версии…" : "Собрать остальные версии"; hot: false; allowed: queued != token && !fastDiscussion }
@@ -1656,6 +1655,10 @@ app "Письма призрака" {
                 }
                 if !showDesk && (sheet.phase == "reveal" || sheet.phase == "note" || sheet.phase == "discussion") {
                   Post { letters: sheet.letters.take(1) }
+                }
+                if sheet.phase == "note" && len(sheet.notes) > 0 {
+                  CategoryLabel { label: "Уже высказались" }
+                  for opinion in sheet.notes key opinion.player { Opinion { player: opinion.player; opinion: opinion } }
                 }
                 if sheet.phase == "discussion" {
                   RoundSummary { flow: sheet.flow; roster: sheet.roster }
@@ -1819,6 +1822,17 @@ app "Письма призрака" {
                     }
                   }
                 }
+                if ballot && !missing && ballotConfirm {
+                  Column {
+                    gap: 5; padding: 8; radius: 8; border: 1; borderColor: gold; background: panel
+                    CategoryLabel { label: "Подтверди этот голос" }
+                    for section in ballotSections key section.key {
+                      let chosen = section.options.find(c => c.value == get(choices, section.key, null))
+                      if chosen != null { ReferenceCard { entry: chosen; tint: gold } }
+                    }
+                    Box { fill: width; onTap: ballotConfirm = false; Action { label: "Изменить выбор"; hot: false } }
+                  }
+                }
                 if sheet.phase == "board" || sheet.phase == "result" {
                   if !showDesk && sheet.phase == "board" { Table { rows: sheet.board } }
                   Roster { players: sheet.roster }
@@ -1876,17 +1890,6 @@ app "Письма призрака" {
             }
           } else {
             let ready = (ballot ? (!missing || ballotReady) : !missing) && !conflicting && queued != token && !fastDiscussion
-            if ballot && !missing && ballotConfirm && shownPage == "" {
-              Column {
-                gap: 5; padding: 8; radius: 8; border: 1; borderColor: gold; background: panel
-                CategoryLabel { label: "Подтверди этот голос" }
-                for section in ballotSections key section.key {
-                  let chosen = section.options.find(c => c.value == get(choices, section.key, null))
-                  if chosen != null { ReferenceCard { entry: chosen; tint: gold } }
-                }
-                Box { fill: width; onTap: ballotConfirm = false; Action { label: "Изменить выбор"; hot: false } }
-              }
-            }
             Box {
               fill: width
               onTap: {
@@ -1900,8 +1903,8 @@ app "Письма призрака" {
                   receipt = ""
                   if privateTurn {
                     revealed = ""
-                    receipt = run("${script} submit ${sh(token)} ${sh(toJson(set(set(choices, "comments", ghostNotes), "intent", intentCard.value)))}")
-                  } else { receipt = run("${script} advance ${sh(token)}") }
+                    receipt = run("${script} ${dynamicFlow && solo ? "submit_dynamic" : "submit"} ${sh(token)} ${sh(toJson(set(set(choices, "comments", ghostNotes), "intent", intentCard.value)))}")
+                  } else { receipt = run("${script} ${dynamicFlow && solo ? "advance_dynamic" : "advance"} ${sh(token)}") }
                 }
               }
               Action {

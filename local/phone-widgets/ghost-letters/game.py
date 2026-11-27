@@ -173,7 +173,7 @@ class Game:
         if analytics is not None:
             events = analytics["events"]
             events.append(json.loads(json.dumps(dict(seq=len(events)+1, round=self.d["round"],
-                phase=self.phase, rev=self.d["rev"], kind=kind, **fields), ensure_ascii=False)))
+                phase=self.phase, rev=self.d["rev"], at=int(time.time()), kind=kind, **fields), ensure_ascii=False)))
 
     @classmethod
     def new(cls, mode, total, humans, human_ghost, *, marked=False, difficulty="normal", seed=None):
@@ -427,7 +427,8 @@ class Game:
         if self.ghost_gain(discard, coverage) >= 0.12:
             discard = None
         if "analytics" in self.d:
-            self.trace("bot_ghost", pid=0, knowledge=self.player_knowledge(0), incoming=sent, decisions=decisions, echo=echo, silence=silence, own=own, discard=discard)
+            self.trace("bot_ghost", pid=0, knowledge=self.player_knowledge(0), incoming=sent, decisions=decisions, echo=echo, silence=silence, own=own, discard=discard,
+                       discard_scores={c:self.ghost_gain(c,coverage) for c in pool})
         return echo, silence, own, discard
 
     def bot_profile(self, pid):
@@ -535,7 +536,8 @@ class Game:
             if "analytics" in self.d:
                 self.trace("bot_mail", pid=pid, knowledge=knowledge, rankings=rankings, targets=leads,
                            candidates=[dict(card=c, target=t, score=mail_score(c,t)) for c in p["hand"] for t in leads],
-                           selected=[best] if second is None else [best,second], planned=planned, check=check)
+                           selected=[best] if second is None else [best,second], planned=planned, check=check,
+                           second_target_bonus=0.25 if self.duel else None)
             self.post(pid, best, discard if self.noise("redraw", pid) < 0.55 else None, check, second, planned)
         self.d["mail"].sort(key=lambda cid: self.noise("envelope", cid))
         if self.d["players"][0]["local"]:
@@ -794,7 +796,7 @@ class Game:
             role, target = max(((role, pid) for role in special for pid in others),
                                key=lambda pair: self.counter_suspicion(pair[1], pair[0]))
             if "analytics" in self.d:
-                self.trace("bot_counter", pid=killer, selected=[role,target], candidates=[dict(role=r,pid=p,score=self.counter_suspicion(p,r)) for r in special for p in others])
+                self.trace("bot_counter", pid=killer, knowledge=self.player_knowledge(killer), selected=[role,target], candidates=[dict(role=r,pid=p,score=self.counter_suspicion(p,r)) for r in special for p in others])
             self.end(target, role)
         else:
             self.end()
@@ -1095,8 +1097,9 @@ class Game:
         if phase == "mail" and intent is not None and (type(intent) is not int or not any(intent in row for row in self.d["board"])):
             raise ValueError("Неизвестная улика.")
         picks = {key: picks[key] for key in [g["key"] for g in groups] + ["comments"] if key in picks}
-        self.trace("human_choice", pid=pid, picks={k:v for k,v in picks.items() if k != "comments"},
-                   intent=intent if phase == "mail" else None)
+        if "analytics" in self.d:
+            self.trace("human_choice", pid=pid, knowledge=self.player_knowledge(pid), picks={k:v for k,v in picks.items() if k != "comments"},
+                       intent=intent if phase == "mail" else None)
         if phase == "role":
             self.d["queue"].pop(0)
             if self.actor is None:
@@ -1488,7 +1491,9 @@ def export_analysis(records, directory=None):
             for d in records:
                 cid=d["id"]
                 writer.writerow(case_summary(d))
-                write_json("games/"+cid+".json",clean(d))
+                record=clean(d)
+                record["capture"]={k:v for k,v in d.get("analytics",{}).items() if k != "events"}
+                write_json("games/"+cid+".json",record)
                 events=d.get("analytics",{}).get("events",[])
                 z.writestr("events/"+cid+".jsonl","".join(json.dumps(clean(e),ensure_ascii=False)+"\n" for e in events))
             z.writestr("summary.csv",buf.getvalue())
@@ -1524,9 +1529,22 @@ def public_view(game):
     return view
 
 
+def advance_automatically(game, include_intro=True):
+    """Execute only public transitions, in their original order, and stop before human input."""
+    if len(game.d["local"]) != 1:
+        return
+    phases = ("intro", "statement") if include_intro else ("statement",)
+    for _ in range(24):
+        if game.actor is not None or game.phase not in phases:
+            return
+        game.advance()
+        game.d["rev"] += 1
+    raise ValueError("Too many automatic steps")
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("view", "start", "advance", "submit", "reset", "notebook", "archive", "case", "export", "collection"))
+    parser.add_argument("action", choices=("view", "start", "advance", "submit", "advance_dynamic", "submit_dynamic", "advance_fast", "reset", "notebook", "archive", "case", "export", "collection"))
     parser.add_argument("token", nargs="?", default="-")
     parser.add_argument("payload", nargs="?", default="{}")
     args = parser.parse_args()
@@ -1568,13 +1586,17 @@ def main():
             elif args.action == "notebook":
                 game.save_notebook(json.loads(args.payload))
                 save(path, game.d)
-            elif args.action in ("advance", "submit"):
+            elif args.action in ("advance", "submit", "advance_dynamic", "submit_dynamic", "advance_fast"):
                 game.enable_analytics(partial=True)
-                if args.action == "advance":
+                if args.action.startswith("advance"):
                     game.advance()
                 else:
                     game.submit(json.loads(args.payload))
                 game.d["rev"] += 1
+                if args.action.endswith("_dynamic"):
+                    advance_automatically(game)
+                elif args.action == "advance_fast":
+                    advance_automatically(game, include_intro=False)
                 save(path, game.d)
                 if game.phase == "result":
                     archive_game(game)
