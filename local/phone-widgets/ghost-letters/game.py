@@ -23,9 +23,12 @@ import uuid
 HERE = Path(__file__).resolve().parent
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "ghost-letters"
 ANALYTICS_SCHEMA = 1
-GAME_VERSION = "2.12.0"
-BOT_VERSION = "3.4.0"
+GAME_VERSION = "2.13.0"
+BOT_VERSION = "3.5.0"
 CATEGORIES = ("Мотив", "Место", "Способ")
+STANCES = ("Проверяю гипотезу", "Предварительная версия", "Уверенная версия")
+DEFENSES = ("Я проверял гипотезу", "Я пересмотрел версию", "Я сохраняю свою версию")
+ACCUSATION_REASONS = ("Противоречие письмам", "Необоснованная смена версии", "Противоречие в заявленных письмах", "Недостаточно оснований, хочу проверить")
 MARKS = {"echo": "Эхо", "silence": "Тишина", "seal": "Печать"}
 MODES = {
     "classic": "Классическая партия",
@@ -731,7 +734,8 @@ class Game:
         for note in unique.values():
             notes.append(dict(pid=note["pid"], round=note.get("round", 0), leads=self.note_leads(note).copy(),
                               suspect=note.get("suspect"), claim=note.get("claim"),
-                              tests=clue_list(note, "tests", "test")[:]))
+                              tests=clue_list(note, "tests", "test")[:], stance=note.get("stance", 1),
+                              reason=note.get("reason", ""), defense=self.d.get("defenses", {}).get(str(note.get("round", 0)), {}).get(str(note["pid"]))))
         own_leads = {}
         for note in notes:
             if note["pid"] == pid:
@@ -934,12 +938,13 @@ class Game:
                 if affinity(alternative, target) >= 1.5 and affinity(alternative, target) >= affinity(claim, target):
                     claim, tests = alternative, [target]
         speech = self.bot_speech(knowledge, claim, tests, leads, receipt.get("check"), suspect=suspect)
+        reason = self.public_reason(pid, suspect) if suspect is not None else ""
         if "analytics" in self.d:
             self.trace("bot_discussion", pid=pid, knowledge=knowledge, rankings=rankings,
                        suspect_scores={target:self.suspicion(pid,target) for target in suspects},
                        suspect_factors={target:self.suspicion_factors(pid,target) for target in suspects},
                        sent=receipt.get("sent_cards", []), claim=claim, leads=leads, tests=tests, suspect=suspect, speech=speech)
-        self.show_statement(pid, leads, suspect, claim, tests, speech=speech)
+        self.show_statement(pid, leads, suspect, claim, tests, speech=speech, reason=reason)
 
     def bot_speech(self, knowledge, claim, tests, leads, check=None, *, suspect=None):
         """Template-based, grounded in the bot's claim and public evidence, never private truth."""
@@ -1041,14 +1046,14 @@ class Game:
                         break
         return " ".join(parts)
 
-    def show_statement(self, pid, leads, suspect, claim=None, tests=(), *, speech=""):
+    def show_statement(self, pid, leads, suspect, claim=None, tests=(), *, speech="", stance=1, reason=""):
         check = self.mail_receipt(pid).get("check")
         inherited = clue_list(check, "clues", "clue") if check else []
         tests = list(dict.fromkeys([*inherited, *tests]))
-        if leads or suspect is not None or claim is not None or tests:
-            self.d["notes"].append(dict(pid=pid, leads=leads, suspect=suspect,
-                                        round=self.d["round"], claim=claim, tests=tests, check=check, speech=speech))
-        self.trace("statement", pid=pid, leads=leads, suspect=suspect, claim=claim, tests=tests, speech=speech)
+        # Preserve an explicit pass to distinguish silence from an unspoken turn.
+        self.d["notes"].append(dict(pid=pid, leads=leads, suspect=suspect,
+                                    round=self.d["round"], claim=claim, tests=tests, check=check, speech=speech, stance=stance, reason=reason))
+        self.trace("statement", pid=pid, leads=leads, suspect=suspect, claim=claim, tests=tests, speech=speech, stance=stance, reason=reason)
         self.d["speaker"] = pid
         self.d["speakers"].pop(0)
         if self.d["players"][pid]["local"] and len(self.d["local"]) == 1:
@@ -1095,6 +1100,9 @@ class Game:
             factors["claim_alignment"] = 0.0
             factors["verified_conflict"] = 0.0
             factors["unbacked_churn"] = 0.0
+            factors["constructive_revision"] = 0.0
+            factors["supported_leads"] = 0.0
+            factors["response"] = 0.0
         claims = sorted((note for note in knowledge["notes"] if note["pid"] == target), key=lambda n: n["round"])
         previous = {}
         if adaptive:
@@ -1102,6 +1110,7 @@ class Game:
             # A wrong guess under weak evidence is not deception.
             repeated = Counter()
             distinct = {}
+            supported = set()
             for note in claims:
                 visible = public_evidence_at(knowledge, note["round"])
                 for key, cid in note["leads"].items():
@@ -1113,17 +1122,24 @@ class Game:
                     gap = max(scores.values()) - scores[cid]
                     confidence = ranking[0] - ranking[1]
                     conflict = min(1.0, max(0.0, gap - 0.38)) * min(1.0, confidence / 0.85)
+                    # A tentative test is weaker evidence than an endorsed claim.
+                    stance = note.get("stance", 1)
+                    weight = (0.25, 0.65, 1.0)[stance] if stance in (0, 1, 2) else 0.65
                     if conflict > 0:
-                        factors["evidence_conflict"] += 0.22 * conflict
+                        factors["evidence_conflict"] += 0.14 * conflict * weight
                         repeated[(key, cid)] += 1
                         if repeated[(key, cid)] > 1:
-                            factors["persistence"] += 0.65 * conflict
+                            factors["persistence"] += 0.24 * conflict * weight
+                    elif confidence > 0.35 and gap < 0.12 and key not in supported:
+                        supported.add(key)
+                        factors["supported_leads"] -= 0.09 * weight
                     old = previous.get(key)
                     seen = distinct.setdefault(key, set())
                     if old is not None and old != cid:
                         delta = scores[cid] - scores[old]
                         if delta > 0.18:
                             factors["revision"] -= min(0.10, delta * 0.08)
+                            factors["constructive_revision"] -= min(0.18, delta * 0.12)
                         elif delta < -0.18 and confidence > 0.18:
                             factors["unsupported_shift"] += min(0.30, -delta * 0.22)
                         # Three distinct endorsed versions with no evidence gain
@@ -1132,6 +1148,17 @@ class Game:
                             factors["unbacked_churn"] += 0.12
                     seen.add(cid)
                     previous[key] = cid
+                # Explanations are weak signals, only if corroborated by public actions.
+                defense = note.get("defense")
+                if defense == 0 and note.get("stance") == 0 and note.get("tests"):
+                    factors["response"] -= 0.04
+                if defense == 1:
+                    earlier = [n for n in claims if n["round"] < note["round"]]
+                    old_leads = {k:c for n in earlier for k,c in n["leads"].items()}
+                    if any(k in old_leads and old_leads[k] != c and
+                           evidence_score(visible, c, int(k)) > evidence_score(visible, old_leads[k], int(k)) + 0.18
+                           for k,c in note["leads"].items()):
+                        factors["response"] -= 0.08
                 claim = note["claim"]
                 tests = note["tests"]
                 if claim is not None and tests and all(affinity(claim, c) == 0 for c in tests):
@@ -1142,11 +1169,18 @@ class Game:
                     receipt = self.d.get("mail_log", {}).get(str(note["round"]), {}).get(str(pid), {})
                     if target != pid and claim in receipt.get("sent_cards", [receipt.get("sent")]):
                         factors["verified_conflict"] += 1.5
-            for key, limit in (("evidence_conflict", 0.55), ("persistence", 1.0),
+            for key, limit in (("evidence_conflict", 0.40), ("persistence", 0.36),
                                ("unsupported_shift", 0.9), ("claim_alignment", 0.24), ("unbacked_churn", 0.24)):
                 factors[key] = min(limit, factors[key])
             factors["revision"] = max(-0.20, factors["revision"])
             factors["verified_conflict"] = min(3.0, factors["verified_conflict"])
+            factors["constructive_revision"] = max(-0.35, factors["constructive_revision"])
+            factors["response"] = max(-0.12, factors["response"])
+            # Personality affects kinds of public evidence, not access to hidden information.
+            factors["evidence_conflict"] *= profile[0]
+            factors["persistence"] *= profile[3]
+            factors["unsupported_shift"] *= 0.7 + profile[2]
+            factors["verified_conflict"] *= 0.8 + profile[3] * 0.3
         for note in ([] if adaptive else claims):
             for key, cid in note["leads"].items():
                 if key in previous and previous[key] != cid:
@@ -1295,8 +1329,68 @@ class Game:
         notes = self.d["history"]
         if self.phase in ("note", "statement"):
             notes = notes + self.d["notes"]
-        latest = {note["pid"]: note["suspect"] for note in notes if note["suspect"] is not None}
-        return Counter(latest.values())
+        latest = {note["pid"]: note.get("suspect") for note in notes}
+        return Counter(target for target in latest.values() if target is not None)
+
+    def public_reason(self, observer, target):
+        # A public explanation, not an exposure of private receipts or bot scores.
+        knowledge = self.player_knowledge(observer)
+        prior = [n for n in knowledge["notes"] if n["pid"] == target]
+        for n in reversed(prior):
+            if n["claim"] is not None and any(m["pid"] != target and m["round"] == n["round"] and
+                                               m["claim"] == n["claim"] for m in knowledge["notes"]):
+                return f'Спорное заявление о письме «{CARDS[n["claim"]]["name"]}».'
+        for n in reversed(prior):
+            visible = public_evidence_at(knowledge, n["round"])
+            for k, c in n["leads"].items():
+                if max(evidence_score(visible, x, int(k)) for x in visible["board"][int(k)]) - evidence_score(visible, c, int(k)) > 0.55:
+                    return f'Версия «{CARDS[c]["name"]}» расходилась с письмами (раунд {n["round"]}).'
+        return "Предварительное подозрение; конкретных доказательств пока нет."
+
+    def investigation_view(self):
+        if self.cooperative or self.phase == "role":
+            return None
+        unique = {(n["round"], n["pid"]): n for n in self.d["history"] + self.d["notes"]}
+        notes = sorted(unique.values(), key=lambda n: n["round"])
+        latest = {n["pid"]: n for n in notes}
+        people = []
+        for pid in range(1, len(self.d["players"])):
+            own = [n for n in notes if n["pid"] == pid]
+            incoming = []
+            for source, n in latest.items():
+                if n.get("suspect") == pid:
+                    incoming.append(dict(source=self.name(source), pid=source, round=n["round"],
+                        reason=n.get("reason") or "Причина отдельно не указана. См. реплику.",
+                        speech=n.get("speech", "")))
+            current = latest.get(pid, {})
+            target = current.get("suspect")
+            rounds = []
+            for number in range(1, self.d["round"] + 1):
+                n = unique.get((number, pid))
+                rounds.append(dict(round=number, spoken=n is not None,
+                    suspect=self.name(n["suspect"]) if n and n.get("suspect") is not None else None,
+                    reason=(n.get("reason") or "Причина отдельно не указана.") if n and n.get("suspect") is not None else "",
+                    speech=n.get("speech", "") if n else ""))
+            people.append(dict(pid=pid, name=self.name(pid), count=len(incoming), incoming=incoming,
+                outgoing=self.name(target) if target is not None else None, outgoing_round=current.get("round"),
+                rounds=rounds, opinions=[dict(round=n["round"], **self.notes_view([n], n["round"])[0]) for n in own]))
+        owner = self.notebook_owner()
+        me = next((p for p in people if p["pid"] == owner), None)
+        response = self.d.get("defenses", {}).get(str(self.d["round"]), {}).get(str(owner))
+        return dict(people=people, me=me, response=DEFENSES[response] if response in range(len(DEFENSES)) else None,
+                    can_respond=self.phase == "discussion" and len(self.d["local"]) == 1 and me is not None and
+                        any(x["round"] == self.d["round"] for x in me["incoming"]) and response is None,
+                    responses=[dict(value=i, label=label) for i,label in enumerate(DEFENSES)],
+                    new_accusations=sum(1 for p in people for x in p["incoming"] if x["round"] == self.d["round"]))
+
+    def defend(self, payload):
+        board = self.investigation_view()
+        if not board or not board["can_respond"] or not isinstance(payload, dict) or type(payload.get("choice")) is not int or payload["choice"] not in range(len(DEFENSES)):
+            raise ValueError("Ответ сейчас недоступен.")
+        pid = self.notebook_owner()
+        choice = payload["choice"]
+        self.d.setdefault("defenses", {}).setdefault(str(self.d["round"]), {})[str(pid)] = choice
+        self.trace("public_defense", pid=pid, choice=choice)
 
     def claim_opened(self, cid):
         return any(c["value"] == cid for c in self.view_letter_cards())
@@ -1356,6 +1450,7 @@ class Game:
         if not isinstance(text, str) or len(text) > 2000:
             raise ValueError("Заметка слишком длинная.")
         self.d.setdefault("notebooks", {})[str(pid)] = dict(marks=marks, suspects=suspects, text=text)
+        self.trace("notebook_saved", pid=pid, marked_cards=len(marks), marked_people=len(suspects))
 
     def history_view(self):
         grouped = {}
@@ -1379,6 +1474,8 @@ class Game:
             rows.append(dict(
                 player=self.name(note["pid"]),
                 speech=note.get("speech", ""),
+                reason=note.get("reason", ""), stance=STANCES[note.get("stance", 1)],
+                defense=DEFENSES[self.d["defenses"][str(number)][str(note["pid"])]] if str(note["pid"]) in self.d.get("defenses", {}).get(str(number), {}) else None,
                 suspect=self.name(suspect) if suspect is not None else None,
                 suspicions=suspicions[suspect] if suspect is not None else 0,
                 claim=card_view(claim, mark=mark, opened=claim in opened, disputed=claim_counts[claim] > 1) if claim is not None else None,
@@ -1510,7 +1607,10 @@ class Game:
                     if self.d["round"] < self.d["rounds"]:
                         category["label"] = "Моя версия · " + category["label"]
                 groups.extend(categories)
-            return groups if self.cooperative else groups + [suspect]
+            if not self.cooperative:
+                groups += [group("stance", "Насколько уверен в версии", [dict(value=i, label=label, glyph="·") for i,label in enumerate(STANCES)], False), suspect,
+                           group("reason", "Почему подозреваешь (необязательно)", [dict(value=i, label=label, glyph="·") for i,label in enumerate(ACCUSATION_REASONS)], False)]
+            return groups
         if phase == "ballot":
             return self.ballot_groups()
         if phase == "counter":
@@ -1595,7 +1695,8 @@ class Game:
                 # A saved round from before sequential discussion may already have local versions.
                 self.d["speakers"] = self.d["queue"] + [
                     i for i, p in enumerate(self.d["players"]) if i and not p["local"]]
-            self.show_statement(pid, leads, picks.get("person"), picks.get("claim"), tests)
+            self.show_statement(pid, leads, picks.get("person"), picks.get("claim"), tests,
+                                stance=picks.get("stance", 1), reason=ACCUSATION_REASONS[picks["reason"]] if "reason" in picks and picks.get("person") is not None else "")
         elif phase == "ballot":
             self.d["ballots"][str(pid)] = {g["key"]: picks[g["key"]] for g in groups}
             self.d["queue"].pop(0)
@@ -1773,7 +1874,7 @@ class Game:
                     action=action, mode=MODES[self.d["mode"]], round=self.d["round"],
                     rounds=self.d["rounds"], marked=self.marked, cooperative=self.cooperative,
                     flow=self.flow_view(), local_count=len(self.d["local"]), difficulty=self.d.get("difficulty", "normal"), actor=actor, groups=self.groups(), board=board,
-                    notebook=self.notebook_view(), history=self.history_view(),
+                    notebook=self.notebook_view(), history=self.history_view(), investigation=self.investigation_view(),
                     roster=roster, letters=letters, notes=notes, speaker=speaker, statement=statement,
                     tallies=self.d["counts"] if phase in ("appeal", "arrest", "result") else [],
                     outcome=self.outcome() if result else [],
@@ -2017,7 +2118,7 @@ def advance_automatically(game, include_intro=True):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("view", "start", "advance", "submit", "advance_dynamic", "submit_dynamic", "advance_fast", "reset", "notebook", "archive", "case", "export", "collection"))
+    parser.add_argument("action", choices=("view", "start", "advance", "submit", "advance_dynamic", "submit_dynamic", "advance_fast", "reset", "notebook", "defend", "archive", "case", "export", "collection"))
     parser.add_argument("token", nargs="?", default="-")
     parser.add_argument("payload", nargs="?", default="{}")
     args = parser.parse_args()
@@ -2056,6 +2157,11 @@ def main():
             if args.action == "reset":
                 save(path, None)
                 game = None
+            elif args.action == "defend":
+                game.enable_analytics(partial=True)
+                game.defend(json.loads(args.payload))
+                game.d["rev"] += 1
+                save(path, game.d)
             elif args.action == "notebook":
                 game.save_notebook(json.loads(args.payload))
                 save(path, game.d)
@@ -2073,7 +2179,7 @@ def main():
                 save(path, game.d)
                 if game.phase == "result":
                     archive_game(game)
-        elif args.action == "notebook":
+        elif args.action in ("notebook", "defend"):
             raise ValueError("Ход уже изменился.")
         print(json.dumps({"game": public_view(game)}, ensure_ascii=False))
 
