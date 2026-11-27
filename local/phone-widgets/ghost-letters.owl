@@ -1244,6 +1244,69 @@ app "Письма призрака" {
     }
   }
 
+  component NotebookJournal(rounds, letters) {
+    let active = reviewRound ?? first(rounds).round ?? first(letters).round
+    Column {
+      gap: 7
+      CategoryLabel { label: "Журнал расследования" }
+      Copy { body: "Записи о публичных версиях участников. Не являются доказательством виновности." }
+      Flow {
+        gap: 4
+        for letter in letters key letter.round {
+          Box {
+            padding: [8, 6]; radius: 5; border: 1
+            borderColor: active == letter.round ? gold : rule
+            background: active == letter.round ? plum : panel
+            onTap: reviewRound = letter.round
+            Text { text: letter.round == 0 ? "Первая зацепка" : "Раунд ${letter.round}"; color: parchment; font: sans; fontSize: 12 }
+          }
+        }
+      }
+      if len(letters) == 0 { Copy { body: "Записей пока нет." } }
+      for letter in letters.filter(l => l.round == active) key letter.round {
+        Column {
+          padding: 8; radius: 7; border: 1; borderColor: rule; gap: 5; background: alpha(gold, 0.04)
+          RuleLabel { heading: letter.round == 0 ? "ПЕРВАЯ ЗАЦЕПКА" : "ПИСЬМА · РАУНД ${letter.round}" }
+          if len(letter.cards) == 0 { Copy { body: "Новых открытых подсказок нет." } }
+          for clue in letter.cards key clue.value { ReferenceCard { entry: clue } }
+        }
+      }
+      if active != null && active > 0 && !rounds.any(r => r.round == active) { Copy { body: "В этом раунде ещё нет записанных реплик." } }
+      for log in rounds.filter(r => r.round == active) key log.round {
+        for opinion in log.entries key opinion.player {
+          let journalKey = "journal-${log.round}-${opinion.player}"
+          Column {
+            gap: 5; padding: 8; radius: 6; border: 1; borderColor: rule; background: mix(panel, gold, 0.045)
+            Row {
+              align: center; gap: 5
+              Text { text: opinion.player; font: serif; color: gold; fontSize: 17; weight: 1 }
+              if opinion.stance != null { Text { text: opinion.stance; color: dim; font: sans; fontSize: 11; maxLines: 2 } }
+            }
+            if opinion.claim != null { Text { text: "Назвал письмо: ${opinion.claim.label}"; color: parchment; font: sans; fontSize: 12 } }
+            if len(opinion.tests ?? []) > 0 { Text { text: "Проверял: ${join(opinion.tests.map(c => c.label), ", ")}"; color: dim; font: sans; fontSize: 12 } }
+            for clue in (opinion.clues ?? []) key clue.key {
+              Text { text: "${clue.category}: ${clue.label}"; color: get(categoryColors, clue.key, gold); font: sans; fontSize: 13 }
+            }
+            if opinion.suspect != null {
+              Text { text: "Подозревает → ${opinion.suspect}"; color: ash; font: sans; fontSize: 12; fontWeight: 700 }
+              if opinion.reason != null && opinion.reason != "" { Copy { body: opinion.reason } }
+            }
+            if opinion.defense != null { Text { text: "Ответ: ${opinion.defense}"; color: gold; font: sans; fontSize: 12 } }
+            if len(opinion.clues ?? []) == 0 && opinion.suspect == null && opinion.claim == null && len(opinion.tests ?? []) == 0 { Copy { body: "Не заявил версии." } }
+            if opinion.speech != null && opinion.speech != "" {
+              Box {
+                fill: width; padding: 4
+                onTap: fullSpeech = set(fullSpeech, journalKey, !get(fullSpeech, journalKey, false))
+                Text { text: get(fullSpeech, journalKey, false) ? "Свернуть исходную реплику" : "Читать исходную реплику"; color: gold; font: sans; fontSize: 12 }
+              }
+              if get(fullSpeech, journalKey, false) { Copy { body: opinion.speech; shade: parchment } }
+            }
+          }
+        }
+      }
+    }
+  }
+
   component Notebook(rows, people) {
     Column {
       gap: 10
@@ -1308,69 +1371,6 @@ app "Письма призрака" {
         Text { text: notebookError ? "Не удалось сохранить изменения." : (notebookSaving || notebookDirty ? "Сохраняем записи…" : "Все записи сохранены"); color: notebookError ? ash : dim; font: sans; fontSize: 11 }
         if notebookError {
           Box { fill: width; onTap: notebookError = false; Action { label: "Повторить автосохранение"; hot: false } }
-        }
-      }
-    }
-  }
-
-  component NotebookJournal(rounds, letters) {
-    let active = reviewRound ?? first(rounds).round ?? first(letters).round
-    Column {
-      gap: 7
-      CategoryLabel { label: "Журнал расследования" }
-      Copy { body: "Записи о публичных версиях участников. Не являются доказательством виновности." }
-      Flow {
-        gap: 4
-        for letter in letters key letter.round {
-          Box {
-            padding: [8, 6]; radius: 5; border: 1
-            borderColor: active == letter.round ? gold : rule
-            background: active == letter.round ? plum : panel
-            onTap: reviewRound = letter.round
-            Text { text: letter.round == 0 ? "Первая зацепка" : "Раунд ${letter.round}"; color: parchment; font: sans; fontSize: 12 }
-          }
-        }
-      }
-      if len(letters) == 0 { Copy { body: "Записей пока нет." } }
-      for letter in letters.filter(l => l.round == active) key letter.round {
-        Column {
-          padding: 8; radius: 7; border: 1; borderColor: rule; gap: 5; background: alpha(gold, 0.04)
-          RuleLabel { heading: letter.round == 0 ? "ПЕРВАЯ ЗАЦЕПКА" : "ПИСЬМА · РАУНД ${letter.round}" }
-          if len(letter.cards) == 0 { Copy { body: "Новых открытых подсказок нет." } }
-          for clue in letter.cards key clue.value { ReferenceCard { entry: clue } }
-        }
-      }
-      if active != null && active > 0 && !rounds.any(r => r.round == active) { Copy { body: "В этом раунде ещё нет записанных реплик." } }
-      for log in rounds.filter(r => r.round == active) key log.round {
-        for opinion in log.entries key opinion.player {
-          let journalKey = "journal-${log.round}-${opinion.player}"
-          Column {
-            gap: 5; padding: 8; radius: 6; border: 1; borderColor: rule; background: mix(panel, gold, 0.045)
-            Row {
-              align: center; gap: 5
-              Text { text: opinion.player; font: serif; color: gold; fontSize: 17; weight: 1 }
-              if opinion.stance != null { Text { text: opinion.stance; color: dim; font: sans; fontSize: 11; maxLines: 2 } }
-            }
-            if opinion.claim != null { Text { text: "Назвал письмо: ${opinion.claim.label}"; color: parchment; font: sans; fontSize: 12 } }
-            if len(opinion.tests ?? []) > 0 { Text { text: "Проверял: ${join(opinion.tests.map(c => c.label), ", ")}"; color: dim; font: sans; fontSize: 12 } }
-            for clue in (opinion.clues ?? []) key clue.key {
-              Text { text: "${clue.category}: ${clue.label}"; color: get(categoryColors, clue.key, gold); font: sans; fontSize: 13 }
-            }
-            if opinion.suspect != null {
-              Text { text: "Подозревает → ${opinion.suspect}"; color: ash; font: sans; fontSize: 12; fontWeight: 700 }
-              if opinion.reason != null && opinion.reason != "" { Copy { body: opinion.reason } }
-            }
-            if opinion.defense != null { Text { text: "Ответ: ${opinion.defense}"; color: gold; font: sans; fontSize: 12 } }
-            if len(opinion.clues ?? []) == 0 && opinion.suspect == null && opinion.claim == null && len(opinion.tests ?? []) == 0 { Copy { body: "Не заявил версии." } }
-            if opinion.speech != null && opinion.speech != "" {
-              Box {
-                fill: width; padding: 4
-                onTap: fullSpeech = set(fullSpeech, journalKey, !get(fullSpeech, journalKey, false))
-                Text { text: get(fullSpeech, journalKey, false) ? "Свернуть исходную реплику" : "Читать исходную реплику"; color: gold; font: sans; fontSize: 12 }
-              }
-              if get(fullSpeech, journalKey, false) { Copy { body: opinion.speech; shade: parchment } }
-            }
-          }
         }
       }
     }
