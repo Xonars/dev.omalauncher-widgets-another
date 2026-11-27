@@ -498,7 +498,7 @@ class Game:
             for key, cid in note["leads"].items():
                 i = int(key)
                 if cid in rows[i]:
-                    opinions[i][note["pid"]] = (cid, note["round"], 1.0)
+                    opinions[i][note["pid"]] = (cid, note["round"], 0.25 if note.get("stance") == 0 else 1.0)
             # A stated test is a weaker signal than an endorsed lead.
             for i, row in enumerate(rows):
                 candidates = [cid for cid in note["tests"] if cid in row]
@@ -672,10 +672,25 @@ class Game:
         for _ in range(2 if self.duel else 1):
             if not pool:
                 break
-            best = select(pool, 0.24 if echo else 0.16, pool if self.duel and not own else ())
+            threshold = 0.24 if echo else 0.16
+            best = select(pool, threshold, pool if self.duel and not own else ())
+            # A final clarification is worthwhile only with recent public human
+            # disagreement and a positive association that does not mislead elsewhere.
+            if context is not None and context["remaining"] == 1 and not echo and gain(best) <= threshold:
+                def safe_clarification(cid):
+                    margins = self.ghost_margins(cid)
+                    return min(margins) >= -0.10 and any(
+                        margins[i] >= 0.20 and i not in context.get("confirmed", []) and
+                        any(n["card"] != truth and n["round"] >= self.d["round"] - 1
+                            for n in context["human"][i])
+                        for i, truth in enumerate(self.d["truth"]))
+                alternatives = [c for c in pool if safe_clarification(c) and gain(c) > 0.09]
+                if alternatives:
+                    best = max(alternatives, key=gain)
+                    threshold = 0.09
             if "analytics" in self.d:
-                decisions.append(dict(stage="seal", coverage=coverage[:], **snapshot(), scores={c:gain(c) for c in pool}, best=best, threshold=0.24 if echo else 0.16))
-            if gain(best) <= (0.24 if echo else 0.16):
+                decisions.append(dict(stage="seal", coverage=coverage[:], **snapshot(), scores={c:gain(c) for c in pool}, best=best, threshold=threshold))
+            if gain(best) <= threshold:
                 break
             own.append(best)
             add_positive(best)
