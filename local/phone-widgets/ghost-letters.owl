@@ -610,7 +610,7 @@ app "Письма призрака" {
   component ReplyEditor(groups) {
     Column {
       fill: width; gap: 6; padding: 7; radius: 8; background: panel
-      for section in groups.filter(g => (replyMode == "letter" && g.key == "claim") || (replyMode == "version" && g.key == "stance" && (choices["0"] != null || choices["1"] != null || choices["2"] != null)) || (replyMode == "suspect" && (g.key == "person" || (g.key == "reason" && choices.person != null)))) key section.key {
+      for section in groups.filter(g => (replyMode == "letter" && g.key == "claim") || (replyMode == "version" && g.key == "stance" && (get(choices, "0", null) != null || get(choices, "1", null) != null || get(choices, "2", null) != null)) || (replyMode == "suspect" && (g.key == "person" || (g.key == "reason" && choices.person != null)))) key section.key {
         let selected = get(choices, section.key, null)
         Text { text: section.label; color: gold; font: sans; fontSize: 12; fontWeight: 700 }
         Flow {
