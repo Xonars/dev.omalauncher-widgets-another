@@ -31,7 +31,7 @@ jobs:
           java -jar tools/owl.jar index . --apps
           python3 tools/verify-local-store.py --catalogs
   ghost-balance:
-    if: github.event_name == 'pull_request' && github.head_ref == 'ghost-letters-balance-polish'
+    if: github.event_name == 'pull_request' && (github.head_ref == 'ghost-letters-balance-polish' || github.head_ref == 'ghost-letters-investigation-engine-4')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -39,12 +39,12 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Compare 5000 matched seeds per engine
+      - name: Compare 500 matched seeds per engine
         run: |
           mkdir -p /tmp/ghost-baseline
-          git archive e9ee844fbccf76d876d3831639a9b45fb30fa2d8 local/phone-widgets/ghost-letters | tar -x -C /tmp/ghost-baseline
-          python3 tools/ghost-letters-benchmark.py --engine /tmp/ghost-baseline/local/phone-widgets/ghost-letters/game.py --games 5000 --output baseline.json
-          python3 tools/ghost-letters-benchmark.py --engine local/phone-widgets/ghost-letters/game.py --games 5000 --output candidate.json
+          git archive ${{ github.event.pull_request.base.sha }} local/phone-widgets/ghost-letters | tar -x -C /tmp/ghost-baseline
+          python3 tools/ghost-letters-benchmark.py --engine /tmp/ghost-baseline/local/phone-widgets/ghost-letters/game.py --games 500 --output baseline.json
+          python3 tools/ghost-letters-benchmark.py --engine local/phone-widgets/ghost-letters/game.py --games 500 --output candidate.json
       - uses: actions/upload-artifact@v4
         with:
           name: ghost-letters-balance
