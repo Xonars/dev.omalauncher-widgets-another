@@ -1,10 +1,10 @@
-# OMA Another Features 2.0
+# OMA Another Features 2.1
 
-Локальные исходники приложения и виджета: ../84-oma-another-features-app.owl и ../85-oma-another-features.owl. Каталог — editorial подборка, не полный diff. Сохраняйте id и persist saved при обновлении. Поля featured/recent управляют обзором и вкладкой «Новое», symbol — текстовая иконка категории. История проверок в catalog.json.
+Локальные исходники приложения и виджета: ../84-oma-another-features-app.owl и ../85-oma-another-features.owl. Каталог — editorial подборка, не полный diff. Сохраняйте id и persist saved при обновлении. Поля featured/recent управляют обзором и вкладкой «Новое», shortTitle — короткое название; change — new/updated; benefits и steps — тезисы и шаги. Векторные иконки рисуются Canvas по id. История проверок в catalog.json.
 
 ## Скриншоты
 
-Добавьте реальные PNG или WebP в screenshots/ и укажите в screenshots карточки { "src": "~/.config/omalauncher/widgets/oma-another-features/screenshots/имя.png", "caption": "Описание" }. Не указывайте несуществующие файлы. Первый снимок используется на обзорной карточке, все снимки — в подробностях, без обрезки. До добавления снимков отображается символ категории.
+Добавьте реальные PNG или WebP в screenshots/ и укажите в screenshots карточки { "src": "~/.config/omalauncher/widgets/oma-another-features/screenshots/имя.png", "caption": "Описание" }. Не указывайте несуществующие файлы. Первый снимок используется на обзорной карточке, все снимки — в подробностях, без обрезки. До добавления снимков отображается индивидуальная тематическая векторная иконка. На широких экранах применяется боковая навигация; галерея имеет полноэкранный режим внутри приложения, без pinch-to-zoom.
 
 ## Публикация
 

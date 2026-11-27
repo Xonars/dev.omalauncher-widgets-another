@@ -1,5 +1,5 @@
 widget "Oma Another Features" {
-  meta { owl: 10; version: "2.0.0"; description: "Количество возможностей OMA Another. Нажмите, чтобы открыть каталог отличий."; category: "tools" }
+  meta { owl: 10; version: "2.1.0"; description: "Количество возможностей OMA Another. Нажмите, чтобы открыть каталог отличий."; category: "tools" }
   requires { pacman: [] }
   page: 1
   size: 3x2
@@ -11,7 +11,7 @@ widget "Oma Another Features" {
     Text { text: "OMA ANOTHER"; font: sans; fontSize: 11; letterSpacing: 1; color: accent; bold: true; maxLines: 1 }
     Row { gap: 10; align: center
       Text { text: catalog == null ? "…" : str(total); font: sans; fontSize: 38; color: accent; bold: true }
-      Text { text: "возможностей\nAnother"; font: sans; fontSize: 13; weight: 1 }
+      Text { text: "функций\nв каталоге"; font: sans; fontSize: 13; weight: 1 }
     }
     Text { text: "Открыть обзор →"; font: sans; fontSize: 11; color: muted; maxLines: 1 }
   }
