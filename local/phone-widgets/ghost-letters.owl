@@ -1,5 +1,5 @@
 app "Письма призрака" {
-  meta { owl: 18; description: "Карточное расследование с тайной перепиской"; version: "2.2.0"; category: "games" }
+  meta { owl: 18; description: "Карточное расследование с тайной перепиской"; version: "2.3.0"; category: "games" }
   title: "Письма призрака"
   icon: appIcon
   requires { pacman: ["python"] }
@@ -194,7 +194,7 @@ app "Письма призрака" {
     }
   }
 
-  component Clue(entry, marked = false, tint = #d7ad74, voting = false) {
+  component Clue(entry, marked = false, tint = #d7ad74, voting = false, personal = null) {
     let tone = entry.correct ? moss : (entry.voted ? ash : get(markColors, entry.mark, tint))
     Column {
       fill: width
@@ -229,6 +229,9 @@ app "Письма призрака" {
                 (entry.detail ?? (entry.correct ? (entry.voted ? "✓ Верно" : "Истинная улика") : "Голосование"))
           color: tone; font: sans; fontSize: 11; fontWeight: 650
         }
+      }
+      if personal != null && personal != "neutral" {
+        Text { text: personal == "likely" ? "✓  Моя версия" : "×  Исключаю"; color: personal == "likely" ? moss : ash; font: sans; fontSize: 11; fontWeight: 650 }
       }
       if len(entry.supporters ?? []) > 0 {
         Box { fill: width; height: 1; background: alpha(tone, 0.24) }
@@ -266,14 +269,16 @@ app "Письма призрака" {
           Grid {
             columns: 2
             gap: 6
-            for clue in category.cards key clue.value { Clue { entry: clue; tint: tone } }
+            for clue in category.cards key clue.value {
+              Clue { entry: clue; tint: tone; personal: canNotebook ? get(game.notebook.marks, "${int(clue.value)}", null) : null }
+            }
           }
         }
       }
     }
   }
 
-  component ReferenceCard(entry, tint = #d7ad74, focused = false) {
+  component ReferenceCard(entry, tint = #d7ad74, focused = false, personal = null) {
     let tone = entry.correct ? moss : (entry.voted ? ash : get(markColors, entry.mark, tint))
     Row {
       fill: width; align: center; gap: 5
@@ -285,6 +290,9 @@ app "Письма призрака" {
         weight: 1; gap: 1
         Text { text: entry.label; font: sans; color: parchment; fontWeight: 650; fontSize: roomyDesk ? 16 : 13; maxLines: 2 }
         if entry.mark != null { Text { text: entry.mark; font: sans; color: tone; fontSize: roomyDesk ? 13 : 11 } }
+        if personal != null && personal != "neutral" {
+          Text { text: personal == "likely" ? "✓ Моя версия" : "× Исключаю"; color: personal == "likely" ? moss : ash; font: sans; fontSize: 11 }
+        }
       }
     }
   }
@@ -306,7 +314,7 @@ app "Письма призрака" {
             columns: 2
             gap: 4
             for clue in category.cards key clue.value {
-              ReferenceCard { entry: clue; tint: tone; focused: clue.value == focus || tested.any(card => card.value == clue.value) }
+              ReferenceCard { entry: clue; tint: tone; focused: clue.value == focus || tested.any(card => card.value == clue.value); personal: canNotebook ? get(game.notebook.marks, "${int(clue.value)}", null) : null }
             }
           }
         }
@@ -1070,6 +1078,27 @@ app "Письма призрака" {
                     }
                   }
                 }
+                if sheet.phase == "result" && len(sheet.personal_results ?? []) > 0 {
+                  Column {
+                    gap: 8; padding: 12; radius: 12; border: 1; borderColor: rule; background: panel
+                    RuleLabel { heading: "ЛИЧНЫЙ ИТОГ" }
+                    for result in sheet.personal_results key result.name {
+                      Row {
+                        gap: 8; align: center
+                        Box {
+                          size: 34; radius: 9; align: center; background: alpha(result.won ? moss : ash, 0.18)
+                          Text { text: result.won ? "✓" : "×"; color: result.won ? moss : ash; fontSize: 20 }
+                        }
+                        Column {
+                          weight: 1; gap: 2
+                          Text { text: result.name; color: parchment; font: sans; fontSize: 16; fontWeight: 700 }
+                          Text { text: result.role; color: dim; fontSize: 12 }
+                        }
+                        Text { text: result.won ? "Победа" : "Поражение"; color: result.won ? moss : ash; fontSize: 14 }
+                      }
+                    }
+                  }
+                }
                 if len(sheet.outcome) > 0 {
                   Box {
                     fill: width; radius: 9
@@ -1191,7 +1220,10 @@ app "Письма призрака" {
                             } else if selected == option.value { choices = remove(choices, section.key) }
                             else { choices = set(choices, section.key, option.value) }
                           }
-                          Clue { entry: option; tint: tone; marked: section.multiple ? checked.any(x => x == option.value) : selected == option.value; voting: ballot || section.multiple }
+                          Clue { entry: option; tint: tone; marked: section.multiple ? checked.any(x => x == option.value) : selected == option.value; voting: ballot || section.multiple;
+                            personal: canNotebook && (ballot || phase == "note") ?
+                              (section.key == "suspect" || section.key == "person" ? get(game.notebook.suspects, "${int(option.value)}", null) :
+                               (section.key == "claim" ? null : get(game.notebook.marks, "${int(option.value)}", null))) : null }
                         }
                       }
                     }

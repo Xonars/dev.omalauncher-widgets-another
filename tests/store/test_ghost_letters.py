@@ -167,6 +167,47 @@ class GhostLettersRules(unittest.TestCase):
         self.assertTrue(history[1]["entries"][0]["claim"]["opened"])
         self.assertEqual(history[1]["entries"][0]["claim"]["mark"], "Эхо")
 
+    def test_final_round_dialogue(self):
+        g = Game.new("classic", 5, 1, False, seed=4)
+        g.d["round"] = g.d["rounds"]
+        pid = g.role_id("detective")
+        k = g.player_knowledge(pid)
+        k["profile"] = "strategist"
+        cid = g.d["board"][0][0]
+        g.d["letters"] = []
+        speech = g.bot_speech(k, cid, [cid], {"0":cid})
+        self.assertNotIn("в следующем раунде", speech)
+        self.assertIn("голосовани", speech)
+
+    def test_ghost_hints_and_shared_signal(self):
+        g = Game.new("classic", 5, 1, False, seed=9)
+        g.d["truth"] = [row[0] for row in g.d["board"]]
+        for pid in range(5):
+            g.refill(pid)
+        sent = [g.d["players"][pid]["hand"][0] for pid in range(1,5)]
+        hand = g.d["players"][0]["hand"]
+        for marked in (False,True):
+            g.d["marked"] = marked
+            echo, silence, own, discard = g.choose_ghost_letters(sent, hand)
+            self.assertTrue(set(echo) <= set(sent))
+            self.assertTrue(set(own) <= set(hand))
+            self.assertLessEqual(len(own),1)
+            self.assertNotIn(discard,own)
+            self.assertNotIn(silence,echo)
+            if marked:
+                self.assertLessEqual(len(echo),1)
+            else:
+                self.assertIsNone(silence)
+
+    def test_knowledge_deduplicates_completed_discussion(self):
+        g = Game.new("classic", 5, 1, False, seed=2)
+        pid = g.role_id("detective")
+        n = dict(pid=pid, leads={"0":g.d["board"][0][0]}, suspect=None,
+                 round=1, claim=None, tests=[])
+        g.d["history"] = [n]
+        g.d["notes"] = [n.copy()]
+        self.assertEqual(len(g.player_knowledge(pid)["notes"]),1)
+
     def test_package_matches_source(self):
         row = next(x for x in json.loads((ROOT / "store-collection.json").read_text()) if x["source"] == "ghost-letters.owl")
         with zipfile.ZipFile(ROOT / row["resources"]) as z:
