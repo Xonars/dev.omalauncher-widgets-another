@@ -1,11 +1,13 @@
 app "Письма призрака" {
-  meta { owl: 18; description: "Карточное расследование с тайной перепиской"; version: "2.0.0"; category: "games" }
+  meta { owl: 18; description: "Карточное расследование с тайной перепиской"; version: "2.1.0"; category: "games" }
   title: "Письма призрака"
   icon: appIcon
   requires { pacman: ["python"] }
 
   state mode = "classic"
   state markedHints = false
+  state difficulty = "normal"
+  state handAction = "send"
   state seats = 5
   state humans = 1
   state localGhost = false
@@ -35,8 +37,9 @@ app "Письма призрака" {
   let showDesk = wideDesk && len(game.board ?? []) > 0
   let shownPage = showDesk && (evidence == "board" || evidence == "letters") ? "" : evidence
   let privateTurn = game.actor != null
-  let covered = privateTurn && revealed != token
-  let config = {mode: mode, total: seats, humans: humans, human_ghost: localGhost, marked: markedHints}
+  let solo = game.local_count == 1
+  let covered = privateTurn && !solo && revealed != token
+  let config = {mode: mode, total: seats, humans: humans, human_ghost: localGhost, marked: markedHints, difficulty: difficulty}
   let missing = game.groups.any(g => g.required && get(choices, g.key, null) == null)
   let ballot = phase == "ballot"
   let ballotSections = ballot ? game.groups : []
@@ -72,6 +75,7 @@ app "Письма призрака" {
     if token != selectionToken {
       revealed = ""
       choices = {}
+      handAction = "send"
       ballotPage = null
       ghostNotes = {}
       reviewRound = null
@@ -91,7 +95,7 @@ app "Письма призрака" {
   }
 
   // Back covers a private hand before the app can be left.
-  back: overlay != "" || (privateTurn && !covered) || shownPage != ""
+  back: overlay != "" || (privateTurn && !solo && !covered) || shownPage != ""
   onBack: {
     if overlay != "" { overlay = "" }
     else {
@@ -349,6 +353,9 @@ app "Письма призрака" {
         Text { text: player; color: parchment; font: serif; fontSize: spotlight ? 27 : 20; weight: 1 }
       }
       if opinion == null { Copy { body: "Пропускает ход." } }
+      if opinion.speech != null && opinion.speech != "" {
+        Copy { body: opinion.speech; shade: parchment }
+      }
       if opinion.checking != null {
         RuleLabel { heading: "↻  Проверяет версию · ${opinion.checking}" }
       }
@@ -804,6 +811,19 @@ app "Письма призрака" {
               Text { text: markedHints ? "Вкл" : "Выкл"; color: gold; fontSize: 14 }
             }
             Text { text: markedHints ? "Авторский вариант: явные положительные и отрицательные подсказки." : "Классика: все открытые карты равнозначны."; color: dim; fontSize: 12 }
+            RuleLabel { heading: "СЛОЖНОСТЬ БОТОВ" }
+            Row {
+              gap: 5
+              for level in game.difficulties key level.key {
+                Box {
+                  weight: 1; height: 42; radius: 8; border: 1; align: center
+                  borderColor: difficulty == level.key ? gold : rule
+                  background: difficulty == level.key ? plum : panel
+                  onTap: difficulty = level.key
+                  Text { text: level.label; color: parchment; fontSize: 13; align: center }
+                }
+              }
+            }
             RuleLabel { heading: "ЗА СТОЛОМ" }
             Column {
               padding: [10, 6]
@@ -961,7 +981,47 @@ app "Письма призрака" {
                   }
                   if sheet.brief != "" { Copy { body: sheet.brief } }
                 }
-                let shownGroups = ballot ? [activeBallot] : sheet.groups
+                if phase == "mail" {
+                  let hand = sheet.groups.find(g => g.key == "send")
+                  CategoryLabel { label: "Карты на руке"; tint: gold }
+                  Row {
+                    gap: 5
+                    for slot in sheet.groups.filter(g => g.key == "send" || g.key == "send2" || g.key == "discard") key slot.key {
+                      Box {
+                        weight: 1; height: 41; radius: 8; border: 1; align: center
+                        background: handAction == slot.key ? plum : panel
+                        borderColor: handAction == slot.key ? gold : rule
+                        onTap: handAction = slot.key
+                        Text { text: slot.key == "send" ? "Отправить" : (slot.key == "send2" ? "Вторая" : "Сбросить"); color: parchment; fontSize: 13 }
+                      }
+                    }
+                  }
+                  Text { text: "Выбери действие и нажми карту. Повторное нажатие снимает выбор."; color: dim; fontSize: 12 }
+                  Grid {
+                    columns: 2; gap: 6
+                    for option in hand.options key option.value {
+                      let sent = choices.send == option.value || choices.send2 == option.value
+                      let discarded = choices.discard == option.value
+                      let detail = sent ? "В письмо" : (discarded ? "В сброс" : null)
+                      Box {
+                        fill: width; radius: 9
+                        onTap: {
+                          let current = get(choices, handAction, null)
+                          if current == option.value {
+                            choices = remove(choices, handAction)
+                          } else {
+                            if choices.send == option.value { choices = remove(choices, "send") }
+                            if choices.send2 == option.value { choices = remove(choices, "send2") }
+                            if choices.discard == option.value { choices = remove(choices, "discard") }
+                            choices = set(choices, handAction, option.value)
+                          }
+                        }
+                        Clue { entry: set(option, "detail", detail); tint: discarded ? ash : gold; marked: sent || discarded }
+                      }
+                    }
+                  }
+                }
+                let shownGroups = ballot ? [activeBallot] : (phase == "mail" ? sheet.groups.filter(g => g.key != "send" && g.key != "send2" && g.key != "discard") : sheet.groups)
                 for section in shownGroups key section.key {
                   let tone = get(categoryColors, section.key, (section.key == "echo" ? moss :
                                 (section.key == "silence" || section.key == "person" || section.key == "suspect" ? ash : (section.key == "seal" ? violet : gold))))

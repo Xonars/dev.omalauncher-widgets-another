@@ -47,17 +47,19 @@ def install(url, digest, entry):
                 os.replace(temporary, target)
         marker.write_text(digest)
 
-install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/a810a9d4280b760f342bbd620ceb9dd85b6e5bf48eebb8f6c3f52c6a02841501.zip', 'a810a9d4280b760f342bbd620ceb9dd85b6e5bf48eebb8f6c3f52c6a02841501', 'xonars-ghost-letters')
+install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/cf66082bc5d9378fba906efc1f1aca9a7efb1861815d0326ad85a5786570dc88.zip', 'cf66082bc5d9378fba906efc1f1aca9a7efb1861815d0326ad85a5786570dc88', 'xonars-ghost-letters')
 """
   let storeInstall = "python -c ${sh(storeBootstrap)}"
 
-  meta { owl: 18; description: "Карточное расследование с тайной перепиской · ресурсы при первом запуске"; version: "2.0.1"; category: "games" ; license: "MIT" }
+  meta { owl: 18; description: "Карточное расследование с тайной перепиской · ресурсы при первом запуске"; version: "2.1.1"; category: "games" ; license: "MIT" }
   title: "Письма призрака"
   icon: appIcon
   requires { pacman: ["python"] }
 
   state mode = "classic"
   state markedHints = false
+  state difficulty = "normal"
+  state handAction = "send"
   state seats = 5
   state humans = 1
   state localGhost = false
@@ -87,8 +89,9 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/a810
   let showDesk = wideDesk && len(game.board ?? []) > 0
   let shownPage = showDesk && (evidence == "board" || evidence == "letters") ? "" : evidence
   let privateTurn = game.actor != null
-  let covered = privateTurn && revealed != token
-  let config = {mode: mode, total: seats, humans: humans, human_ghost: localGhost, marked: markedHints}
+  let solo = game.local_count == 1
+  let covered = privateTurn && !solo && revealed != token
+  let config = {mode: mode, total: seats, humans: humans, human_ghost: localGhost, marked: markedHints, difficulty: difficulty}
   let missing = game.groups.any(g => g.required && get(choices, g.key, null) == null)
   let ballot = phase == "ballot"
   let ballotSections = ballot ? game.groups : []
@@ -124,6 +127,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/a810
     if token != selectionToken {
       revealed = ""
       choices = {}
+      handAction = "send"
       ballotPage = null
       ghostNotes = {}
       reviewRound = null
@@ -143,7 +147,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/a810
   }
 
   // Back covers a private hand before the app can be left.
-  back: overlay != "" || (privateTurn && !covered) || shownPage != ""
+  back: overlay != "" || (privateTurn && !solo && !covered) || shownPage != ""
   onBack: {
     if overlay != "" { overlay = "" }
     else {
@@ -401,6 +405,9 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/a810
         Text { text: player; color: parchment; font: serif; fontSize: spotlight ? 27 : 20; weight: 1 }
       }
       if opinion == null { Copy { body: "Пропускает ход." } }
+      if opinion.speech != null && opinion.speech != "" {
+        Copy { body: opinion.speech; shade: parchment }
+      }
       if opinion.checking != null {
         RuleLabel { heading: "↻  Проверяет версию · ${opinion.checking}" }
       }
@@ -856,6 +863,19 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/a810
               Text { text: markedHints ? "Вкл" : "Выкл"; color: gold; fontSize: 14 }
             }
             Text { text: markedHints ? "Авторский вариант: явные положительные и отрицательные подсказки." : "Классика: все открытые карты равнозначны."; color: dim; fontSize: 12 }
+            RuleLabel { heading: "СЛОЖНОСТЬ БОТОВ" }
+            Row {
+              gap: 5
+              for level in game.difficulties key level.key {
+                Box {
+                  weight: 1; height: 42; radius: 8; border: 1; align: center
+                  borderColor: difficulty == level.key ? gold : rule
+                  background: difficulty == level.key ? plum : panel
+                  onTap: difficulty = level.key
+                  Text { text: level.label; color: parchment; fontSize: 13; align: center }
+                }
+              }
+            }
             RuleLabel { heading: "ЗА СТОЛОМ" }
             Column {
               padding: [10, 6]
@@ -1013,7 +1033,47 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/a810
                   }
                   if sheet.brief != "" { Copy { body: sheet.brief } }
                 }
-                let shownGroups = ballot ? [activeBallot] : sheet.groups
+                if phase == "mail" {
+                  let hand = sheet.groups.find(g => g.key == "send")
+                  CategoryLabel { label: "Карты на руке"; tint: gold }
+                  Row {
+                    gap: 5
+                    for slot in sheet.groups.filter(g => g.key == "send" || g.key == "send2" || g.key == "discard") key slot.key {
+                      Box {
+                        weight: 1; height: 41; radius: 8; border: 1; align: center
+                        background: handAction == slot.key ? plum : panel
+                        borderColor: handAction == slot.key ? gold : rule
+                        onTap: handAction = slot.key
+                        Text { text: slot.key == "send" ? "Отправить" : (slot.key == "send2" ? "Вторая" : "Сбросить"); color: parchment; fontSize: 13 }
+                      }
+                    }
+                  }
+                  Text { text: "Выбери действие и нажми карту. Повторное нажатие снимает выбор."; color: dim; fontSize: 12 }
+                  Grid {
+                    columns: 2; gap: 6
+                    for option in hand.options key option.value {
+                      let sent = choices.send == option.value || choices.send2 == option.value
+                      let discarded = choices.discard == option.value
+                      let detail = sent ? "В письмо" : (discarded ? "В сброс" : null)
+                      Box {
+                        fill: width; radius: 9
+                        onTap: {
+                          let current = get(choices, handAction, null)
+                          if current == option.value {
+                            choices = remove(choices, handAction)
+                          } else {
+                            if choices.send == option.value { choices = remove(choices, "send") }
+                            if choices.send2 == option.value { choices = remove(choices, "send2") }
+                            if choices.discard == option.value { choices = remove(choices, "discard") }
+                            choices = set(choices, handAction, option.value)
+                          }
+                        }
+                        Clue { entry: set(option, "detail", detail); tint: discarded ? ash : gold; marked: sent || discarded }
+                      }
+                    }
+                  }
+                }
+                let shownGroups = ballot ? [activeBallot] : (phase == "mail" ? sheet.groups.filter(g => g.key != "send" && g.key != "send2" && g.key != "discard") : sheet.groups)
                 for section in shownGroups key section.key {
                   let tone = get(categoryColors, section.key, (section.key == "echo" ? moss :
                                 (section.key == "silence" || section.key == "person" || section.key == "suspect" ? ash : (section.key == "seal" ? violet : gold))))
