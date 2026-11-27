@@ -18,6 +18,8 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
+      - name: Build Ghost Letters resource bundle
+        run: python3 tools/repack-ghost-letters.py
       - name: Store tests and resources
         run: |
           python3 -m unittest discover -s tests/store -v
