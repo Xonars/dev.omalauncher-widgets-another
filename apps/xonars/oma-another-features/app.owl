@@ -47,11 +47,11 @@ def install(url, digest, entry):
                 os.replace(temporary, target)
         marker.write_text(digest)
 
-install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/3a099fddae72426684ae19d06ec0fb9a96093d1211d088430df041331cb01f35.zip', '3a099fddae72426684ae19d06ec0fb9a96093d1211d088430df041331cb01f35', 'xonars-oma-another-features')
+install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/180b176ce82ace701e93a1e4cd31eaededf6799bb99617c79ff2c93229467bbb.zip', '180b176ce82ace701e93a1e4cd31eaededf6799bb99617c79ff2c93229467bbb', 'xonars-oma-another-features')
 """
   let storeInstall = "python -c ${sh(storeBootstrap)}"
 
-  meta { owl: 11; version: "2.1.1"; description: "Витрина возможностей OMA Another: обзор, новые функции, инструкции · ресурсы при первом запуске"; category: "productivity" ; license: "MIT" }
+  meta { owl: 11; version: "2.2.1"; description: "Витрина возможностей OMA Another: обзор, новые функции, инструкции · ресурсы при первом запуске"; category: "productivity" ; license: "MIT" }
   requires { pacman: ["python"] }
   icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect x=".5" y=".5" width="47" height="47" rx="9" fill="#19191d"/><rect x=".5" y=".5" width="47" height="47" rx="9" fill="currentColor" fill-opacity=".30" stroke="currentColor" stroke-opacity=".78"/><defs><g id="symbol"><rect x="6" y="6" width="36" height="13" rx="3"/><rect x="6" y="26" width="14" height="16" rx="3"/><rect x="27" y="26" width="15" height="16" rx="3"/></g></defs><g transform="translate(3.39 3.39) scale(0.859)" fill="none" stroke="#faf8f3" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.91"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g><g transform="translate(3.39 3.39) scale(0.859)" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.91" opacity=".16"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g></svg>"""
 
@@ -78,7 +78,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/3a09
   let shots = current.screenshots ?? []
   let shot = shots[shotIndex]
   let found = items.filter(f => (section != "Новое" || f.recent == true) && (section != "Избранное" || contains(saved, f.id)) && (category == "Все" || f.category == category) && contains(lower(f.title + " " + f.shortTitle + " " + f.summary + " " + f.details + " " + f.howTo + " " + f.limitations + " " + f.category), lower(trim(query))))
-  let featured = ["tiled-workspaces","android-tiles","workspace-appearance","control-center","palette","waybar"].map(id => items.find(f => f.id == id)).filter(f => f != null)
+  let featured = ["desktop-profiles","workspace-appearance","control-center","palette","waybar","visualizer","tiled-workspaces","android-tiles"].map(id => items.find(f => f.id == id)).filter(f => f != null)
   component Heading(label) {
     Text { text: label; font: sans; fontSize: 12; bold: true; color: accent; letterSpacing: 0.6 }
   }
@@ -205,7 +205,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/3a09
     Column { fill: width; gap: 5
       if wide {
         for tab in tabs {
-          Row { fill: width; align: center; radius: 8; padding: [10, 9]; background: section == tab ? alpha(accent, 0.20) : surface; onTap: { section = tab; category = "Все"; query = ""; filtersOpen = false }
+          Row { fill: width; align: center; radius: 8; height: 34; padding: [10, 4]; background: section == tab ? alpha(accent, 0.20) : surface; onTap: { section = tab; category = "Все"; query = ""; filtersOpen = false }
             Text { text: tab; font: sans; fontSize: 13; bold: section == tab; weight: 1 }
             if tab == "Избранное" { Star { marked: section == tab } }
           }
@@ -230,7 +230,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/3a09
   component Categories() {
     Column { fill: width; gap: 4
       for c in categories {
-        Row { fill: width; align: center; radius: 7; padding: [9, 8]; background: section == "Каталог" && category == c ? alpha(accent, 0.20) : surface; onTap: { category = c; section = "Каталог"; query = ""; filtersOpen = false }
+        Row { fill: width; align: center; radius: 7; height: wide ? 34 : 36; padding: [9, 4]; background: section == "Каталог" && category == c ? alpha(accent, 0.20) : surface; onTap: { category = c; section = "Каталог"; query = ""; filtersOpen = false }
           Text { text: c; font: sans; fontSize: 12; weight: 1; bold: section == "Каталог" && category == c }
           Text { text: str(c == "Все" ? len(items) : len(items.filter(f => f.category == c))); font: sans; fontSize: 11; color: muted }
         }
@@ -243,15 +243,15 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/3a09
     }
   }
   component FeatureCard(f) {
-    Column { fill: width; height: 145; radius: 10; padding: 9; gap: 5; background: surface; onTap: { selected = f.id; expanded = false; shotIndex = 0; fullShot = false }
-      Box { fill: width; height: 74; align: center; clip: true; radius: 7; background: alpha(accent, 0.10)
+    Column { fill: width; height: 165; radius: 10; padding: 9; gap: 4; background: surface; onTap: { selected = f.id; expanded = false; shotIndex = 0; fullShot = false }
+      Box { fill: width; height: 78; align: center; clip: true; radius: 7; background: alpha(accent, 0.10)
         if len(f.screenshots ?? []) > 0 {
-          Image { src: f.screenshots[0].src; fill: true; fit: contain }
+          Image { src: f.screenshots[0].thumb ?? f.screenshots[0].src; fill: true; fit: contain }
         } else {
           FeatureIcon { name: f.id; side: 42 }
         }
       }
-      Box { fill: width; height: 36; align: topStart
+      Box { fill: width; height: 34; align: topStart
         Text { text: f.shortTitle ?? f.title; font: sans; fontSize: 14; bold: true; maxLines: 2; fill: width }
       }
       Text { text: f.category; font: sans; fontSize: 10; color: muted; maxLines: 1 }
@@ -364,8 +364,10 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/3a09
   component DetailText() {
     Column { fill: true; scroll: true; gap: 9
       Row { fill: width; align: center; gap: 8
-        Box { size: 38; align: center; radius: 8; background: alpha(accent, 0.12)
-          FeatureIcon { name: current.id; side: 25 }
+        if !wide || len(shots) > 0 {
+          Box { size: 38; align: center; radius: 8; background: alpha(accent, 0.12)
+            FeatureIcon { name: current.id; side: 25 }
+          }
         }
         Column { weight: 1; gap: 3
           Heading { label: current.category }
@@ -391,7 +393,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/3a09
         for step,i in current.steps ?? [current.howTo] {
           Row { fill: width; align: top; gap: 8
             Box { size: 24; align: center; radius: 7; background: alpha(accent, 0.12)
-              Text { text: str(i+1); font: sans; fontSize: 12; color: accent; bold: true }
+              Text { text: str(i+1); font: sans; fontSize: 12; color: accent; bold: true; fill: width; align: center }
             }
             Text { text: step; font: sans; fontSize: 14; weight: 1 }
           }
@@ -440,7 +442,6 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/3a09
                   Box { fill: width; height: 112; align: center; radius: 12; background: alpha(accent, 0.10)
                     FeatureIcon { name: current.id; side: 64 }
                   }
-                  Heading { label: current.category }
                   Text { text: current.summary; font: sans; fontSize: 18; bold: true }
                 }
               }

@@ -1,5 +1,5 @@
 widget "Oma Another Features" {
-  meta { owl: 10; version: "2.1.0"; description: "Количество возможностей OMA Another. Нажмите, чтобы открыть каталог отличий."; category: "tools" }
+  meta { owl: 10; version: "2.2.0"; description: "Количество возможностей OMA Another. Нажмите, чтобы открыть каталог отличий."; category: "tools" }
   requires { pacman: [] }
   page: 1
   size: 3x2

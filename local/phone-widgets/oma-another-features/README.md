@@ -1,4 +1,4 @@
-# OMA Another Features 2.1
+# OMA Another Features 2.2
 
 Локальные исходники приложения и виджета: ../84-oma-another-features-app.owl и ../85-oma-another-features.owl. Каталог — editorial подборка, не полный diff. Сохраняйте id и persist saved при обновлении. Поля featured/recent управляют обзором и вкладкой «Новое», shortTitle — короткое название; change — new/updated; benefits и steps — тезисы и шаги. Векторные иконки рисуются Canvas по id. История проверок в catalog.json.
 
@@ -10,3 +10,7 @@
 
 Из корня репозитория: python3 tools/build-local-store.py 84-oma-another-features-app.owl 85-oma-another-features.owl
 Затем python3 tools/verify-local-store.py и компиляция каталогов java -jar tools/owl.jar index . / --apps / --faces. Сохраняйте прежние пакеты для старых клиентов. Для локальной проверки используйте owl-check и owl-send refresh. Проверяйте обзор, поиск, категории, Новое, избранное, возврат и ограничения.
+
+## Галерея 2.2
+
+Девять снимков устройства и внешнего дисплея, один фрагмент Waybar. `src` содержит изображение в исходном разрешении (WebP), `thumb` — уменьшенную копию для обзора. Изображения общие для нескольких карточек там, где они показывают несколько функций. Тайловые режимы пока остаются без фотографий.
