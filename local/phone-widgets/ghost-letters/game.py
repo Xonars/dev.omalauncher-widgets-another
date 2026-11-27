@@ -1792,6 +1792,22 @@ def public_view(game):
     return view
 
 
+def simulate_game(seed, difficulty="normal", total=6, mode="classic", marked=False):
+    """Run the production engine with no human players, no UI, and no state writes."""
+    game = Game.new(mode, total, 1, False, marked=marked, difficulty=difficulty, seed=seed)
+    for player in game.d["players"]:
+        player["local"] = None
+    game.d["local"] = []
+    game.set_phase("board")
+    for _ in range(500):
+        if game.phase == "result":
+            return game
+        if game.actor is not None:
+            raise RuntimeError(f"Unexpected human actor in {game.phase}")
+        game.advance()
+    raise RuntimeError(f"Simulation stuck in {game.phase} for seed {seed}")
+
+
 def advance_automatically(game, include_intro=True):
     """Execute only public transitions, in their original order, and stop before human input."""
     if len(game.d["local"]) != 1:
