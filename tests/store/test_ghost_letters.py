@@ -421,6 +421,45 @@ class GhostLettersRules(unittest.TestCase):
         mod.advance_automatically(g)
         self.assertEqual(g.phase,"intro")
 
+    def test_simulation_is_deterministic(self):
+        for difficulty in ("easy", "normal", "hard"):
+            a = mod.simulate_game(42, difficulty)
+            b = mod.simulate_game(42, difficulty)
+            self.assertEqual(a.d["decided"], b.d["decided"])
+            self.assertEqual(a.d["winner"], b.d["winner"])
+            self.assertEqual(a.d["local"], [])
+            self.assertEqual(a.d["round"], a.d["rounds"])
+
+    def test_verified_claim_conflict_uses_only_own_receipt(self):
+        g = Game.new("classic", 6, 1, False, seed=42)
+        pid = g.role_id("detective")
+        target, observer = [i for i in range(1, 6) if i != pid][:2]
+        g.d["round"] = 1
+        g.d["history"] = [dict(pid=target, round=1, leads={}, suspect=None,
+                                 claim=12, tests=[])]
+        g.d["mail_log"] = {"1": {str(pid): {"sent": 12, "sent_cards": [12]}}}
+        self.assertGreater(g.suspicion_factors(pid, target)["verified_conflict"], 0)
+        self.assertEqual(g.suspicion_factors(observer, target)["verified_conflict"], 0)
+
+    def test_single_test_is_not_an_endorsed_lead(self):
+        g = Game.new("classic", 6, 1, False, seed=42)
+        pid = g.d["local"][0]
+        g.d["round"] = 1
+        g.d["speakers"] = [pid]
+        g.set_phase("note", [pid])
+        card = g.d["board"][0][0]
+        g.submit({"lead": [card]})
+        note = g.d["history"][0]
+        self.assertEqual(note["tests"], [card])
+        self.assertEqual(note["leads"], {})
+
+    def test_arrest_ballot_excludes_self(self):
+        g = Game.new("classic", 6, 1, False, seed=42)
+        pid = g.d["local"][0]
+        g.start_vote(["suspect"])
+        options = g.ballot_groups()[0]["options"]
+        self.assertNotIn(pid, [o["value"] for o in options])
+
     def test_package_matches_source(self):
         row = next(x for x in json.loads((ROOT / "store-collection.json").read_text()) if x["source"] == "ghost-letters.owl")
         with zipfile.ZipFile(ROOT / row["resources"]) as z:
