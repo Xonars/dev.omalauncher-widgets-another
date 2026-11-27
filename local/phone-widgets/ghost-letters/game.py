@@ -980,7 +980,7 @@ class Game:
                     claim, tests = alternative, [target]
         speech = self.bot_speech(knowledge, claim, tests, leads, receipt.get("check"), suspect=suspect)
         reason = self.public_reason(pid, suspect) if suspect is not None else ""
-        if suspect is not None and not hostile and knowledge["difficulty"] != "easy" and not final_round and reason.startswith("Предварительное подозрение"):
+        if suspect is not None and not hostile and knowledge["difficulty"] != "easy" and reason.startswith("Предварительное подозрение"):
             suspect, reason = None, ""
             speech = self.bot_speech(knowledge, claim, tests, leads, receipt.get("check"), suspect=None)
         if "analytics" in self.d:
@@ -1014,12 +1014,12 @@ class Game:
             parts.append(f"Я сообщаю, что отправил {names([claim])}.")
         opened = self.claim_opened(claim)
         if opened and self.claim_mark(claim) == MARKS["silence"]:
-            parts.append("Призрак обозначил ложный след. Эту связь стоит пересмотреть.")
+            parts.append("Призрак явно отметил ложный след. Это повод пересмотреть проверяемую связь.")
         elif opened:
-            parts.append({"analyst": "Карта открыта, это аргумент в пользу версии, но не доказательство.",
+            parts.append({"analyst": "Письмо открыто: связь заслуживает внимания, но не подтверждает конкретную улику.",
                           "skeptic": "Карта открыта, однако она может указывать на другую категорию.",
                           "intuitive": "Карта открыта. Перед голосованием учту и менее очевидные связи." if final_round else "Карта открыта. Попробую поискать и менее очевидные связи.",
-                          "social": "Карта открыта; интересно, увидели ли остальные ту же связь.",
+                          "social": "Письмо открыто. Кто видит другую ассоциацию?",
                           "strategist": "Карта открыта. Проверю, не ведут ли другие письма туда же."}[profile])
         else:
             parts.append({"analyst": "Письмо не открыто: результат проверки неизвестен.",
@@ -1185,7 +1185,7 @@ class Game:
                     # A tentative test is weaker evidence than an endorsed claim.
                     stance = note.get("stance", 1)
                     weight = (0.0, 0.45, 1.0)[stance] if stance in (0, 1, 2) else 0.45
-                    if conflict > 0:
+                    if conflict > 0 and confidence > 0.35:
                         age = 0.78 ** max(0, knowledge["round"] - note["round"])
                         if stance != 0:
                             repeated[(key, cid)] += 1
@@ -1497,7 +1497,7 @@ class Game:
                     text = f"{self.name(pid)} подозревает {self.name(new)}."
                 else:
                     text = f"{self.name(pid)}: {self.name(old)} → {self.name(new)}."
-                changes.append(dict(pid=pid, text=text))
+                changes.append(dict(pid=pid, text=text + (" " + n["reason"] if new is not None and n.get("reason") else "")))
         return dict(people=people, me=me, changes=changes, response=DEFENSES[response] if response in range(len(DEFENSES)) else None,
                     can_respond=self.phase == "discussion" and len(self.d["local"]) == 1 and me is not None and
                         any(x["round"] == self.d["round"] for x in me["incoming"]) and response is None,
