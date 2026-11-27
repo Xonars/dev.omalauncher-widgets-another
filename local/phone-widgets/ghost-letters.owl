@@ -131,9 +131,10 @@ app "Письма призрака" {
   }
 
   // Back covers a private hand before the app can be left.
-  back: previewCard != null || overlay != "" || (privateTurn && !solo && !covered) || shownPage != ""
+  back: fastDiscussion || previewCard != null || overlay != "" || (privateTurn && !solo && !covered) || shownPage != ""
   onBack: {
-    if previewCard != null { previewCard = null }
+    if fastDiscussion { fastDiscussion = false }
+    else if previewCard != null { previewCard = null }
     else if overlay != "" { overlay = "" }
     else {
       evidence = ""
@@ -213,7 +214,7 @@ app "Письма призрака" {
     }
   }
 
-  component PlayingCard(entry, tint = #d7ad74, personal = null, marked = false, voting = false, mini = false) {
+  component PlayingCard(entry, tint = #d7ad74, personal = null, marked = false, voting = false, mini = false, preview = true) {
     let tone = entry.correct ? moss : (entry.voted ? ash : get(markColors, entry.mark, tint))
     let personalTone = personal == "likely" ? moss : (personal == "unlikely" ? ash : tone)
     let detail = entry.mark ?? entry.detail ?? (entry.correct ? "Истинная улика" : (entry.voted ? "Выбор стола" : ""))
@@ -223,19 +224,19 @@ app "Письма призрака" {
         fill: width; gap: 3; padding: 4; radius: 7; border: 1
         borderColor: marked ? tone : (entry.correct || entry.voted || markText != "" ? personalTone : alpha(tone, 0.38))
         background: mix(panel, tone, marked ? 0.28 : 0.075)
-        onLongPress: { previewCard = entry }
-        Image { src: entry.artwork; fill: width; height: mini ? 65 : (showDesk ? 85 : 100); radius: 4; fit: contain; label: entry.label }
+        onLongPress: { if preview { previewCard = entry } }
+        Image { src: entry.artwork; fill: width; height: mini ? 65 : (showDesk ? 85 : 100); radius: 4; fit: contain; label: entry.label; offset: [0, marked ? -2 : 0]; animate offset: 180ms }
         Box {
           height: 32; fill: width; align: center
           Text { text: entry.label; font: sans; fontSize: mini ? 11 : 13; fontWeight: 700; align: center; maxLines: 2; color: parchment }
         }
         Box {
-          height: mini ? 26 : 30; fill: width; align: center
-          Text { text: marked ? (detail != "" ? "✓ ${detail}" : "✓ Выбрано") : detail; color: tone; font: sans; fontSize: 10; fontWeight: 650; align: center; maxLines: 2 }
-        }
-        Box {
-          height: 15; fill: width; align: center
-          Text { text: markText; color: personalTone; font: sans; fontSize: 10; align: center; maxLines: 1 }
+          height: 29; fill: width; align: center
+          Column {
+            gap: 1
+            Text { text: marked ? (detail != "" ? "✓ ${detail}" : "✓ Выбрано") : detail; color: tone; font: sans; fontSize: 10; fontWeight: 650; align: center; maxLines: markText != "" ? 1 : 2 }
+            if markText != "" { Text { text: markText; color: personalTone; font: sans; fontSize: 10; align: center; maxLines: 1 } }
+          }
         }
         if len(entry.supporters ?? []) > 0 {
           Flow {
@@ -596,6 +597,23 @@ app "Письма призрака" {
     }
   }
 
+  component SealedMail() {
+    Canvas {
+      fill: width; height: 76
+      let cx = width / 2
+      for i in range(2) {
+        rect(cx - 49 + i * 6, 13 + i * 5, 86, 52, radius: 5, fill: #422d3b)
+        rect(cx - 49 + i * 6, 13 + i * 5, 86, 52, radius: 5, stroke: #977454, width: 1)
+      }
+      rect(cx - 43, 8, 86, 52, radius: 5, fill: #d9b886)
+      path([[cx - 42, 10], [cx, 39], [cx + 42, 10]], stroke: #91634f, width: 1)
+      path([[cx - 42, 56], [cx - 13, 34]], stroke: #91634f, width: 1)
+      path([[cx + 42, 56], [cx + 13, 34]], stroke: #91634f, width: 1)
+      circle(cx, 38, 9, fill: #854e62)
+      circle(cx, 38, 5, stroke: #e3b7a0, width: 1)
+    }
+  }
+
   component Post(letters) {
     Column {
       gap: 8
@@ -603,7 +621,7 @@ app "Письма призрака" {
       if len(letters) == 0 {
         Column {
           gap: 7; padding: 18; radius: 10; background: panel
-          Text { text: "✉"; font: serif; fontSize: 45; color: gold; align: center }
+          SealedMail {}
           Text { text: "Ящик пока пуст"; font: serif; fontSize: 19; color: parchment; align: center }
         }
       }
@@ -637,7 +655,7 @@ app "Письма призрака" {
           } else {
             Column {
               gap: 5; padding: 12; radius: 8; background: alpha(gold, 0.04)
-              Text { text: "✉"; font: serif; fontSize: 36; color: dim; align: center }
+              SealedMail {}
               Text { text: "Призрак оставил письма закрытыми"; font: serif; fontSize: 19; color: parchment; align: center }
               Text { text: "Новых открытых подсказок нет."; color: dim; font: sans; fontSize: 12; align: center }
             }
@@ -930,14 +948,14 @@ app "Письма призрака" {
       Box {
         width: 46; height: 36; radius: 8; align: center
         border: 1; borderColor: rule; background: panel
-        onTap: { overlay = overlay == "help" ? "" : "help" }
+        onTap: { if !fastDiscussion && queued == "" { overlay = overlay == "help" ? "" : "help" } }
         Text { text: "?"; color: gold; align: center; fontWeight: 700; fontSize: 17 }
       }
       if !setup && !loading && !failed {
         Box {
           width: 46; height: 36; radius: 8; align: center
           border: 1; borderColor: rule; background: panel
-          onTap: { overlay = overlay == "reset" ? "" : "reset" }
+          onTap: { if !fastDiscussion && queued == "" { overlay = overlay == "reset" ? "" : "reset" } }
           Text { text: "↺"; color: gold; align: center; fontSize: 19 }
         }
       }
@@ -1039,7 +1057,7 @@ app "Письма призрака" {
               background: linear(0, 0, 1, 1, [#302735, #211b25])
               border: 1; borderColor: rule; radius: 14; padding: [14, 9, 14, 14]
               gap: 2
-              Text { text: "✉"; font: serif; fontSize: 30; align: center; color: gold }
+              SealedMail {}
               Text { text: "Письма призрака"; font: serif; fontSize: 29; align: center; color: parchment }
               Text { text: "Тайна · Ассоциации · Расследование"; font: sans; fontSize: 12; align: center; color: dim }
             }
@@ -1301,7 +1319,7 @@ app "Письма призрака" {
                   Column {
                     gap: 8; padding: 12; radius: 10; border: 1; borderColor: rule
                     background: linear(0, 0, 1, 1, [#302735, shell])
-                    Text { text: "✉"; color: gold; font: serif; fontSize: 54; align: center }
+                    SealedMail {}
                     Text { text: "Письма ждут отправки"; color: parchment; font: serif; fontSize: 22; align: center }
                     Text { text: "Сопоставь карты на столе и выбери ассоциацию."; color: dim; font: sans; fontSize: 13; align: center }
                   }
