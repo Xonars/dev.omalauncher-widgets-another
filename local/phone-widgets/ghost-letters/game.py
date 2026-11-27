@@ -23,8 +23,8 @@ import uuid
 HERE = Path(__file__).resolve().parent
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "ghost-letters"
 ANALYTICS_SCHEMA = 1
-GAME_VERSION = "2.13.0"
-BOT_VERSION = "3.5.0"
+GAME_VERSION = "2.14.0"
+BOT_VERSION = "3.6.0"
 CATEGORIES = ("Мотив", "Место", "Способ")
 STANCES = ("Проверяю гипотезу", "Предварительная версия", "Уверенная версия")
 DEFENSES = ("Я проверял гипотезу", "Я пересмотрел версию", "Я сохраняю свою версию")
@@ -494,6 +494,7 @@ class Game:
         scores = [{c: evidence_score(knowledge, c, i) for c in row}
                   for i, row in enumerate(rows)]
         opinions = [{} for _ in rows]
+        tested = [{} for _ in rows]
         for note in sorted(knowledge["notes"], key=lambda n: n["round"]):
             for key, cid in note["leads"].items():
                 i = int(key)
@@ -504,7 +505,11 @@ class Game:
                 candidates = [cid for cid in note["tests"] if cid in row]
                 if len(candidates) == 1 and str(i) not in note["leads"]:
                     # Multiple hypotheses in one category are not an endorsement.
-                    opinions[i][note["pid"]] = (candidates[0], note["round"], 0.25)
+                    tested[i][note["pid"]] = (candidates[0], note["round"], 0.25)
+        # Tests inform uncertainty, but never overwrite a stated public version.
+        for i, row in enumerate(rows):
+            for pid, test in tested[i].items():
+                opinions[i].setdefault(pid, test)
         public = []
         for i, row in enumerate(rows):
             counts = {c: 0.0 for c in row}
@@ -536,8 +541,10 @@ class Game:
             weight *= 1.0 + 1.5 * disagreement + 0.35 * (1.0 - public[truth])
             recent_human = [n for n in context.get("human", [[] for _ in self.d["truth"]])[i]
                             if n["round"] >= self.d["round"] - 1]
-            if any(n["card"] != truth for n in recent_human):
+            if any(n["card"] != truth or n["confidence"] < 1.0 for n in recent_human):
                 weight = max(weight, 0.35) * 1.35
+            elif any(n["card"] != truth for n in context.get("human", [[] for _ in self.d["truth"]])[i]):
+                weight = max(weight, 0.22)
             if context["difficulty"] == "hard":
                 weight *= 1.0 + (0.75 + 0.5 / context["remaining"]) * disagreement
             weights.append(weight)
@@ -562,7 +569,7 @@ class Game:
             scores = context["scores"][i]
             gap = scores[truth] - max(v for c, v in scores.items() if c != truth)
             # Do not repeat an already decisive clue just because a human stayed silent.
-            if gap >= 1.25 and not any(n["card"] != truth and n["round"] >= self.d["round"] - 1 for n in human):
+            if gap >= 1.25 and not uncertain:
                 continue
             if public[truth] < 0.86 or uncertain or (local_present and not human):
                 # Favor understandable direct associations over merely accumulated scores.
@@ -603,7 +610,16 @@ class Game:
             weighted = weights[i] * max(0.0, gain) + max(0.75, weights[i]) * min(0.0, gain)
             gains.append(weighted)
         confirmation = max((bonus for _, bonus in self.ghost_confirmation(cid, context)), default=0.0) if not negative else 0.0
-        return max(0.0, *gains) + 0.15 * sum(max(0, g) for g in gains) + 1.25 * sum(min(0, g) for g in gains) + confirmation
+        # Prefer direct, distinctive associations over shared workshop/form tags.
+        clarity = 0.0
+        if not negative:
+            margins = self.ghost_margins(cid)
+            broad = {"мастерская", "длинная форма", "контейнер", "круглая форма", "опасность"}
+            for i, truth in enumerate(self.d["truth"]):
+                strength, tag = association(cid, truth)
+                if margins[i] > 0.12 and tag not in broad and strength >= 2.5:
+                    clarity = max(clarity, min(0.12, weights[i] * margins[i] * 0.20))
+        return max(0.0, *gains) + 0.15 * sum(max(0, g) for g in gains) + 1.25 * sum(min(0, g) for g in gains) + confirmation + clarity
 
     def ghost_apply_hint(self, context, cid, negative=False):
         if not negative:
@@ -676,12 +692,12 @@ class Game:
             best = select(pool, threshold, pool if self.duel and not own else ())
             # A final clarification is worthwhile only with recent public human
             # disagreement and a positive association that does not mislead elsewhere.
-            if context is not None and context["remaining"] == 1 and not echo and gain(best) <= threshold:
+            if context is not None and not echo and gain(best) <= threshold:
                 def safe_clarification(cid):
                     margins = self.ghost_margins(cid)
                     return min(margins) >= -0.10 and any(
                         margins[i] >= 0.20 and i not in context.get("confirmed", []) and
-                        any(n["card"] != truth and n["round"] >= self.d["round"] - 1
+                        any(n["card"] != truth or n["confidence"] < 1.0
                             for n in context["human"][i])
                         for i, truth in enumerate(self.d["truth"]))
                 alternatives = [c for c in pool if safe_clarification(c) and gain(c) > 0.09]
@@ -954,6 +970,9 @@ class Game:
                     claim, tests = alternative, [target]
         speech = self.bot_speech(knowledge, claim, tests, leads, receipt.get("check"), suspect=suspect)
         reason = self.public_reason(pid, suspect) if suspect is not None else ""
+        if suspect is not None and not hostile and knowledge["difficulty"] != "easy" and not final_round and reason.startswith("Предварительное подозрение"):
+            suspect, reason = None, ""
+            speech = self.bot_speech(knowledge, claim, tests, leads, receipt.get("check"), suspect=None)
         if "analytics" in self.d:
             self.trace("bot_discussion", pid=pid, knowledge=knowledge, rankings=rankings,
                        suspect_scores={target:self.suspicion(pid,target) for target in suspects},
@@ -1096,6 +1115,27 @@ class Game:
             ids = [cid for cid in ids if cid in leaders]
         return ids
 
+    def public_contradictions(self, knowledge, target):
+        """An accusation citing a version the accuser also endorses; not proof of guilt."""
+        result = []
+        notes = knowledge["notes"]
+        for note in notes:
+            accused = note.get("suspect")
+            if note["pid"] != target or accused is None:
+                continue
+            reason = note.get("reason", "")
+            visible = public_evidence_at(knowledge, note["round"])
+            prior = [n for n in notes if n["pid"] == accused and n["round"] <= note["round"]]
+            for key, cid in note["leads"].items():
+                if not reason or f'«{CARDS[cid]["name"]}»' not in reason:
+                    continue
+                if not any(n["leads"].get(key) == cid for n in prior):
+                    continue
+                i = int(key)
+                if max(evidence_score(visible, c, i) for c in visible["board"][i]) - evidence_score(visible, cid, i) > 0.55:
+                    result.append(dict(round=note["round"], text=f'Обвиняет {self.name(accused)} за «{CARDS[cid]["name"]}», хотя сам поддерживает эту версию.'))
+        return result
+
     def suspicion(self, pid, target):
         return sum(self.suspicion_factors(pid, target).values())
 
@@ -1118,6 +1158,7 @@ class Game:
             factors["constructive_revision"] = 0.0
             factors["supported_leads"] = 0.0
             factors["response"] = 0.0
+            factors["contradiction"] = min(0.48, 0.24 * len(self.public_contradictions(knowledge, target)))
         claims = sorted((note for note in knowledge["notes"] if note["pid"] == target), key=lambda n: n["round"])
         previous = {}
         if adaptive:
@@ -1141,10 +1182,11 @@ class Game:
                     stance = note.get("stance", 1)
                     weight = (0.25, 0.65, 1.0)[stance] if stance in (0, 1, 2) else 0.65
                     if conflict > 0:
-                        factors["evidence_conflict"] += 0.14 * conflict * weight
+                        age = 0.78 ** max(0, knowledge["round"] - note["round"])
+                        factors["evidence_conflict"] += 0.14 * conflict * weight * age
                         repeated[(key, cid)] += 1
                         if repeated[(key, cid)] > 1:
-                            factors["persistence"] += 0.24 * conflict * weight
+                            factors["persistence"] += 0.24 * conflict * weight * age
                     elif confidence > 0.35 and gap < 0.12 and key not in supported:
                         supported.add(key)
                         factors["supported_leads"] -= 0.09 * weight
@@ -1351,6 +1393,9 @@ class Game:
         # A public explanation, not an exposure of private receipts or bot scores.
         knowledge = self.player_knowledge(observer)
         prior = [n for n in knowledge["notes"] if n["pid"] == target]
+        contradictions = self.public_contradictions(knowledge, target)
+        if contradictions:
+            return contradictions[-1]["text"]
         for n in reversed(prior):
             if n["claim"] is not None and any(m["pid"] != target and m["round"] == n["round"] and
                                                m["claim"] == n["claim"] for m in knowledge["notes"]):
@@ -1369,6 +1414,7 @@ class Game:
         notes = sorted(unique.values(), key=lambda n: n["round"])
         latest = {n["pid"]: n for n in notes}
         people = []
+        knowledge = self.player_knowledge(0)
         for pid in range(1, len(self.d["players"])):
             own = [n for n in notes if n["pid"] == pid]
             incoming = []
@@ -1386,13 +1432,55 @@ class Game:
                     suspect=self.name(n["suspect"]) if n and n.get("suspect") is not None else None,
                     reason=(n.get("reason") or "Причина отдельно не указана.") if n and n.get("suspect") is not None else "",
                     speech=n.get("speech", "") if n else ""))
+            # Public arguments only, based on evidence available at each statement.
+            arguments_for, arguments_against = [], []
+            last_leads = {}
+            conflicts = Counter()
+            supported = set()
+            for n in own:
+                visible = public_evidence_at(knowledge, n["round"])
+                for key, cid in self.note_leads(n).items():
+                    i = int(key)
+                    scores = {c: evidence_score(visible, c, i) for c in visible["board"][i]}
+                    if cid not in scores:
+                        continue
+                    gap = max(scores.values()) - scores[cid]
+                    previous = last_leads.get(key)
+                    ranking = sorted(scores.values(), reverse=True)
+                    if gap < 0.12 and ranking[0] - ranking[1] > 0.35 and (key, cid) not in supported:
+                        supported.add((key, cid))
+                        arguments_for.append(dict(round=n["round"], text=f'Поддерживает версию «{CARDS[cid]["name"]}», согласующуюся с открытыми письмами.'))
+                    if previous is not None and previous in scores and previous != cid and scores[cid] > scores[previous] + 0.18:
+                        arguments_for.append(dict(round=n["round"], text=f'Пересмотрел версию в пользу «{CARDS[cid]["name"]}» после писем.'))
+                    if n.get("stance", 1) != 0 and gap > 0.55:
+                        conflicts[(key, cid)] += 1
+                        if conflicts[(key, cid)] >= 2:
+                            arguments_against.append(dict(round=n["round"], text=f'Повторно поддерживает «{CARDS[cid]["name"]}», несмотря на письма.'))
+                    last_leads[key] = cid
+            arguments_against.extend(self.public_contradictions(knowledge, pid))
             people.append(dict(pid=pid, name=self.name(pid), count=len(incoming), incoming=incoming,
+                arguments_for=arguments_for[-5:], arguments_against=arguments_against[-5:],
                 outgoing=self.name(target) if target is not None else None, outgoing_round=current.get("round"),
                 rounds=rounds, opinions=[dict(round=n["round"], **self.notes_view([n], n["round"])[0]) for n in own]))
         owner = self.notebook_owner()
         me = next((p for p in people if p["pid"] == owner), None)
         response = self.d.get("defenses", {}).get(str(self.d["round"]), {}).get(str(owner))
-        return dict(people=people, me=me, response=DEFENSES[response] if response in range(len(DEFENSES)) else None,
+        previous = {n["pid"]: n for n in notes if n["round"] < self.d["round"]}
+        changes = []
+        for pid, n in latest.items():
+            if n["round"] != self.d["round"]:
+                continue
+            old = previous.get(pid, {}).get("suspect")
+            new = n.get("suspect")
+            if old != new:
+                if new is None:
+                    text = f"{self.name(pid)} снял подозрение с {self.name(old)}."
+                elif old is None:
+                    text = f"{self.name(pid)} подозревает {self.name(new)}."
+                else:
+                    text = f"{self.name(pid)}: {self.name(old)} → {self.name(new)}."
+                changes.append(dict(pid=pid, text=text))
+        return dict(people=people, me=me, changes=changes, response=DEFENSES[response] if response in range(len(DEFENSES)) else None,
                     can_respond=self.phase == "discussion" and len(self.d["local"]) == 1 and me is not None and
                         any(x["round"] == self.d["round"] for x in me["incoming"]) and response is None,
                     responses=[dict(value=i, label=label) for i,label in enumerate(DEFENSES)],
@@ -1439,6 +1527,11 @@ class Game:
         if pid is not None and pid in self.d["local"] and self.d["players"][pid]["role"] != "ghost":
             return pid
         return None
+
+    def detective_hand_view(self):
+        """Only the current local non-ghost player, or the sole local player on public turns."""
+        pid = self.notebook_owner()
+        return [card_view(cid) for cid in self.d["players"][pid]["hand"]] if pid is not None else []
 
     def notebook_view(self):
         pid = self.notebook_owner()
@@ -1889,7 +1982,7 @@ class Game:
                     action=action, mode=MODES[self.d["mode"]], round=self.d["round"],
                     rounds=self.d["rounds"], marked=self.marked, cooperative=self.cooperative,
                     flow=self.flow_view(), local_count=len(self.d["local"]), difficulty=self.d.get("difficulty", "normal"), actor=actor, groups=self.groups(), board=board,
-                    notebook=self.notebook_view(), history=self.history_view(), investigation=self.investigation_view(),
+                    notebook=self.notebook_view(), detective_hand=self.detective_hand_view(), discard_count=len(self.d["discard"]), history=self.history_view(), investigation=self.investigation_view(),
                     roster=roster, letters=letters, notes=notes, speaker=speaker, statement=statement,
                     tallies=self.d["counts"] if phase in ("appeal", "arrest", "result") else [],
                     outcome=self.outcome() if result else [],

@@ -619,13 +619,99 @@ class GhostLettersRules(unittest.TestCase):
         self.assertLess(revised["constructive_revision"], 0)
         self.assertLess(sum(revised.values()), sum(persistent.values()))
 
+    def test_ghost_test_does_not_erase_prior_public_version(self):
+        g = Game.new("classic", 6, 1, False, difficulty="normal", seed=42)
+        owner = g.d["local"][0]
+        wrong, tested = g.d["board"][0][:2]
+        g.d["round"] = 3
+        g.d["history"] = [
+            dict(pid=owner, round=1, leads={"0": wrong}, suspect=None, claim=None, tests=[]),
+            dict(pid=owner, round=2, leads={}, suspect=None, claim=None, tests=[tested])]
+        self.assertEqual(g.ghost_context()["human"][0][0]["card"], wrong)
+
+    def test_public_self_contradiction_and_dossier(self):
+        from unittest.mock import patch
+        g = Game.new("classic", 6, 1, False, difficulty="normal", seed=42)
+        a, b = 1, 2
+        good, bad = g.d["board"][0][:2]
+        g.d["round"] = 2
+        g.d["history"] = [
+            dict(pid=b, round=1, leads={"0": bad}, suspect=None, claim=None, tests=[]),
+            dict(pid=a, round=2, leads={"0": bad}, suspect=b, claim=None, tests=[],
+                 reason=f'Версия «{mod.CARDS[bad]["name"]}» расходилась с письмами.')]
+        g.set_phase("discussion")
+        with patch.object(mod, "evidence_score", side_effect=lambda k,c,i: float(c == good)):
+            knowledge = g.player_knowledge(0)
+            self.assertEqual(len(g.public_contradictions(knowledge, a)), 1)
+            dossier = next(p for p in g.investigation_view()["people"] if p["pid"] == a)
+            self.assertEqual(len(dossier["arguments_against"]), 1)
+            g.d["truth"] = [row[-1] for row in g.d["board"]]
+            self.assertEqual(dossier, next(p for p in g.investigation_view()["people"] if p["pid"] == a))
+
     def test_investigation_ui_available_in_both_owl_entries(self):
         for path in (ROOT / "local/phone-widgets/ghost-letters.owl",
                      ROOT / "apps/xonars/ghost-letters/app.owl"):
             source = path.read_text()
             for text in ("component Investigation(data)", "Матрица публичных подозрений",
-                         'key: "suspects"', 'notebookTab', 'defend ${sh(token)}'):
+                         'key: "people"', 'notebookTab', 'defend ${sh(token)}'):
                 self.assertIn(text, source)
+
+    def test_mobile_board_has_round_letters_panel(self):
+        for path in (ROOT / "local/phone-widgets/ghost-letters.owl",
+                     ROOT / "apps/xonars/ghost-letters/app.owl"):
+            source = path.read_text()
+            self.assertIn("component LettersPanel(letters)", source)
+            self.assertIn("Первая зацепка", source)
+            self.assertIn("LettersPanel { letters: sheet.letters }", source)
+            self.assertIn("columns: verticalCategories ? 3 : 1", source)
+
+    def test_detective_hand_respects_local_turn_privacy(self):
+        g = Game.new("classic", 6, 1, False, seed=42)
+        pid = g.d["local"][0]
+        g.d["round"] = 1
+        g.refill(pid)
+        g.set_phase("discussion")
+        self.assertEqual([c["value"] for c in g.detective_hand_view()], g.d["players"][pid]["hand"])
+        g.set_phase("role", [pid])
+        self.assertEqual(g.detective_hand_view(), [])
+        multi = Game.new("classic", 6, 2, False, seed=42)
+        multi.d["round"] = 1
+        a, b = multi.d["local"]
+        multi.refill(a)
+        multi.refill(b)
+        multi.set_phase("discussion")
+        self.assertEqual(multi.detective_hand_view(), [])
+        multi.set_phase("mail", [a])
+        self.assertEqual([c["value"] for c in multi.detective_hand_view()], multi.d["players"][a]["hand"])
+        multi.set_phase("mail", [b])
+        self.assertEqual([c["value"] for c in multi.detective_hand_view()], multi.d["players"][b]["hand"])
+
+    def test_unified_table_components(self):
+        for path in (ROOT / "local/phone-widgets/ghost-letters.owl",
+                     ROOT / "apps/xonars/ghost-letters/app.owl"):
+            source = path.read_text()
+            self.assertIn("component DetectiveHand(hand, editable = false)", source)
+            self.assertIn("component DiscardPile(hand, count = 0, editable = false)", source)
+            self.assertIn('notebookTab == "people" && game.investigation != null', source)
+            self.assertNotIn('key: "", label: "Стол"', source)
+            self.assertNotIn('key: "letters", label: "Письма"', source)
+            self.assertIn('component NotebookJournal(rounds, letters)', source)
+            self.assertIn('notebookTab == "history"', source)
+            self.assertIn('key: "history", label: "Журнал"', source)
+            self.assertIn('text: "Блокнот";', source)
+
+    def test_notebook_autosave_and_contextual_turn_actions(self):
+        for path in (ROOT / "local/phone-widgets/ghost-letters.owl",
+                     ROOT / "apps/xonars/ghost-letters/app.owl"):
+            source = path.read_text()
+            self.assertIn("on notebookRequest {", source)
+            self.assertIn("on notebookReceipt {", source)
+            self.assertIn("notebookPersisted = notebookPending", source)
+            self.assertNotIn("Сохранить и закрыть", source)
+            self.assertIn("component ReplyEditor(groups)", source)
+            self.assertIn('detectiveHandOpen = phase == "mail" || phase == "intro"', source)
+            self.assertIn("if editable { TurnAction {} }", source)
+            self.assertIn('if phase != "note" && (phase != "mail" || showDesk) { TurnAction {} }', source)
 
     def test_package_matches_source(self):
         row = next(x for x in json.loads((ROOT / "store-collection.json").read_text()) if x["source"] == "ghost-letters.owl")
