@@ -34,3 +34,19 @@ class FeaturesTest(unittest.TestCase):
                 packed = json.loads(z.read("widgets/oma-another-features/catalog.json"))
             self.assertEqual([f["id"] for f in catalog["features"]], [f["id"] for f in packed["features"]])
             self.assertEqual(len(catalog["features"]), len(packed["features"]))
+
+    def test_cover_inputs_and_gallery_sources(self):
+        features = {f["id"]: f for f in json.loads((LOCAL / "catalog.json").read_text())["features"]}
+        for name, count in {"workspace-appearance": 3, "waybar": 2, "control-center": 1,
+                            "palette": 1, "visualizer": 1, "desktop-profiles": 3}.items():
+            shots = features[name]["screenshots"]
+            self.assertGreaterEqual(len(shots), count)
+            for shot in shots:
+                self.assertTrue((LOCAL / "screenshots" / Path(shot["thumb"]).name).is_file())
+        self.assertTrue(features["waybar"]["screenshots"][1]["src"].endswith("waybar-panel.webp"))
+        for path in (APP, ROOT / "apps/xonars/oma-another-features/app.owl"):
+            source = path.read_text()
+            self.assertIn("component CoverCrop", source)
+            self.assertIn("height: galleryHeight", source)
+            self.assertIn("Image { src: shot.src; fill: true; fit: contain", source)
+            self.assertIn("Image { src: shot.src; weight: 1; fill: width; fit: contain", source)

@@ -51,7 +51,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/180b
 """
   let storeInstall = "python -c ${sh(storeBootstrap)}"
 
-  meta { owl: 11; version: "2.2.1"; description: "Витрина возможностей OMA Another: обзор, новые функции, инструкции · ресурсы при первом запуске"; category: "productivity" ; license: "MIT" }
+  meta { owl: 11; version: "2.3.1"; description: "Витрина возможностей OMA Another: обзор, новые функции, инструкции · ресурсы при первом запуске"; category: "productivity" ; license: "MIT" }
   requires { pacman: ["python"] }
   icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect x=".5" y=".5" width="47" height="47" rx="9" fill="#19191d"/><rect x=".5" y=".5" width="47" height="47" rx="9" fill="currentColor" fill-opacity=".30" stroke="currentColor" stroke-opacity=".78"/><defs><g id="symbol"><rect x="6" y="6" width="36" height="13" rx="3"/><rect x="6" y="26" width="14" height="16" rx="3"/><rect x="27" y="26" width="15" height="16" rx="3"/></g></defs><g transform="translate(3.39 3.39) scale(0.859)" fill="none" stroke="#faf8f3" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.91"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g><g transform="translate(3.39 3.39) scale(0.859)" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.91" opacity=".16"><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#symbol"/></g></svg>"""
 
@@ -77,6 +77,13 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/180b
   let current = items.find(f => f.id == selected)
   let shots = current.screenshots ?? []
   let shot = shots[shotIndex]
+  let overviewColumns = large ? 4 : (wide ? 3 : 2)
+  let contentWidth = max(120, (screenWidth ?? 360) - 24 - (wide ? (large ? 230 : 174) : 0))
+  let cardWidth = max(90, (contentWidth - 7 * (overviewColumns - 1)) / overviewColumns)
+  let coverHeight = clamp((cardWidth - 18) * 0.58, 90, 230)
+  let galleryWidth = max(80, ((screenWidth ?? 360) - (wide ? 36 : 24)) / (wide ? 2 : 1))
+  let shotRatio = endsWith(shot.src ?? "", "waybar-panel.webp") ? 1920/46 : (contains(shot.src ?? "", "/desktop-") ? 1.6 : (endsWith(shot.src ?? "", "media-landscape.webp") ? 1536/691 : 691/1536))
+  let galleryHeight = max(30, min(galleryWidth / shotRatio, wide ? max(70, (screenHeight ?? 300) - 95) : max(110, (screenHeight ?? 600) * 0.76)))
   let found = items.filter(f => (section != "Новое" || f.recent == true) && (section != "Избранное" || contains(saved, f.id)) && (category == "Все" || f.category == category) && contains(lower(f.title + " " + f.shortTitle + " " + f.summary + " " + f.details + " " + f.howTo + " " + f.limitations + " " + f.category), lower(trim(query))))
   let featured = ["desktop-profiles","workspace-appearance","control-center","palette","waybar","visualizer","tiled-workspaces","android-tiles"].map(id => items.find(f => f.id == id)).filter(f => f != null)
   component Heading(label) {
@@ -242,14 +249,71 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/180b
       Text { text: f.change == "new" ? "Новое" : "Обновлено"; font: sans; fontSize: 10; color: accent; bold: true }
     }
   }
-  component FeatureCard(f) {
-    Column { fill: width; height: 165; radius: 10; padding: 9; gap: 4; background: surface; onTap: { selected = f.id; expanded = false; shotIndex = 0; fullShot = false }
-      Box { fill: width; height: 78; align: center; clip: true; radius: 7; background: alpha(accent, 0.10)
-        if len(f.screenshots ?? []) > 0 {
-          Image { src: f.screenshots[0].thumb ?? f.screenshots[0].src; fill: true; fit: contain }
-        } else {
-          FeatureIcon { name: f.id; side: 42 }
+  // Crop existing local screenshots at draw time; full-resolution gallery files remain untouched.
+  // Coordinates are fractions of the original image; preserve its aspect ratio.
+  component CoverCrop(src, ratio, cropX = 0, cropY = 0, cropW = 1, cropH = 1, contained = false) {
+    Canvas { fill: true
+      let factor = contained ? min(width / (ratio * cropW), height / cropH) : max(width / (ratio * cropW), height / cropH)
+      let regionW = ratio * cropW * factor
+      let regionH = cropH * factor
+      let regionX = (width - regionW) / 2
+      let regionY = (height - regionH) / 2
+      clip(max(0, regionX), max(0, regionY), min(width, regionW), min(height, regionH)) {
+        image(src, regionX - ratio * cropX * factor, regionY - cropY * factor, ratio * factor, factor)
+      }
+    }
+  }
+  component FeatureCover(f) {
+    Box { fill: true; align: center
+      if f.id == "workspace-appearance" && len(f.screenshots ?? []) >= 3 {
+        Row { fill: true; gap: 3; align: center; padding: [3, 3]
+          for img in f.screenshots.take(3) {
+            Box { weight: 1; fill: height; radius: 4; clip: true
+              Image { src: img.thumb ?? img.src; fill: true; fit: cover }
+            }
+          }
         }
+      } else {
+        if f.id == "waybar" && len(f.screenshots ?? []) >= 2 {
+          Column { fill: true; gap: 4; padding: 5
+            for segment in [0.42, 0.61, 0.80] {
+              Box { weight: 1; fill: width; radius: 3; clip: true; background: alpha(accent, 0.13)
+                CoverCrop { src: f.screenshots[1].src; ratio: 1920/46; cropX: segment; cropW: 0.19; contained: true }
+              }
+            }
+          }
+        } else {
+          if len(f.screenshots ?? []) > 0 {
+            if f.id == "control-center" {
+              CoverCrop { src: f.screenshots[0].src; ratio: 691/1536; cropX: 0.065; cropY: 0.09; cropW: 0.87; cropH: 0.34 }
+            } else {
+              if f.id == "palette" {
+                CoverCrop { src: f.screenshots[0].src; ratio: 691/1536; cropX: 0.04; cropY: 0.26; cropW: 0.92; cropH: 0.36 }
+              } else {
+                if f.id == "visualizer" {
+                  CoverCrop { src: f.screenshots[0].src; ratio: 1536/691; cropX: 0.022; cropY: 0.13; cropW: 0.31; cropH: 0.41 }
+                } else {
+                  Image { src: f.screenshots[0].thumb ?? f.screenshots[0].src; fill: true; fit: cover }
+                }
+              }
+            }
+          } else { FeatureIcon { name: f.id; side: min(64, coverHeight * 0.50) } }
+        }
+      }
+    }
+  }
+  component GalleryArrow(forward) {
+    Canvas { size: 22
+      let middle = width/2
+      let half = width*0.15
+      let direction = forward ? 1 : -1
+      path([[middle-direction*half,height*0.25],[middle+direction*half,height*0.50],[middle-direction*half,height*0.75]],stroke:accent,width:1.8,cap:round)
+    }
+  }
+  component FeatureCard(f) {
+    Column { fill: width; height: coverHeight + 83; radius: 10; padding: 9; gap: 4; background: surface; onTap: { selected = f.id; expanded = false; shotIndex = 0; fullShot = false }
+      Box { fill: width; height: coverHeight; align: center; clip: true; radius: 7; background: alpha(accent, 0.10)
+        FeatureCover { f: f }
       }
       Box { fill: width; height: 34; align: topStart
         Text { text: f.shortTitle ?? f.title; font: sans; fontSize: 14; bold: true; maxLines: 2; fill: width }
@@ -284,7 +348,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/180b
         }
       }
       Heading { label: "ГЛАВНЫЕ ВОЗМОЖНОСТИ" }
-      Grid { columns: large ? 4 : (wide ? 3 : 2); gap: 7
+      Grid { columns: overviewColumns; gap: 7
         for f in featured key f.id { FeatureCard { f: f } }
       }
       if !wide {
@@ -342,19 +406,19 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/180b
   }
   component Gallery() {
     Column { fill: width; gap: 7
-      Box { fill: width; height: wide ? max(110, min(360, (screenHeight ?? 300)-75)) : 250; align: center; radius: 10; clip: true; background: alpha(accent, 0.10); onTap: fullShot = true
+      Box { fill: width; height: galleryHeight; align: center; radius: 10; clip: true; background: alpha(accent, 0.10); onTap: fullShot = true
         Image { src: shot.src; fill: true; fit: contain; label: shot.caption }
       }
       Row { fill: width; align: center; gap: 6
         if len(shots) > 1 {
           Box { size: 36; align: center; radius: 8; background: surface; onTap: shotIndex = (shotIndex + len(shots) - 1) % len(shots)
-            Text { text: "‹"; fontSize: 22; color: accent }
+            GalleryArrow { forward: false }
           }
         }
         Text { text: "${shotIndex+1} / ${len(shots)} · Открыть"; font: sans; fontSize: 12; color: accent; weight: 1; align: center; onTap: fullShot = true }
         if len(shots) > 1 {
           Box { size: 36; align: center; radius: 8; background: surface; onTap: shotIndex = (shotIndex + 1) % len(shots)
-            Text { text: "›"; fontSize: 22; color: accent }
+            GalleryArrow { forward: true }
           }
         }
       }
