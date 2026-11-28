@@ -24,8 +24,8 @@ import uuid
 HERE = Path(__file__).resolve().parent
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "ghost-letters"
 ANALYTICS_SCHEMA = 1
-GAME_VERSION = "3.5.0"
-BOT_VERSION = "5.2.0"
+GAME_VERSION = "3.6.0"
+BOT_VERSION = "6.0.0"
 CATEGORIES = ("Мотив", "Место", "Способ")
 STANCES = ("Пока не уверен", "Предварительная версия", "Уверенная версия")
 DEFENSES = ("Я проверял гипотезу", "Я пересмотрел версию", "Я сохраняю свою версию")
@@ -291,6 +291,7 @@ def belief_scores(knowledge, category, purpose, noise):
 class Game:
     def __init__(self, data):
         self.d = data
+        self.d.setdefault("turn_order", list(range(1, len(data["players"]))))
 
     def enable_analytics(self, partial=False):
         if "analytics" not in self.d:
@@ -360,7 +361,10 @@ class Game:
                         break
             board.append(row)
         rounds = 5 if total <= 4 else 4 if total <= 7 else 3 if total <= 10 else 2
+        turn_order = list(range(1, total))
+        random.Random(repr((seed, "table order"))).shuffle(turn_order)
         return cls(dict(
+            turn_order=turn_order, exchanges={},
             id=uuid.uuid4().hex, rev=0, seed=seed, mode=mode, phase="role", queue=local[:],
             players=players, local=local, board=board, deck=deck, discard=[], truth=[],
             schema=5, marked=marked, difficulty=difficulty, sequential=True, exposed_role=None, winners=[], notebooks={},
@@ -498,10 +502,8 @@ class Game:
         self.d["round"] += 1
         self.d["mail"] = []
         self.d["notes"] = []
-        local = [pid for pid in self.d["local"] if pid != 0]
-        offset = (self.d["round"] - 1) % len(local) if local else 0
         self.set_phase("intro")
-        self.d["writers"] = local[offset:] + local[:offset]
+        self.d["writers"] = [pid for pid in self.d["turn_order"] if pid not in self.d["excluded"]]
         self.d["first_sender"] = None
 
     def advance(self):
@@ -517,12 +519,12 @@ class Game:
                                    for i, row in enumerate(self.d["board"])]
                 self.move_to_opening()
         elif self.phase == "intro":
-            self.set_phase("mail", self.d["writers"])
-            if not self.actor:
-                self.collect_bot_mail()
+            self.set_phase("mail", [pid for pid in self.d["turn_order"]
+                                    if pid in self.d["local"] and pid not in self.d["excluded"]])
+            self.collect_bot_mail()
         elif self.phase == "reveal":
             # Use the same visible seat order every round, without the ghost.
-            self.d["speakers"] = [pid for pid in range(1, len(self.d["players"]))
+            self.d["speakers"] = [pid for pid in self.d["turn_order"]
                                   if pid not in self.d["excluded"]]
             self.next_speaker()
         elif self.phase == "statement":
@@ -916,9 +918,13 @@ class Game:
         self.refill(pid)
 
     def collect_bot_mail(self):
-        for pid, p in enumerate(self.d["players"]):
-            if pid == 0 or p["local"]:
+        receipts = self.d.setdefault("mail_log", {}).setdefault(str(self.d["round"]), {})
+        for pid in self.d["turn_order"]:
+            if pid in self.d["excluded"] or str(pid) in receipts:
                 continue
+            p = self.d["players"][pid]
+            if p["local"]:
+                return
             knowledge = self.player_knowledge(pid)
             profile = PROFILES[knowledge["profile"]]
             hostile = knowledge["role"] in ("killer", "accomplice")
@@ -971,7 +977,7 @@ class Game:
             if adaptive and not hostile:
                 # Shared public priorities plus rotation; no access to other private plans.
                 ordered = sorted(range(len(CATEGORIES)), key=lambda i: (-uncertainty[i], i))
-                slot = (pid + knowledge["round"]) % len(CATEGORIES)
+                slot = (self.d["turn_order"].index(pid) + knowledge["round"]) % len(CATEGORIES)
                 focus = ordered[slot]
                 if uncertainty[focus] < 0.55 * uncertainty[ordered[0]]:
                     focus = ordered[0]
@@ -989,7 +995,8 @@ class Game:
                     i = knowledge["board"].index(row)
                     if not hostile:
                         score *= 0.12 + 1.35 * uncertainty[i]
-                        score += 0.85 * (i == focus) * uncertainty[i]
+                        score += 1.55 * (i == focus) * uncertainty[i]
+                        score -= 0.30 * (i != focus) * uncertainty[i]
                         score -= 0.65 * (max(uncertainty) - uncertainty[i])
                         score -= min(1.15, 0.45 * attempted[target])
                         score += 0.35 * max(-1.0, rankings[i][target] - max(rankings[i].values()))
@@ -1274,7 +1281,7 @@ class Game:
             ids = [pid for pid in range(1, len(self.d["players"])) if pid not in self.d["excluded"]]
         else:
             ids = self.d["board"][int(key)]
-        if self.d["pass_no"] and not self.d.get("sequential"):
+        if self.d["pass_no"]:
             leaders = self.d["leaders"][key]
             ids = [cid for cid in ids if cid in leaders]
         return ids
@@ -2095,8 +2102,7 @@ class Game:
                           for n in self.last_round_claims(pid) if n["pid"] == picks.get("check")), None)
             self.post(pid, cid, discard, check, second, planned=[] if intent is None else [intent])
             self.d["queue"].pop(0)
-            if self.actor is None:
-                self.collect_bot_mail()
+            self.collect_bot_mail()
         elif phase == "sort":
             echo, silence = picks.get("echo"), picks.get("silence")
             if echo is not None and echo == silence:
@@ -2219,7 +2225,7 @@ class Game:
         phase = self.phase
         stage = {"intro":0,"mail":0,"sort":1,"reveal":1,"note":2,"statement":2,"discussion":3}.get(phase,-1)
         letter = next((x for x in self.d["letters"] if x["round"] == self.d["round"]), None)
-        participants = [pid for pid in range(1, len(self.d["players"])) if pid not in self.d["excluded"]]
+        participants = [pid for pid in self.d["turn_order"] if pid not in self.d["excluded"]]
         spoken = list(dict.fromkeys(n["pid"] for n in self.d["notes"] if n["round"] == self.d["round"] and n["pid"] in participants))
         remaining = self.d.get("speakers", []) if phase in ("note", "statement") else []
         result = dict(stage=stage, opened=len(self.letter_cards(letter)) if letter else 0,
@@ -2227,7 +2233,8 @@ class Game:
                       received=(len(letter["echo"])+len(letter["silence"])+letter["missing"]) if letter else None,
                       spoken=len(spoken) if phase in ("note","statement","discussion") else 0,
                       speakers=len(participants), discussion_order=spoken + [pid for pid in remaining if pid not in spoken],
-                      current_speaker=self.actor if phase == "note" else self.d.get("speaker") if phase == "statement" else None)
+                      current_speaker=self.actor if phase == "note" else self.d.get("speaker") if phase == "statement" else None,
+                      turn_order=participants)
         if phase == "discussion":
             latest = {}
             for note in self.d["history"] + self.d["notes"]:
@@ -2267,7 +2274,7 @@ class Game:
             action = "К итогам обсуждения"
         if phase == "ballot" and self.d["pass_no"]:
             title = "Повторное голосование"
-            brief = "При повторной ничьей решение не принято." if self.d.get("sequential") else "Голосование среди лидеров. При повторной ничьей категория останется без ответа."
+            brief = "Голосование только среди лидеров. При повторной ничьей решение не принято."
         if phase == "arrest":
             brief = f'{self.name(self.d["excluded"][-1])} — сообщник. Он выбывает из голосования за повторный арест.'
         if phase == "counter":
@@ -2287,7 +2294,7 @@ class Game:
                        personality=PROFILE_NAMES[self.bot_profile(i)] if phase == "result" and i and p["local"] is None else "",
                        won=(i in self.d["winners"]) if phase == "result" and "winners" in self.d else None,
                        suspicions=suspicions[i] if i else None)
-                  for i, p in enumerate(self.d["players"])]
+                  for i in [0] + self.d["turn_order"] for p in [self.d["players"][i]]]
         letters = [dict(round=entry["round"], missing=entry["missing"], cards=self.letter_cards(entry))
                    for entry in reversed(self.d["letters"])]
         board = self.board_view() if phase != "role" else []
@@ -2506,7 +2513,7 @@ def public_view(game):
         view["success"] = detectives
         view["personal_results"] = [dict(name=game.name(pid), role=ROLES[game.d["players"][pid]["role"]][0],
                                          won=pid in game.d["winners"]) for pid in game.d["local"]]
-        view["brief"] = ("Дело раскрыто." if detectives else
+        view["brief"] = (("Дело раскрыто." if game.cooperative else "Дело раскрыто. " + ("Убийца установлен." if game.d["arrested"] == game.role_id("killer") else "Убийца не установлен.")) if detectives else
                          "Дело раскрыто, но убийца вычислил особую роль." if game.d["solved"]
                          else "Стол не собрал достаточно верных ответов.")
     return view

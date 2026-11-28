@@ -51,7 +51,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b56c
 """
   let storeInstall = "python -c ${sh(storeBootstrap)}"
 
-  meta { owl: 18; description: "Карточное расследование с тайной перепиской · ресурсы при первом запуске"; version: "3.5.0"; category: "games" ; license: "MIT" }
+  meta { owl: 18; description: "Карточное расследование с тайной перепиской · ресурсы при первом запуске"; version: "3.6.0"; category: "games" ; license: "MIT" }
   title: "Письма призрака"
   icon: appIcon
   requires { pacman: ["python"] }
@@ -1999,7 +1999,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b56c
                 Action { label: item.label; hot: false }
               }
             }
-            Text { text: "3.5.0 · Социальная дедукция"; color: dim; font: sans; fontSize: 11; align: center }
+            Text { text: "3.6.0 · Социальная дедукция"; color: dim; font: sans; fontSize: 11; align: center }
           }
         } else if setup {
           Column {
@@ -2180,8 +2180,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b56c
                   LiveStatement { player: sheet.speaker; opinion: sheet.statement; progress: "${sheet.flow.spoken} / ${sheet.flow.speakers}" }
                 }
                 if sheet.phase == "reveal" {
-                  RuleLabel { heading: "✉ ПРИЗРАК ОТВЕТИЛ" }
-                  Copy { body: "Изучи новое письмо, затем начинай обсуждение." }
+                  SceneTitle { heading: "Ход Призрака"; description: "Изучи открытые письма, затем начинай обсуждение." }
                 }
                 if !showDesk && len(sheet.board ?? []) > 0 && sheet.phase != "result" && sheet.phase != "role" {
                   if sheet.phase != "board" { LettersPanel { letters: sheet.letters } }
@@ -2211,7 +2210,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b56c
                       }
                     }
                   }
-                } else if phase != "board" && phase != "mail" && phase != "note" && phase != "statement" {
+                } else if phase != "board" && phase != "mail" && phase != "note" && phase != "statement" && phase != "reveal" {
                   SceneTitle { heading: ballot ? "Обвинительное заключение" : (sheet.phase == "discussion" ? "Версии за столом" : sheet.title); description: ballot || sheet.phase == "discussion" ? "" : sheet.brief }
                 }
                 if privateTurn && sheet.phase != "role" && (sheet.phase != "mail" && sheet.phase != "note" || len(sheet.actor.knowledge ?? []) > 0 || len(sheet.actor.recheck ?? []) > 0) {

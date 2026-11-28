@@ -982,18 +982,46 @@ class GhostLettersRules(unittest.TestCase):
                 g.d["notes"] = []
                 g.set_phase("reveal")
                 g.advance()
-                for pid in range(1, 7):
+                order = g.d["turn_order"]
+                for position, pid in enumerate(order, 1):
                     self.assertEqual(g.phase, "statement")
                     self.assertEqual(g.d["speaker"], pid)
                     self.assertEqual(g.flow_view()["current_speaker"], pid)
-                    self.assertEqual(g.flow_view()["discussion_order"], list(range(1,7)))
-                    self.assertEqual(g.flow_view()["spoken"], pid)
+                    self.assertEqual(g.flow_view()["discussion_order"], order)
+                    self.assertEqual(g.flow_view()["spoken"], position)
                     accused = g.d["notes"][-1]["suspect"]
                     if number == 1 and accused is not None:
-                        self.assertLess(accused, pid)
+                        self.assertIn(accused, order[:position-1])
                     g.advance()
                 self.assertEqual(g.phase, "discussion")
                 self.assertEqual(g.flow_view()["spoken"], 6)
+
+    def test_v6_order_is_seeded_and_persistent(self):
+        orders = set()
+        for seed in range(20):
+            g = Game.new("classic", 6, 1, False, seed=seed)
+            order = g.d["turn_order"][:]
+            orders.add(tuple(order))
+            self.assertEqual(sorted(order), list(range(1,6)))
+            self.assertEqual([p["value"] for p in g.view()["roster"]], [0] + order)
+            self.assertEqual(Game(json.loads(json.dumps(g.d))).d["turn_order"], order)
+            for _ in range(2):
+                g.start_round()
+                self.assertEqual(g.d["writers"], order)
+        self.assertGreater(len(orders), 1)
+
+    def test_v6_retry_only_tied_candidates(self):
+        g = Game.new("classic", 6, 1, False, seed=42)
+        g.d["leaders"] = {"suspect": [2, 4]}
+        g.d["pass_no"] = 1
+        self.assertEqual(g.candidates("suspect"), [2, 4])
+
+    def test_v6_reveal_heading_above_table(self):
+        for path in (ROOT / "local/phone-widgets/ghost-letters.owl", ROOT / "apps/xonars/ghost-letters/app.owl"):
+            source = path.read_text()
+            start = source.index('SceneTitle { heading: "Ход Призрака"')
+            self.assertLess(start, source.index('Table { rows: sheet.board; interactive: true }', start))
+            self.assertIn('phase != "statement" && phase != "reveal"', source)
 
     def test_v52_unsaid_and_empty_statements_are_not_accusation_targets(self):
         g = Game.new("classic", 6, 1, False, seed=42)
