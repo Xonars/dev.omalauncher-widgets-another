@@ -24,8 +24,8 @@ import uuid
 HERE = Path(__file__).resolve().parent
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "ghost-letters"
 ANALYTICS_SCHEMA = 1
-GAME_VERSION = "3.2.0"
-BOT_VERSION = "4.0.0"
+GAME_VERSION = "3.3.0"
+BOT_VERSION = "5.0.0"
 CATEGORIES = ("Мотив", "Место", "Способ")
 STANCES = ("Пока не уверен", "Предварительная версия", "Уверенная версия")
 DEFENSES = ("Я проверял гипотезу", "Я пересмотрел версию", "Я сохраняю свою версию")
@@ -109,6 +109,12 @@ FUNCTIONAL_LINKS = {
     frozenset(("Кремль", "Стена")): (4.0, "кремлёвская стена"),
     frozenset(("Кремль", "Корона")): (3.5, "символы исторической власти"),
     frozenset(("Кремль", "Медаль")): (3.3, "государственные награды"),
+    frozenset(("Трамвай", "Поезд")): (3.7, "рельсовый транспорт"),
+    frozenset(("Глобус", "Парта")): (3.8, "школьный класс"),
+    frozenset(("Доска", "Парта")): (4.0, "школьный класс"),
+    frozenset(("Шарф", "Лёд")): (3.5, "холод и зимняя одежда"),
+    frozenset(("Монета", "Колокольчик")): (2.0, "звон металла"),
+    frozenset(("Поезд", "Ракета")): (2.8, "транспорт и движение"),
     frozenset(("Билет", "Поезд")): (4.0, "билет на поезд"),
     frozenset(("Билет", "Самолёт")): (4.0, "билет на самолёт"),
     frozenset(("Семафор", "Поезд")): (4.0, "сигнал железной дороги"),
@@ -145,7 +151,10 @@ MAX_TAG_FREQUENCY = max(TAG_FREQUENCY.values())
 def association_weight(tag, strength):
     # Keep the established 0–4 scale; ubiquitous tags are weak context.
     frequency = TAG_FREQUENCY[tag]
-    return strength * (1.0 - 0.18 * (frequency - 1) / max(1, MAX_TAG_FREQUENCY - 1))
+    weight = strength * (1.0 - 0.18 * (frequency - 1) / max(1, MAX_TAG_FREQUENCY - 1))
+    if tag in {"опасность", "мастерская", "контейнер", "длинная форма", "круглая форма", "металлический предмет"}:
+        weight *= 0.50
+    return weight
 
 
 @lru_cache(maxsize=None)
@@ -700,6 +709,15 @@ class Game:
                 strength, tag = association(cid, truth)
                 if margins[i] > 0.12 and tag not in broad and strength >= 2.5:
                     clarity = max(clarity, min(0.12, weights[i] * margins[i] * 0.20))
+        if not negative:
+            for i, truth in enumerate(self.d["truth"]):
+                alternatives = [n["card"] for n in context.get("human", [[] for _ in board])[i]
+                                if n["card"] != truth and n["round"] >= self.d["round"] - 1]
+                if alternatives:
+                    contrast = min(hint_signal(board, truth, i, cid) - hint_signal(board, rival, i, cid)
+                                   for rival in alternatives)
+                    if contrast > 0.25 and affinity(cid, truth) >= 2.5 and gains[i] > 0:
+                        gains[i] += min(0.30, contrast * 0.25)
         benefit = max(0.0, *gains) + 0.15 * sum(max(0, g) for g in gains)
         harm = -1.25 * sum(min(0, g) for g in gains) + risk
         # Confirmation and clarity are tie-breakers, never a reason to publish harm alone.
@@ -1070,9 +1088,11 @@ class Game:
         speech = self.bot_speech(knowledge, claim, tests, leads, receipt.get("check"), suspect=suspect)
         reason = self.public_reason(pid, suspect) if suspect is not None else ""
         if suspect is not None and not hostile and knowledge["difficulty"] != "easy" and reason.startswith("Предварительное подозрение"):
-            if knowledge["role"] == "witness" and self.noise("witness caution", pid) < 0.25:
+            previous = [n for n in knowledge["notes"] if n["pid"] == pid and n.get("suspect") == suspect]
+            if knowledge["role"] == "witness" and not any(n["round"] == knowledge["round"] - 1 for n in previous) and (
+                    final_round or self.noise("witness caution", pid, knowledge["round"]) < 0.60):
                 reason = "Хочу внимательнее проверить этого игрока; открытых доказательств пока нет."
-                speech += f" Пока предлагаю обратить внимание на игрока «{self.name(suspect)}»."
+                speech += f" Какие письма и проверки игрока «{self.name(suspect)}» мы можем сопоставить? Пока не утверждаю, что он виновен."
             else:
                 suspect, reason = None, ""
                 speech = self.bot_speech(knowledge, claim, tests, leads, receipt.get("check"), suspect=None)
@@ -1270,6 +1290,26 @@ class Game:
                     ". Требуется уточнение; пока неизвестно, кто ошибся."))
         return result
 
+    def public_impossible_claims(self, knowledge, target):
+        """Posted cards never return to the deck; use only public revealed letters."""
+        result = []
+        for note in knowledge["notes"]:
+            claim = note.get("claim")
+            if note["pid"] != target or claim is None:
+                continue
+            number = note["round"]
+            for letter in self.d["letters"]:
+                if letter["round"] > knowledge["round"]:
+                    continue
+                personal = [letter.get("seal"), *letter.get("extra", [])]
+                opened = [*letter.get("echo", []), *letter.get("silence", []), *personal]
+                if claim in opened and (letter["round"] != number or claim in personal):
+                    result.append(dict(round=number, text=
+                        f'Заявил «{CARDS[claim]["name"]}» как своё письмо в раунде {number}, '
+                        f'но карта открыта призраком в другом раунде или из его руки ({letter["round"]}).'))
+                    break
+        return result
+
     def public_pressure_events(self, knowledge, target):
         """Weak lead: repeated confident opposition to evidence, then adoption by another speaker.
         Do not mistake timing for proof of influence, or a private test for an endorsement.
@@ -1327,6 +1367,7 @@ class Game:
             factors["supported_leads"] = 0.0
             factors["response"] = 0.0
             factors["contradiction"] = min(0.48, 0.24 * len(self.public_contradictions(knowledge, target)))
+            factors["impossible_claim"] = min(3.0, 1.5 * len(self.public_impossible_claims(knowledge, target)))
             factors["pressure"] = min(0.20, 0.10 * len(self.public_pressure_events(knowledge, target)))
         claims = sorted((note for note in knowledge["notes"] if note["pid"] == target), key=lambda n: n["round"])
         previous = {}
@@ -1352,15 +1393,13 @@ class Game:
                     weight = (0.0, 0.45, 1.0)[stance] if stance in (0, 1, 2) else 0.45
                     if conflict > 0 and confidence > 0.35:
                         age = 0.78 ** max(0, knowledge["round"] - note["round"])
-                        if stance != 0:
+                        if stance == 2:
                             repeated[(key, cid)] += 1
-                        # A single mistaken theory is not suspicious.
-                        if repeated[(key, cid)] > 1 and stance != 0:
-                            factors["evidence_conflict"] += 0.14 * conflict * weight * age
-                            factors["persistence"] += 0.24 * conflict * weight * age
-                    elif confidence > 0.35 and gap < 0.12 and key not in supported:
-                        supported.add(key)
-                        factors["supported_leads"] -= 0.09 * weight
+                        # Disagreement is not deception. Only observed redirection is a weak signal.
+                        if repeated[(key, cid)] > 1 and stance == 2 and factors["pressure"] > 0:
+                            factors["evidence_conflict"] += 0.04 * conflict * weight * age
+                            factors["persistence"] += 0.06 * conflict * weight * age
+                    # Correct guesses cannot establish innocence; the killer knows the truth.
                     if stance == 0:
                         continue
                     old = previous.get(key)
@@ -1370,18 +1409,20 @@ class Game:
                         if delta > 0.18:
                             factors["revision"] -= min(0.10, delta * 0.08)
                             factors["constructive_revision"] -= min(0.18, delta * 0.12)
-                        elif delta < -0.18 and confidence > 0.35 and stance == 2:
-                            factors["unsupported_shift"] += min(0.15, -delta * 0.12)
+                        elif delta < -0.18 and confidence > 0.35 and stance == 2 and factors["pressure"] > 0:
+                            factors["unsupported_shift"] += min(0.06, -delta * 0.05)
                         # Three distinct endorsed versions with no evidence gain
                         # are a weak signal only; honest uncertainty remains legal.
-                        if cid not in seen and len(seen) >= 2 and delta <= 0.18:
-                            factors["unbacked_churn"] += 0.12
+                        if cid not in seen and len(seen) >= 2 and delta <= 0.18 and stance == 2 and factors["pressure"] > 0:
+                            factors["unbacked_churn"] += 0.04
                     seen.add(cid)
                     previous[key] = cid
                 # Explanations are weak signals, only if corroborated by public actions.
                 defense = note.get("defense")
-                if defense == 0 and note.get("stance") == 0 and note.get("tests"):
-                    factors["response"] -= 0.04
+                if defense == 0 and note.get("tests"):
+                    factors["response"] -= 0.12
+                if defense == 2 and note.get("stance", 1) != 2:
+                    factors["response"] -= 0.03
                 if defense == 1:
                     earlier = [n for n in claims if n["round"] < note["round"]]
                     old_leads = {k:c for n in earlier for k,c in n["leads"].items()}
@@ -1404,7 +1445,7 @@ class Game:
             factors["revision"] = max(-0.20, factors["revision"])
             factors["verified_conflict"] = min(3.0, factors["verified_conflict"])
             factors["constructive_revision"] = max(-0.35, factors["constructive_revision"])
-            factors["response"] = max(-0.12, factors["response"])
+            factors["response"] = max(-0.24, factors["response"])
             # Personality affects kinds of public evidence, not access to hidden information.
             factors["evidence_conflict"] *= profile[0]
             factors["persistence"] *= profile[3]
@@ -1413,7 +1454,7 @@ class Game:
             # Revisions and agreement remain useful diagnostics, but cannot create
             # a negative suspicion balance or erase a verified contradiction.
             soft = sum(factors[k] for k in ("evidence_conflict", "persistence",
-                                            "unsupported_shift", "unbacked_churn"))
+                                            "unsupported_shift", "unbacked_churn", "pressure"))
             credit = -sum(min(0.0, factors[k]) for k in ("revision", "constructive_revision",
                                                         "supported_leads", "response"))
             factors["mitigation_cap"] = max(0.0, credit - 0.5 * soft)
@@ -1431,7 +1472,7 @@ class Game:
         # A contradictory claim is evidence of possible deception, never access to private mail.
         factors["claim_conflict"] = 0.48 * len(self.public_claim_disputes(knowledge, target))
         if adaptive:
-            factors["claim_conflict"] = min(1.44, factors["claim_conflict"])
+            factors["claim_conflict"] = min(0.36, factors["claim_conflict"] * 0.375)
         if knowledge["role"] == "witness" and target == knowledge["killer"]:
             factors["role"] += 2.5
         if knowledge["role"] in ("killer", "accomplice") and (target == knowledge["killer"] or target in knowledge["allies"]):
@@ -1452,6 +1493,12 @@ class Game:
                 else:
                     scores = self.theories(pid, int(key), "vote")
                 votes[key] = max(choices, key=scores.get)
+                if key == "suspect" and self.d.get("difficulty", "normal") != "easy" and p["role"] not in ("killer", "accomplice", "witness"):
+                    best = max(scores.values())
+                    if best < 0.45:
+                        plausible = [t for t in choices if best - scores[t] <= 0.12]
+                        votes[key] = max(plausible, key=lambda t: scores[t] +
+                                         0.15 * self.noise("uncertain arrest", pid, t, self.d["pass_no"]))
                 if "analytics" in self.d:
                     self.trace("bot_vote", pid=pid, key=key, candidates=choices, scores=scores,
                                selected=votes[key], knowledge=self.player_knowledge(pid), retry=self.d["pass_no"],
@@ -1593,23 +1640,15 @@ class Game:
             receipt = self.d.get("mail_log", {}).get(str(n["round"]), {}).get(str(observer), {})
             if observer != target and claim is not None and claim in receipt.get("sent_cards", [receipt.get("sent")]):
                 return f'Я сам отправил письмо «{CARDS[claim]["name"]}» в раунде {n["round"]}; его заявление противоречит моему.'
+        impossible = self.public_impossible_claims(knowledge, target)
+        if impossible:
+            return impossible[-1]["text"]
         disputes = self.public_claim_disputes(knowledge, target)
         if disputes:
             return disputes[-1]["text"]
         pressure = self.public_pressure_events(knowledge, target)
         if pressure:
             return pressure[-1]["text"]
-        conflicts = Counter()
-        for n in prior:
-            if n.get("stance", 1) == 0:
-                continue
-            visible = public_evidence_at(knowledge, n["round"])
-            for k, c in n["leads"].items():
-                scores = sorted((evidence_score(visible, x, int(k)) for x in visible["board"][int(k)]), reverse=True)
-                if scores[0] - scores[1] > 0.35 and scores[0] - evidence_score(visible, c, int(k)) > 0.55:
-                    conflicts[(k, c)] += 1
-                    if conflicts[(k, c)] >= 2:
-                        return f'Повторно отстаивал «{CARDS[c]["name"]}», несмотря на открытые письма (раунд {n["round"]}).'
         return "Предварительное подозрение; конкретных доказательств пока нет."
 
     def investigation_view(self):
@@ -1657,12 +1696,10 @@ class Game:
                         arguments_for.append(dict(round=n["round"], text=f'Поддерживает версию «{CARDS[cid]["name"]}», согласующуюся с открытыми письмами (не доказательство невиновности).'))
                     if n.get("stance", 1) != 0 and previous is not None and previous in scores and previous != cid and scores[cid] > scores[previous] + 0.18:
                         arguments_for.append(dict(round=n["round"], text=f'Пересмотрел версию в пользу «{CARDS[cid]["name"]}» после писем.'))
-                    if n.get("stance", 1) != 0 and gap > 0.55 and ranking[0] - ranking[1] > 0.35:
-                        conflicts[(key, cid)] += 1
-                        if conflicts[(key, cid)] >= 2:
-                            arguments_against.append(dict(round=n["round"], text=f'Повторно поддерживает «{CARDS[cid]["name"]}», несмотря на письма.'))
+                    # An alternative theory alone is never evidence against a player.
                     if n.get("stance", 1) != 0:
                         last_leads[key] = cid
+            arguments_against.extend(self.public_impossible_claims(knowledge, pid))
             arguments_against.extend(self.public_claim_disputes(knowledge, pid))
             arguments_against.extend(self.public_pressure_events(knowledge, pid))
             arguments_against.extend(self.public_contradictions(knowledge, pid))
