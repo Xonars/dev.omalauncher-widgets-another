@@ -970,14 +970,23 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/31af
       gap: 3
       for player in players key player.value {
         let person = (game.investigation.people ?? []).find(p => p.pid == player.value)
-        let speaking = phase == "statement" && game.speaker == player.name
+        let discussion = phase == "note" || phase == "statement" || phase == "discussion"
+        let speaking = discussion && game.flow.current_speaker == player.value
+        let arrestVote = ballot && activeBallot.key == "suspect"
+        let eligible = arrestVote && (activeBallot.options ?? []).any(o => o.value == player.value)
+        let selected = eligible && get(choices, "suspect", null) == player.value
         let me = solo && game.notebook.pid == player.value
         let spoken = (game.notes ?? []).any(n => n.player == player.name)
         Column {
-          fill: width; gap: 1; padding: 3; radius: 6; border: 1; borderColor: speaking || me ? gold : rule
-          background: speaking ? plum : panel
+          fill: width; gap: 1; padding: 3; radius: 6; border: 1; borderColor: selected ? ash : (speaking || (eligible && arrestVote) || (!arrestVote && me) ? gold : rule)
+          background: selected ? mix(panel, ash, 0.30) : (speaking ? plum : panel)
           onTap: {
-            if person != null && queued == "" && !fastDiscussion {
+            if arrestVote {
+              if eligible && queued == "" && !fastDiscussion && !covered {
+                choices = set(choices, "suspect", player.value)
+                ballotConfirm = false
+              }
+            } else if person != null && queued == "" && !fastDiscussion {
               investigationPerson = person.pid; investigationRound = null; notebookTab = "people"; reviewRound = null
               if canNotebook {
                 notebookMarks = game.notebook.marks ?? {}
@@ -989,9 +998,9 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/31af
               evidence = "notebook"
             }
           }
-          Text { text: sub(player.name, 0, 1); color: gold; font: serif; fontSize: 19; align: center }
+          Text { text: sub(player.name, 0, 1); color: selected ? ash : (arrestVote && !eligible ? dim : gold); font: serif; fontSize: 19; align: center }
           Text { text: player.name; color: parchment; font: sans; fontSize: 10; align: center; maxLines: 1 }
-          Text { text: speaking ? "Говорит" : (me ? "Ты" : (spoken ? "✓" : "○")); color: speaking ? gold : dim; font: sans; fontSize: 10; align: center; maxLines: 1 }
+          Text { text: arrestVote ? (selected ? "Выбран" : (eligible ? "Выбрать" : "—")) : (player.value == 0 ? "Призрак" : (discussion ? (speaking ? (phase == "note" ? "Твой ход" : "Говорит") : (spoken ? "Сказал ✓" : "Ждёт")) : (me ? "Ты" : "·"))); color: selected ? ash : (speaking || eligible ? gold : dim); font: sans; fontSize: 10; align: center; maxLines: 1 }
           if player.suspicions > 0 { Text { text: "↑ ${player.suspicions}"; color: ash; font: sans; fontSize: 10; align: center } }
         }
       }
@@ -1895,7 +1904,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/31af
               Text { text: "Ход одиночной игры"; color: parchment; weight: 1; font: sans; fontSize: 13 }
               Text { text: dynamicFlow ? "Динамический" : "Пошаговый"; color: gold; font: sans; fontSize: 12 }
             }
-            Copy { body: "Динамический режим пропускает начало отправки и реплики ботов, но сохраняет раскрытие писем и личные ходы." }
+            Copy { body: "Динамический режим пропускает только начало отправки. Все реплики показываются по очереди." }
             Copy { body: "Удерживай иллюстрированную карту, чтобы рассмотреть её крупнее." }
           }
           Box { fill: width; onTap: overlay = ""; Action { label: "Вернуться"; hot: false } }
@@ -1950,7 +1959,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/31af
                 fill: width
                 onTap: {
                   homeOpen = false; revealed = ""; evidence = ""
-                  if solo && game.actor == null && (phase == "intro" || (dynamicFlow && phase == "statement")) && queued != token {
+                  if solo && game.actor == null && phase == "intro" && queued != token {
                     queued = token; receipt = ""; receipt = run("${script} advance_dynamic ${sh(token)}")
                   }
                 }
@@ -2108,7 +2117,15 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/31af
               Text { text: phase == "statement" ? "Говорит · ${game.speaker}" : (phase == "note" ? "Твоя очередь · реплика" : phaseLabel); color: dim; font: sans; fontSize: 11; weight: 1; maxLines: 1 }
               Text { text: "${len(game.roster)} за столом"; color: gold; font: sans; fontSize: 11 }
             }
-            if shownPage == "" { TablePlayers { players: game.roster } }
+            if shownPage == "" {
+              if ballot && activeBallot.key == "suspect" {
+                let chosenPerson = activeBallot.options.find(o => o.value == get(choices, "suspect", null))
+                Text { text: chosenPerson == null ? "АРЕСТ · нажми на персонажа" : (ballotConfirm ? "Подтверди арест · ${chosenPerson.label}" : "Выбран · ${chosenPerson.label}"); color: ash; font: sans; fontSize: 12; fontWeight: 700 }
+              } else if phase == "note" || phase == "statement" || phase == "discussion" {
+                Text { text: "Реплики · ${game.flow.spoken} из ${game.flow.speakers} · слева направо"; color: dim; font: sans; fontSize: 11 }
+              }
+              TablePlayers { players: game.roster }
+            }
           }
           // A new turn starts at the top of its own scroll view.
           for sheet in [game] key "${token}/${shownPage}/${activeBallot.key ?? ""}" {
@@ -2142,6 +2159,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/31af
                   RuleLabel { heading: "ОБВИНИТЕЛЬНОЕ ЗАКЛЮЧЕНИЕ · ${sheet.flow.vote_step} ИЗ ${sheet.flow.vote_total}" }
                   BallotTabs { sections: ballotSections; active: activeBallot.key }
                   if activeBallot.key != "suspect" { Copy { body: "Выбери допустимую улику прямо на столе." } }
+                  else { Copy { body: "Выбери подозреваемого на верхней панели. Подозрения и история доступны в блокноте." } }
                 }
                 if sheet.phase == "statement" {
                   LiveStatement { player: sheet.speaker; opinion: sheet.statement; progress: "${sheet.flow.spoken} / ${sheet.flow.speakers}" }
@@ -2156,20 +2174,6 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/31af
                 }
                 if sheet.phase == "note" { ReplyEditor { groups: sheet.groups } }
                 if sheet.phase == "statement" {
-                  if solo && len(sheet.notes) < len(sheet.roster) - 1 {
-                    Box {
-                      fill: width; onTap: {
-                        if queued != token && !fastDiscussion {
-                          fastDiscussion = true
-                          queued = token
-                          problem = ""
-                          receipt = ""
-                          receipt = run("${script} advance_fast ${sh(token)}")
-                        }
-                      }
-                      Action { label: fastDiscussion ? "Собираем версии…" : "Собрать остальные версии"; hot: false; allowed: queued != token && !fastDiscussion }
-                    }
-                  }
                 } else if sheet.phase == "role" {
                   RoleCard { actor: sheet.actor }
                 } else if sheet.phase == "result" {
@@ -2313,9 +2317,6 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/31af
                   if len(sheet.notes) == 0 { Copy { body: "Никто не предложил версию." } }
                 }
                 if ballot {
-                  if activeBallot.key == "suspect" && activeBallot.options.any(c => len(c.supporters) > 0) {
-                    Text { text: "Под вариантами — кто их поддержал в обсуждении."; color: dim; font: sans; fontSize: 12 }
-                  }
                   if activeBallot.key == "suspect" {
                     InvestigationNotice { data: sheet.investigation }
                     Text { text: "Число рядом с именем — сколько игроков его подозревают."; color: dim; font: sans; fontSize: 12 }
@@ -2381,7 +2382,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/31af
                   }
                   }
                 }
-                let shownGroups = phase == "note" || phase == "truth" ? [] : (ballot ? [activeBallot].filter(g => g.key == "suspect") : (phase == "mail" ? sheet.groups.filter(g => g.key != "send" && g.key != "send2" && g.key != "discard") : sheet.groups))
+                let shownGroups = phase == "note" || phase == "truth" ? [] : (ballot ? [] : (phase == "mail" ? sheet.groups.filter(g => g.key != "send" && g.key != "send2" && g.key != "discard") : sheet.groups))
                 for section in shownGroups key section.key {
                   let tone = get(categoryColors, section.key, (section.key == "echo" ? moss :
                                 (section.key == "silence" || section.key == "person" || section.key == "suspect" ? ash : (section.key == "seal" ? violet : gold))))
@@ -2441,11 +2442,11 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/31af
                     }
                   }
                 }
-                if ballot && !missing && ballotConfirm {
+                if ballot && !missing && ballotConfirm && activeBallot.key != "suspect" {
                   Column {
                     gap: 5; padding: 8; radius: 8; border: 1; borderColor: gold; background: panel
                     CategoryLabel { label: "Подтверди этот голос" }
-                    for section in ballotSections key section.key {
+                    for section in ballotSections.filter(g => g.key != "suspect") key section.key {
                       let chosen = section.options.find(c => c.value == get(choices, section.key, null))
                       if chosen != null { ReferenceCard { entry: chosen; tint: gold } }
                     }
