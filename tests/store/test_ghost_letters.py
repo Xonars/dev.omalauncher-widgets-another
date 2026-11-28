@@ -1251,5 +1251,26 @@ class GhostLettersRules(unittest.TestCase):
             self.assertEqual(g.suspicion_factors(observer, target)["unexplained_switch"], 0)
 
 
+    def test_v61_ghost_stall_uses_only_legal_discard_and_analytics(self):
+        from unittest.mock import patch
+        g = Game.new("classic", 6, 1, False, difficulty="normal", seed=42)
+        g.d["truth"] = [row[0] for row in g.d["board"]]
+        g.d["round"] = 1
+        g.refill(0)
+        hand, deck = g.d["players"][0]["hand"][:], g.d["deck"][:]
+        g.enable_analytics()
+        with patch.object(g, "ghost_margins", return_value=[0.0, 0.0, 0.0]), \
+             patch.object(g, "adaptive_ghost_gain", return_value=-1.0), \
+             patch.object(mod, "hint_signal", return_value=0.0):
+            echo, silence, own, discard = g.choose_ghost_letters([], hand)
+        self.assertEqual((echo, silence, own), ([], None, []))
+        self.assertIn(discard, hand)
+        self.assertEqual(deck, g.d["deck"])
+        self.assertEqual(hand, g.d["players"][0]["hand"])
+        event = next(e for e in g.d["analytics"]["events"] if e["kind"] == "ghost_stall")
+        self.assertEqual(event["discard"], discard)
+        self.assertEqual(event["reason"], "no_safe_discriminating_hint")
+
+
 if __name__ == "__main__":
     unittest.main()
