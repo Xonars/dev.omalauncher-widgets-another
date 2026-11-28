@@ -1255,14 +1255,14 @@ class Game:
     def public_contradictions(self, knowledge, target):
         """An accusation citing a version the accuser also endorses; not proof of guilt."""
         result = []
-        notes = knowledge["notes"]
-        for note in notes:
+        notes = sorted(knowledge["notes"], key=lambda n: n["round"])
+        for index, note in enumerate(notes):
             accused = note.get("suspect")
             if note["pid"] != target or accused is None:
                 continue
             reason = note.get("reason", "")
             visible = public_evidence_at(knowledge, note["round"])
-            prior = [n for n in notes if n["pid"] == accused and n["round"] <= note["round"]]
+            prior = [n for n in notes[:index] if n["pid"] == accused]
             for key, cid in note["leads"].items():
                 if not reason or f'«{CARDS[cid]["name"]}»' not in reason:
                     continue
@@ -1293,11 +1293,18 @@ class Game:
     def public_impossible_claims(self, knowledge, target):
         """Posted cards never return to the deck; use only public revealed letters."""
         result = []
-        for note in knowledge["notes"]:
+        claimed = {}
+        for note in sorted(knowledge["notes"], key=lambda n: n["round"]):
             claim = note.get("claim")
             if note["pid"] != target or claim is None:
                 continue
             number = note["round"]
+            if claim in claimed and claimed[claim] != number:
+                result.append(dict(round=number, text=
+                    f'Дважды заявил письмо «{CARDS[claim]["name"]}» в разных раундах ({claimed[claim]} и {number}); '
+                    "отправленная карта не возвращается в колоду."))
+                continue
+            claimed[claim] = number
             for letter in self.d["letters"]:
                 if letter["round"] > knowledge["round"]:
                     continue
@@ -1376,7 +1383,6 @@ class Game:
             # A wrong guess under weak evidence is not deception.
             repeated = Counter()
             distinct = {}
-            supported = set()
             for note in claims:
                 visible = public_evidence_at(knowledge, note["round"])
                 for key, cid in note["leads"].items():
@@ -1421,7 +1427,8 @@ class Game:
                 defense = note.get("defense")
                 if defense == 0 and note.get("tests"):
                     factors["response"] -= 0.12
-                if defense == 2 and note.get("stance", 1) != 2:
+                if defense == 2 and note.get("tests"):
+                    # Keeping a version after a real check is an explanation, not proof of innocence.
                     factors["response"] -= 0.03
                 if defense == 1:
                     earlier = [n for n in claims if n["round"] < note["round"]]
@@ -1737,8 +1744,11 @@ class Game:
             raise ValueError("Ответ сейчас недоступен.")
         pid = self.notebook_owner()
         choice = payload["choice"]
+        observers = [p for p in range(1, len(self.d["players"])) if p != pid and not self.d["players"][p]["local"]]
+        before = {p: self.suspicion_factors(p, pid) for p in observers} if "analytics" in self.d else {}
         self.d.setdefault("defenses", {}).setdefault(str(self.d["round"]), {})[str(pid)] = choice
-        self.trace("public_defense", pid=pid, choice=choice)
+        after = {p: self.suspicion_factors(p, pid) for p in observers} if "analytics" in self.d else {}
+        self.trace("public_defense", pid=pid, choice=choice, before=before, after=after)
 
     def claim_opened(self, cid):
         return any(c["value"] == cid for c in self.view_letter_cards())
