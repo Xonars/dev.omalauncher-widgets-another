@@ -24,8 +24,8 @@ import uuid
 HERE = Path(__file__).resolve().parent
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "ghost-letters"
 ANALYTICS_SCHEMA = 1
-GAME_VERSION = "3.7.0"
-BOT_VERSION = "6.1.0"
+GAME_VERSION = "3.8.0"
+BOT_VERSION = "6.2.0"
 CATEGORIES = ("Мотив", "Место", "Способ")
 STANCES = ("Пока не уверен", "Предварительная версия", "Уверенная версия")
 DEFENSES = ("Я проверял гипотезу", "Я пересмотрел версию", "Я сохраняю свою версию")
@@ -304,6 +304,9 @@ def public_opinions(knowledge, category):
         if (cid in knowledge["board"][category] and note["pid"] != knowledge["pid"]
                 and note.get("stance", 1) != 0):
             opinions[note["pid"]] = cid
+    for revision in knowledge.get("chat_revisions", []):
+        if revision["category"] == category and revision["pid"] != knowledge["pid"]:
+            opinions[revision["pid"]] = revision["card"]
     return opinions
 
 
@@ -945,6 +948,45 @@ class Game:
                     if origin == "own" and card in pool:
                         pool.remove(card)
                     self.trace("ghost_complement", card=card, origin=origin, score=score)
+        # Recovery: spend legal hints on the weakest row instead of repeating
+        # confirmations. A pair can be useful even if neither card passes alone.
+        if context is not None:
+            gaps = [row_gap(context["scores"][i], t) for i,t in enumerate(self.d["truth"])]
+            weakest = min(range(len(gaps)), key=gaps.__getitem__)
+            previous_empty = bool(self.d["letters"] and not any(
+                self.d["letters"][-1].get(k) for k in ("echo","seal","extra","silence")))
+            if gaps[weakest] < 0.85 and (previous_empty or context["remaining"] == 1 or not (echo or own or silence is not None)):
+                options = ([(c, "echo") for c in sent if c not in echo and c != silence
+                            and (not self.marked or not echo)] +
+                           [(c, "own") for c in hand if c not in own and len(own) < (2 if self.duel else 1)])
+                plans = [(a,) for a in options]
+                plans += [(a,b) for j,a in enumerate(options) for b in options[j+1:]
+                          if a[0] != b[0] and (not self.marked or a[1] != "echo" or b[1] != "echo")
+                          and len(own) + sum(x[1]=="own" for x in (a,b)) <= (2 if self.duel else 1)]
+                def recovery(plan):
+                    improvements = []
+                    for i, truth in enumerate(self.d["truth"]):
+                        scores = context["scores"][i]
+                        projected = {c: v + sum(hint_signal(self.d["board"], c, i, h) for h,_ in plan)
+                                     for c,v in scores.items()}
+                        after = row_gap(projected, truth)
+                        if (gaps[i] >= 0.25 and after < 0.25) or after < gaps[i] - 0.18:
+                            return -100.0
+                        improvements.append(after - gaps[i])
+                    if improvements[weakest] < (0.08 if context["remaining"] == 1 else 0.14):
+                        return -100.0
+                    return improvements[weakest] + 0.2 * sum(improvements) - 0.04 * len(plan)
+                if plans:
+                    best_plan = max(plans, key=recovery)
+                    value = recovery(best_plan)
+                    if value > 0:
+                        for cid, origin in best_plan:
+                            (echo if origin == "echo" else own).append(cid)
+                            add_positive(cid)
+                            if origin == "own" and cid in pool:
+                                pool.remove(cid)
+                        self.trace("ghost_recovery", plan=best_plan, score=value, weakest=weakest,
+                                   previous_empty=previous_empty, remaining=context["remaining"])
         def retention(cid):
             if context is None:
                 return gain(cid)
@@ -1011,7 +1053,14 @@ class Game:
         for note in notes:
             if note["pid"] == pid:
                 own_leads.update(note["leads"])
-        return dict(pid=pid, role=role, truth=truth, killer=killer, allies=allies,
+        revisions = [dict(pid=m["pid"], round=m["round"], **m["revision"])
+                     for m in self.d.get("chat", []) if "revision" in m]
+        latest = {(n["pid"], int(k)): n["round"] for n in sorted(notes,key=lambda n:n["round"]) for k in n["leads"]}
+        revisions = [r for r in revisions if r["round"] >= latest.get((r["pid"],r["category"]),0)]
+        for revision in revisions:
+            if revision["pid"] == pid:
+                own_leads[str(revision["category"])] = revision["card"]
+        return dict(pid=pid, role=role, truth=truth, killer=killer, allies=allies, chat_revisions=revisions,
                     profile=self.bot_profile(pid), difficulty=self.d.get("difficulty", "normal"),
                     round=self.d["round"], rounds=self.d["rounds"], board=[row[:] for row in self.d["board"]],
                     letters=letters, notes=notes, own_mail=own_mail, own_leads=own_leads,
@@ -1694,6 +1743,35 @@ class Game:
                     f'сейчас предлагает «{CARDS[cid]["name"]}». Стоит уточнить аргументы, это не доказательство вины.'))
         return result
 
+    def repeated_public_conflicts(self, knowledge, target):
+        # An isolated wrong guess, a test or a tentative statement is not suspicion.
+        seen = {}
+        events = []
+        for note in sorted(knowledge["notes"], key=lambda n: n["round"]):
+            if note["pid"] != target or note.get("stance") != 2:
+                continue
+            visible = public_evidence_at(knowledge, note["round"])
+            for key,cid in note["leads"].items():
+                i = int(key)
+                scores = {c:evidence_score(visible,c,i) for c in visible["board"][i]}
+                if cid not in scores:
+                    continue
+                ranked = sorted(scores.values(), reverse=True)
+                if ranked[0] - ranked[1] < 0.45 or ranked[0] - scores[cid] < 0.65:
+                    continue
+                signature = (key,cid)
+                earlier = seen.get(signature, [])
+                challenged = any(
+                    int(number) < note["round"] and e.get("kind", "theory") == "theory"
+                    and e.get("target") == target and e.get("key") == key
+                    and e.get("rival") == cid and e.get("gap", 0) >= 0.35
+                    and not e.get("supported", False) and e.get("answer") is not None
+                    for number, entries in self.d.get("exchanges", {}).items() for e in entries)
+                if len(earlier) >= 2 and challenged:
+                    events.append(dict(round=note["round"], text=f'Повторно уверенно поддержал «{CARDS[cid]["name"]}», хотя открытые письма сильнее указывают на другую карту. Это повод для проверки, не доказательство вины.'))
+                seen.setdefault(signature, []).append(note["round"])
+        return events
+
     def suspicion(self, pid, target):
         return sum(self.suspicion_factors(pid, target).values())
 
@@ -1706,6 +1784,7 @@ class Game:
                        social=0.0, revision=0.0, evidence_conflict=0.0, claim_conflict=0.0, role=0.0)
         factors["social"] = max(0, profile[1]) * self.public_suspicions()[target] / max(1, len(self.d["players"]) - 1)
         if adaptive:
+            factors["repeated_public_conflict"] = min(0.48, 0.16 * len(self.repeated_public_conflicts(knowledge, target)))
             # Stable, symmetric tie-break; neither seating nor popularity is evidence.
             factors["noise"] = (self.noise("arrest tie", pid, target) - 0.5) * 0.04
             factors["social"] = 0.0
@@ -1999,7 +2078,7 @@ class Game:
         if pressure:
             return pressure[-1]["text"]
         persistent = (self.public_persistence_events(knowledge, target) + self.challenge_events(knowledge, target)
-                      + self.public_switch_events(knowledge, target))
+                      + self.public_switch_events(knowledge, target) + self.repeated_public_conflicts(knowledge, target))
         if persistent:
             return persistent[-1]["text"]
         return "Предварительное подозрение; конкретных доказательств пока нет."
@@ -2088,6 +2167,98 @@ class Game:
                         (any(x["round"] == self.d["round"] for x in me["incoming"]) or any(e["target"] == owner for e in self.d.get("exchanges", {}).get(str(self.d["round"]), []))) and response is None,
                     responses=[dict(value=i, label=label) for i,label in enumerate(DEFENSES)],
                     new_accusations=sum(1 for p in people for x in p["incoming"] if x["round"] == self.d["round"]))
+
+    def chat_owner(self):
+        if self.phase != "discussion" or len(self.d["local"]) != 1:
+            return None
+        pid = self.d["local"][0]
+        return pid if pid and pid not in self.d["excluded"] else None
+
+    def chat_view(self):
+        owner = self.chat_owner()
+        messages = []
+        # Existing public exchanges appear alongside additional messages.
+        for number, entries in sorted(self.d.get("exchanges", {}).items(), key=lambda x:int(x[0])):
+            for e in entries:
+                messages.append(dict(round=int(number), player=self.name(e["source"]), target=self.name(e["target"]),
+                                     text=e["question"], own=e["source"] == owner))
+                if e.get("answer"):
+                    messages.append(dict(round=int(number), player=self.name(e["target"]), target=self.name(e["source"]),
+                                         text=e["answer"], own=e["target"] == owner))
+        for m in self.d.get("chat", []):
+            messages.append(dict(round=m["round"], player=self.name(m["pid"]),
+                                 target=self.name(m["target"]) if m["target"] is not None else "Все",
+                                 text=m.get("chat_text", "Сообщение скрыто в экспорте."), own=m["pid"] == owner))
+        messages.sort(key=lambda m:m["round"])
+        return dict(messages=messages, enabled=owner is not None,
+                    remaining=max(0, 6 - sum(m["round"] == self.d["round"] and m["pid"] == owner for m in self.d.get("chat", []))),
+                    targets=[dict(value=p, name=self.name(p)) for p in self.d["turn_order"]
+                             if p != owner and p not in self.d["excluded"]] if owner is not None else [])
+
+    def send_chat(self, payload):
+        pid = self.chat_owner()
+        if pid is None or not isinstance(payload,dict):
+            raise ValueError("Чат доступен после основных реплик.")
+        text = payload.get("text")
+        target = payload.get("target")
+        if not isinstance(text,str) or not text.strip() or len(text)>400:
+            raise ValueError("Введите сообщение длиной до 400 символов.")
+        if target is not None and (type(target) is not int or target not in self.d["turn_order"]
+                                    or target == pid or target in self.d["excluded"]):
+            raise ValueError("Недоступный собеседник.")
+        if not self.chat_view()["remaining"]:
+            raise ValueError("Лимит реплик в этом раунде.")
+        messages = self.d.setdefault("chat",[])
+        def append(source, recipient, body, revision=None):
+            item = dict(round=self.d["round"],pid=source,target=recipient,chat_text=body)
+            if revision is not None:
+                item["revision"] = revision
+            messages.append(item)
+            self.trace("chat_message", pid=source, target=recipient, chat_text=body, revision=revision)
+        append(pid,target,text.strip())
+        # The local engine understands exact public card names, not arbitrary
+        # natural-language reasoning. Unknown text is preserved without inventing facts.
+        mentioned = [c for row in self.d["board"] for c in row
+                     if re.search(r"(?<!\\w)" + re.escape(CARDS[c]["name"].casefold()) + r"(?!\\w)", text.casefold())]
+        recipients = [p for p in self.d["turn_order"] if p != pid and p not in self.d["excluded"]
+                      and not self.d["players"][p]["local"] and (target is None or p == target)]
+        if target is None:
+            recipients = recipients[:2]
+        for bot in recipients:
+            knowledge = self.player_knowledge(bot)
+            notes = [n for n in knowledge["notes"] if n["pid"] == bot and n["round"] == self.d["round"]]
+            own = notes[-1]["leads"] if notes else {}
+            card = mentioned[0] if mentioned else None
+            if card is None:
+                if own:
+                    card = next(iter(own.values()))
+                else:
+                    append(bot,pid,"Пока у меня нет определённой версии. Назови карту со стола, которую хочешь обсудить.")
+                    continue
+            i = next(i for i,row in enumerate(knowledge["board"]) if card in row)
+            ranking = self.theories(bot,i,"chat")
+            rival = knowledge["own_leads"].get(str(i), max(ranking,key=ranking.get))
+            scores = {c:evidence_score(knowledge,c,i) for c in knowledge["board"][i]}
+            # Cite only genuinely published letters and the bot's public position.
+            hints = [(h,sign) for letter in knowledge["letters"] for h,sign in letter["hints"]]
+            best = max(hints,key=lambda hs:hs[1]*hint_signal(knowledge["board"],card,i,hs[0]),default=None)
+            if best and best[1]*hint_signal(knowledge["board"],card,i,best[0]) > 0.12:
+                answer = f'К карте «{CARDS[card]["name"]}» относится открытое письмо «{CARDS[best[0]]["name"]}».'
+            else:
+                answer = f'Для карты «{CARDS[card]["name"]}» пока не вижу отдельного убедительного письма.'
+            revision = None
+            if rival != card:
+                answer += f' Моя версия — «{CARDS[rival]["name"]}».'
+                if scores[card] > scores[rival]+0.35:
+                    answer += " Но публичные письма сильнее поддерживают твой вариант; его стоит проверить."
+                    if mentioned and card == max(scores,key=scores.get) and knowledge["role"] not in ("killer","accomplice"):
+                        revision = dict(category=i,card=card)
+                        answer += " Пересматриваю свою версию."
+            else:
+                answer += " Это совпадает с моей текущей версией."
+            if not mentioned:
+                answer = "Уточни, какую карту или показание ты имеешь в виду. " + answer
+            append(bot,pid,answer,revision)
 
     def defend(self, payload):
         board = self.investigation_view()
@@ -2605,7 +2776,7 @@ class Game:
                         else f"{self.name(target)}: {reason}")
                 conclusions.append(dict(player=self.name(pid), text=text))
         return dict(id=self.d["id"], rev=self.d["rev"], phase=phase, title=title, brief=brief,
-                    exchanges=exchanges, conclusions=conclusions,
+                    exchanges=exchanges, conclusions=conclusions, chat=self.chat_view(),
                     action=action, mode=MODES[self.d["mode"]], round=self.d["round"],
                     rounds=self.d["rounds"], marked=self.marked, cooperative=self.cooperative,
                     flow=self.flow_view(), local_count=len(self.d["local"]), difficulty=self.d.get("difficulty", "normal"), actor=actor, groups=self.groups(), board=board,
@@ -2763,7 +2934,7 @@ def export_analysis(records, directory=None):
     target=Path(filename)
     def clean(obj):
         if isinstance(obj, dict):
-            return {k:clean(v) for k,v in obj.items() if k not in ("notebooks","comments","analytics")}
+            return {k:clean(v) for k,v in obj.items() if k not in ("notebooks","comments","analytics","chat_text")}
         if isinstance(obj,list):
             return [clean(v) for v in obj]
         return obj
@@ -2773,7 +2944,7 @@ def export_analysis(records, directory=None):
                 z.writestr(name,json.dumps(obj,ensure_ascii=False,indent=2))
             write_json("manifest.json",dict(schema=ANALYTICS_SCHEMA, version=GAME_VERSION, games=len(records),
                 deck_sha256=hashlib.sha256((HERE/"deck.json").read_bytes()).hexdigest(),
-                privacy="Completed games only; private notebook and free-text ghost comments omitted.",
+                privacy="Completed games only; private notebook, chat message text and free-text ghost comments omitted.",
                 duration="Wall-clock elapsed, including pauses; null for pre-update sessions."))
             write_json("statistics.json",statistics(records))
             write_json("deck.json",CARDS)
@@ -2854,7 +3025,7 @@ def advance_automatically(game, include_intro=True):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("view", "start", "advance", "submit", "advance_dynamic", "submit_dynamic", "advance_fast", "reset", "notebook", "defend", "archive", "case", "export", "collection"))
+    parser.add_argument("action", choices=("view", "start", "advance", "submit", "advance_dynamic", "submit_dynamic", "advance_fast", "reset", "notebook", "defend", "chat", "archive", "case", "export", "collection"))
     parser.add_argument("token", nargs="?", default="-")
     parser.add_argument("payload", nargs="?", default="{}")
     args = parser.parse_args()
@@ -2893,6 +3064,11 @@ def main():
             if args.action == "reset":
                 save(path, None)
                 game = None
+            elif args.action == "chat":
+                game.enable_analytics(partial=True)
+                game.send_chat(json.loads(args.payload))
+                game.d["rev"] += 1
+                save(path, game.d)
             elif args.action == "defend":
                 game.enable_analytics(partial=True)
                 game.defend(json.loads(args.payload))
@@ -2915,7 +3091,7 @@ def main():
                 save(path, game.d)
                 if game.phase == "result":
                     archive_game(game)
-        elif args.action in ("notebook", "defend"):
+        elif args.action in ("notebook", "defend", "chat"):
             raise ValueError("Ход уже изменился.")
         print(json.dumps({"game": public_view(game)}, ensure_ascii=False))
 
