@@ -64,9 +64,10 @@ class GhostChatTests(unittest.TestCase):
         observer = g.chat_owner()
         target = next(p for p in g.d["turn_order"] if p != observer)
         truth, rival = g.d["board"][0][:2]
-        g.d["round"] = 2
+        g.d["round"] = 3
+        g.d["exchanges"] = {"1": [dict(kind="theory", target=target, key="0", rival=rival, gap=0.8, supported=False, answer="Не уверен")]}
         g.d["history"] = [dict(pid=target,round=n,leads={"0":rival},stance=2,
-                              claim=None,tests=[],suspect=None) for n in (1,2)]
+                              claim=None,tests=[],suspect=None) for n in (1,2,3)]
         with patch.object(mod,"evidence_score",side_effect=lambda k,c,i: 2.0 if c==truth else 0.0):
             self.assertEqual(len(g.repeated_public_conflicts(g.player_knowledge(observer),target)),1)
             g.d["history"][1]["stance"] = 0
