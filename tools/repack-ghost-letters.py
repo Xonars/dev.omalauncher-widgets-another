@@ -3,13 +3,44 @@
 import hashlib
 import io
 import json
+import re
 from pathlib import Path
 import zipfile
 
 ROOT=Path(__file__).resolve().parents[1]
 SOURCE=ROOT/"local/phone-widgets/ghost-letters"
 APP=ROOT/"apps/xonars/ghost-letters/app.owl"
+LOCAL_OWL=ROOT/"local/phone-widgets/ghost-letters.owl"
 COLLECTION=ROOT/"store-collection.json"
+
+def sync_version(app, local, engine):
+    def version(text):
+        match = re.search(r'\bmeta\s*\{[^}]*\bversion:\s*"([^"]+)"', text)
+        if not match:
+            raise ValueError("Missing OWL metadata version")
+        return match.group(1)
+
+    target = version(local)
+    previous = version(app)
+    match = re.search(r'^GAME_VERSION\s*=\s*"([^"]+)"', engine, re.M)
+    if not match or match.group(1) != target:
+        raise ValueError("Ghost Letters engine and local OWL versions differ")
+    if tuple(map(int, target.split("."))) < tuple(map(int, previous.split("."))):
+        raise ValueError("Ghost Letters store version must not decrease")
+    label_pattern = r'(\bText\s*\{\s*text:\s*")(\d+\.\d+\.\d+ · [^"]+)(")'
+    label = re.search(label_pattern, local)
+    if not label or not label.group(2).startswith(target + " · "):
+        raise ValueError("Missing or stale local Ghost Letters version label")
+    app, count = re.subn(r'(\bmeta\s*\{[^}]*\bversion:\s*")([^"]+)(")',
+                         lambda m: m.group(1) + target + m.group(3), app, count=1)
+    if count != 1:
+        raise ValueError("Cannot synchronize store metadata")
+    app, count = re.subn(label_pattern, lambda m: m.group(1) + label.group(2) + m.group(3),
+                         app, count=1)
+    if count != 1:
+        raise ValueError("Cannot synchronize store version label")
+    return app
+
 
 def main():
     collection=json.loads(COLLECTION.read_text())
@@ -22,6 +53,7 @@ def main():
            for p in SOURCE.rglob("*") if p.is_file()
            and not any(part.startswith(".") or part=="__pycache__" for part in p.relative_to(SOURCE).parts)}
     compile(files["widgets/ghost-letters/game.py"],"game.py","exec")
+    app=sync_version(app, LOCAL_OWL.read_text(), files["widgets/ghost-letters/game.py"].decode("utf-8"))
     out=io.BytesIO()
     with zipfile.ZipFile(out,"w",zipfile.ZIP_DEFLATED,compresslevel=9) as z:
         for name,data in sorted(files.items()):

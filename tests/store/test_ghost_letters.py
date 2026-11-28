@@ -880,6 +880,21 @@ class GhostLettersRules(unittest.TestCase):
             g.d["history"][0]["stance"] = 0
             self.assertEqual(g.public_pressure_events(g.player_knowledge(3), 1), [])
 
+    def test_store_version_matches_engine_and_local_owl(self):
+        import re
+        local = (SOURCE.parent / "ghost-letters.owl").read_text()
+        store = (ROOT / "apps/xonars/ghost-letters/app.owl").read_text()
+        for text in (local, store):
+            self.assertEqual(re.search(r'\bmeta\s*\{[^}]*\bversion:\s*"([^"]+)"', text)[1],
+                             mod.GAME_VERSION)
+            self.assertIn('text: "' + mod.GAME_VERSION + ' · ', text)
+        import runpy
+        sync = runpy.run_path(str(ROOT / "tools/repack-ghost-letters.py"))["sync_version"]
+        old = store.replace(mod.GAME_VERSION, "0.0.1")
+        self.assertEqual(sync(old, local, (SOURCE / "game.py").read_text()), store)
+        with self.assertRaises(ValueError):
+            sync(store, local, 'GAME_VERSION = "0.0.1"')
+
     def test_package_matches_source(self):
         row = next(x for x in json.loads((ROOT / "store-collection.json").read_text()) if x["source"] == "ghost-letters.owl")
         with zipfile.ZipFile(ROOT / row["resources"]) as z:
