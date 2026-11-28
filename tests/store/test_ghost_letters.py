@@ -1190,5 +1190,66 @@ class GhostLettersRules(unittest.TestCase):
             self.assertTrue(all("artwork" not in p for p in g.people([1,2,3,4])))
 
 
+    def test_v61_semantic_culture_and_navigation(self):
+        names = {c["name"]: c["id"] for c in mod.CARDS}
+        a = lambda x, y: mod.affinity(names[x], names[y])
+        self.assertGreater(a("Матрёшка", "Краска"), a("Матрёшка", "Занавес"))
+        self.assertGreater(a("Матрёшка", "Кремль"), a("Матрёшка", "Стул"))
+        self.assertGreater(a("Компас", "Самолёт"), a("Компас", "Тарелка"))
+        self.assertEqual(len(names), 131)
+
+    def test_v61_questions_not_repeated_without_new_evidence(self):
+        from unittest.mock import patch
+        g = Game.new("classic", 6, 1, False, seed=42)
+        source = next(p for p in g.d["turn_order"] if p not in g.d["local"])
+        target = next(p for p in g.d["turn_order"] if p != source)
+        right, wrong = g.d["board"][0][:2]
+        g.d["round"] = 1
+        g.d["letters"] = []
+        g.d["notes"] = [dict(pid=p, round=1, leads={"0": c}, suspect=None, claim=None, tests=[], stance=1)
+                        for p,c in [(source,right),(target,wrong)]]
+        with patch.object(mod, "evidence_score", side_effect=lambda k,c,i: float(c == right)):
+            g.round_exchanges()
+            self.assertEqual(len(g.d["exchanges"]["1"]), 1)
+            g.d["history"] = list(g.d["notes"])
+            g.d["round"] = 2
+            g.d["notes"] = [dict(n, round=2) for n in g.d["notes"]]
+            g.round_exchanges()
+            self.assertEqual(g.d["exchanges"]["2"], [])
+
+    def test_v61_last_speaker_public_claim_review(self):
+        g = Game.new("classic", 6, 1, False, seed=42)
+        target = g.d["turn_order"][-1]
+        source = next(p for p in g.d["turn_order"] if p != target and p not in g.d["local"])
+        c = g.d["deck"][-1]
+        g.d["round"] = 2
+        n = dict(pid=target, round=1, leads={}, claim=c, tests=[], stance=0, suspect=None)
+        g.d["history"] = [n]
+        g.d["notes"] = [dict(n, pid=source, round=2, claim=None), dict(n, round=2)]
+        g.round_exchanges()
+        reviews = [e for e in g.d["exchanges"]["2"] if e.get("kind") == "claim"]
+        self.assertEqual(len(reviews), 1)
+        self.assertEqual(reviews[0]["target"], target)
+        self.assertGreater(g.suspicion_factors(source, target)["impossible_claim"], 1)
+        self.assertEqual(g.suspicion_factors(source, target)["challenge_followup"], 0)
+
+    def test_v61_switch_requires_repetition_and_prior_public_question(self):
+        from unittest.mock import patch
+        g = Game.new("classic", 6, 1, False, seed=42)
+        observer = g.role_id("detective")
+        target = next(p for p in g.d["turn_order"] if p != observer)
+        right, a, b, c = g.d["board"][0]
+        g.d["round"] = 3
+        g.d["notes"] = [dict(pid=target, round=n, leads={"0": card}, claim=None, tests=[], stance=1, suspect=None)
+                        for n,card in enumerate((a,b,c), 1)]
+        with patch.object(mod, "evidence_score", side_effect=lambda k,c,i: float(c == right)):
+            self.assertEqual(g.public_switch_events(g.player_knowledge(observer), target), [])
+            g.d["exchanges"] = {"1": [dict(source=observer, target=target, key="0", rival=a,
+                                           alternative=right, gap=0.8, supported=False)]}
+            self.assertGreater(g.suspicion_factors(observer, target)["unexplained_switch"], 0)
+            g.d["notes"][-1]["stance"] = 0
+            self.assertEqual(g.suspicion_factors(observer, target)["unexplained_switch"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()
