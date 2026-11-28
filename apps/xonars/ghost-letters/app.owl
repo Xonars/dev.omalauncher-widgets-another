@@ -47,7 +47,7 @@ def install(url, digest, entry):
                 os.replace(temporary, target)
         marker.write_text(digest)
 
-install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b56c9346af9325a0fc6f898d0535b7cbfb57f8b1a0fff49bcb29d5acb7f5c162.zip', 'b56c9346af9325a0fc6f898d0535b7cbfb57f8b1a0fff49bcb29d5acb7f5c162', 'xonars-ghost-letters')
+install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/e2f5b6f6484417b09c705177bac9a6fbf42ce893fdc4647cda06d31469306df7.zip', 'e2f5b6f6484417b09c705177bac9a6fbf42ce893fdc4647cda06d31469306df7', 'xonars-ghost-letters')
 """
   let storeInstall = "python -c ${sh(storeBootstrap)}"
 
