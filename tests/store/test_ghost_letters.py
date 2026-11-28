@@ -1010,6 +1010,25 @@ class GhostLettersRules(unittest.TestCase):
                 self.assertEqual(g.d["writers"], order)
         self.assertGreater(len(orders), 1)
 
+    def test_v6_public_followup_is_weak_and_requires_repeated_endorsement(self):
+        from unittest.mock import patch
+        g = Game.new("classic", 6, 1, False, seed=42)
+        observer = g.role_id("detective")
+        target = next(p for p in g.d["turn_order"] if p != observer)
+        right, wrong = g.d["board"][0][:2]
+        g.d["round"] = 2
+        g.d["exchanges"] = {"1": [dict(source=observer, target=target, key="0", rival=wrong,
+                                      alternative=right, gap=0.8, supported=False)]}
+        note = dict(pid=target, round=2, leads={"0": wrong}, suspect=None, claim=None, tests=[], stance=1)
+        g.d["notes"] = [note]
+        with patch.object(mod, "evidence_score", side_effect=lambda k,c,i: float(c == right)):
+            self.assertGreater(g.suspicion_factors(observer, target)["challenge_followup"], 0)
+            note["stance"] = 0
+            self.assertEqual(g.suspicion_factors(observer, target)["challenge_followup"], 0)
+            note["stance"] = 1
+            note["leads"] = {"0": right}
+            self.assertEqual(g.suspicion_factors(observer, target)["challenge_followup"], 0)
+
     def test_v6_retry_only_tied_candidates(self):
         g = Game.new("classic", 6, 1, False, seed=42)
         g.d["leaders"] = {"suspect": [2, 4]}
