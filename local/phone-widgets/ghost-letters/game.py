@@ -24,8 +24,8 @@ import uuid
 HERE = Path(__file__).resolve().parent
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "ghost-letters"
 ANALYTICS_SCHEMA = 1
-GAME_VERSION = "3.6.0"
-BOT_VERSION = "6.0.0"
+GAME_VERSION = "3.7.0"
+BOT_VERSION = "6.1.0"
 CATEGORIES = ("Мотив", "Место", "Способ")
 STANCES = ("Пока не уверен", "Предварительная версия", "Уверенная версия")
 DEFENSES = ("Я проверял гипотезу", "Я пересмотрел версию", "Я сохраняю свою версию")
@@ -88,6 +88,89 @@ def clue_list(record, plural, singular):
 
 
 FUNCTIONAL_LINKS = {
+    frozenset(("Письмо", "Открытка")): (3.8, "почтовое отправление"),
+    frozenset(("Письмо", "Печать")): (3.5, "печать на письме"),
+    frozenset(("Блокнот", "Дневник")): (3.8, "личные записи"),
+    frozenset(("Бланк", "Ручка")): (3.6, "заполнение бланка"),
+    frozenset(("Бумага", "Книга")): (3.8, "бумажные страницы"),
+    frozenset(("Книга", "Буква")): (3.5, "печатный текст"),
+    frozenset(("Газета", "Буква")): (3.3, "печатный текст"),
+    frozenset(("Карта", "Компас")): (4.0, "ориентирование по карте"),
+    frozenset(("Печать", "Бланк")): (3.8, "заверение документа"),
+    frozenset(("Монета", "Весы")): (3.2, "взвешивание монеты"),
+    frozenset(("Сундук", "Замок")): (3.8, "закрытый сундук"),
+    frozenset(("Сундук", "Ключ")): (3.8, "ключ от сундука"),
+    frozenset(("Жетон", "Трамвай")): (3.2, "проездной жетон"),
+    frozenset(("Подарок", "Матрёшка")): (3.6, "сувенир в подарок"),
+    frozenset(("Медаль", "Грамота")): (3.7, "награда за достижение"),
+    frozenset(("Кремль", "Матрёшка")): (3.4, "символы русской культуры"),
+    frozenset(("Кремль", "Крыша")): (3.3, "архитектура кремлёвских зданий"),
+    frozenset(("Кремль", "Открытка")): (3.1, "туристическая открытка"),
+    frozenset(("Камера", "Экран")): (3.6, "просмотр снятого изображения"),
+    frozenset(("Рация", "Микрофон")): (3.8, "передача голоса"),
+    frozenset(("Спутник", "Ракета")): (4.0, "запуск спутника ракетой"),
+    frozenset(("Граммофон", "Рояль")): (3.5, "музыка"),
+    frozenset(("Грамота", "Печать")): (3.6, "заверенная грамота"),
+    frozenset(("Мел", "Линейка")): (3.2, "школьные принадлежности"),
+    frozenset(("Глобус", "Карта")): (4.0, "географическая карта мира"),
+    frozenset(("Кисточка", "Лак")): (3.7, "нанесение лака кистью"),
+    frozenset(("Краска", "Матрёшка")): (3.8, "роспись деревянной игрушки"),
+    frozenset(("Кисточка", "Матрёшка")): (3.7, "роспись матрёшки кистью"),
+    frozenset(("Лак", "Матрёшка")): (3.6, "лакированное деревянное изделие"),
+    frozenset(("Картина", "Матрёшка")): (3.2, "декоративная роспись"),
+    frozenset(("Маска", "Шарф")): (3.4, "закрывает часть лица"),
+    frozenset(("Серпантин", "Торт")): (3.4, "праздничное оформление"),
+    frozenset(("Торт", "Свеча")): (4.0, "свечи на торте"),
+    frozenset(("Шоколад", "Конфетка")): (3.8, "сладости"),
+    frozenset(("Роза", "Цветок")): (4.0, "роза является цветком"),
+    frozenset(("Цветок", "Горшок")): (3.9, "цветок в горшке"),
+    frozenset(("Лопата", "Грабли")): (3.7, "садовые инструменты"),
+    frozenset(("Семена", "Горшок")): (3.5, "посев в горшке"),
+    frozenset(("Корень", "Куст")): (3.8, "корневая система куста"),
+    frozenset(("Вишня", "Яблоко")): (3.5, "плоды деревьев"),
+    frozenset(("Лимон", "Чай")): (3.8, "чай с лимоном"),
+    frozenset(("Арбуз", "Семена")): (3.6, "семечки арбуза"),
+    frozenset(("Тарелка", "Скатерть")): (3.8, "сервировка стола"),
+    frozenset(("Стакан", "Бутылка")): (3.8, "напиток из бутылки"),
+    frozenset(("Кухня", "Чайник")): (3.8, "кухонная утварь"),
+    frozenset(("Календарь", "Бумага")): (3.4, "печатный календарь"),
+    frozenset(("Кровать", "Ковёр")): (2.8, "обстановка комнаты"),
+    frozenset(("Стул", "Парта")): (3.8, "место ученика за партой"),
+    frozenset(("Щётка", "Туфля")): (3.6, "чистка обуви щёткой"),
+    frozenset(("Зеркало", "Лупа")): (3.0, "оптические предметы"),
+    frozenset(("Крыша", "Стена")): (3.9, "части здания"),
+    frozenset(("Сумка", "Кошелёк")): (3.7, "кошелёк в сумке"),
+    frozenset(("Рукавица", "Шарф")): (3.8, "зимняя одежда"),
+    frozenset(("Фартук", "Кухня")): (4.0, "кухонный фартук"),
+    frozenset(("Чемодан", "Самолёт")): (3.8, "багаж в авиапутешествии"),
+    frozenset(("Семафор", "Фонарь")): (3.5, "световой сигнал"),
+    frozenset(("Компас", "Самолёт")): (3.4, "навигация"),
+    frozenset(("Звезда", "Луна")): (3.7, "ночное небо"),
+    frozenset(("Телескоп", "Подзорная труба")): (4.0, "оптическое наблюдение"),
+    frozenset(("Туман", "Маяк")): (3.6, "ориентир в тумане"),
+    frozenset(("Снег", "Лёд")): (3.8, "замёрзшая вода"),
+    frozenset(("Река", "Берег")): (4.0, "берег реки"),
+    frozenset(("Дождь", "Река")): (3.0, "вода и осадки"),
+    frozenset(("Лодка", "Поплавок")): (3.4, "рыбалка с лодки"),
+    frozenset(("Канат", "Мост")): (3.2, "подвесной мост"),
+    frozenset(("Камень", "Стена")): (3.6, "каменная кладка"),
+    frozenset(("Куст", "Парк")): (3.8, "растительность парка"),
+    frozenset(("Парк", "Фонтан")): (3.8, "фонтан в парке"),
+    frozenset(("Фонарь", "Абажур")): (3.5, "осветительные приборы"),
+    frozenset(("Спичечный коробок", "Кухня")): (3.2, "розжиг плиты"),
+    frozenset(("Батарея", "Рация")): (3.8, "питание рации"),
+    frozenset(("Батарея", "Проволока")): (3.5, "электрическая цепь"),
+    frozenset(("Шестерня", "Катушка")): (2.8, "детали механизмов"),
+    frozenset(("Колокольчик", "Свисток")): (3.5, "звуковой сигнал"),
+    frozenset(("Камертон", "Граммофон")): (3.2, "музыкальный звук"),
+    frozenset(("Открытка", "Подарок")): (3.8, "поздравление с подарком"),
+    frozenset(("Лупа", "Карта")): (3.1, "рассмотрение мелких деталей карты"),
+    frozenset(("Тайник", "Ящик")): (3.8, "хранение скрытого предмета"),
+    frozenset(("Катушка", "Пуговица")): (3.5, "швейные принадлежности"),
+    frozenset(("Линейка", "Парта")): (3.7, "школьные принадлежности"),
+    frozenset(("Корзина", "Яблоко")): (3.7, "корзина с фруктами"),
+    frozenset(("Фонтан", "Река")): (3.2, "движение воды"),
+    frozenset(("Микрофон", "Граммофон")): (3.1, "звук и запись"),
     frozenset(("Ручка", "Блокнот")): (4.0, "записи ручкой в блокноте"),
     frozenset(("Берег", "Маяк")): (4.0, "маяк на берегу"),
     frozenset(("Фонарь", "Маяк")): (4.0, "световой ориентир"),
@@ -841,7 +924,11 @@ class Game:
                     if (before >= 0.25 and after < 0) or after < before - 0.24:
                         return -1.0
                     rivals = [c for c in scores if c != truth and context["public"][i][c] > 0]
-                    if before < 0.75 and rivals:
+                    # Silence is not consensus: when nobody has endorsed a theory,
+                    # compare against the strongest public-evidence alternative.
+                    if not rivals:
+                        rivals = [max((c for c in scores if c != truth), key=scores.get)]
+                    if before < 0.85 and rivals:
                         contrast = min(signals[truth] - signals[c] for c in rivals)
                         if contrast > 0.18 and after >= before:
                             gains.append(contrast + 0.4 * (after - before))
@@ -850,7 +937,9 @@ class Game:
             if candidates:
                 card, origin = max(candidates, key=lambda x: complementary(x[0]))
                 score = complementary(card)
-                if score >= 0.30:
+                # In the last round a safe, discriminating clue is more useful
+                # than preserving it in the hand. No threshold is waived for harm.
+                if score >= (0.24 if context["remaining"] == 1 else 0.30):
                     (echo if origin == "echo" else own).append(card)
                     add_positive(card)
                     if origin == "own" and card in pool:
@@ -880,6 +969,10 @@ class Game:
         if discard is not None and ((retention(discard) >= 0.12 and not stalled)
                                     or (context is not None and context["remaining"] <= 1)):
             discard = None
+        if stalled:
+            self.trace("ghost_stall", discard=discard,
+                       gaps=[row_gap(context["scores"][i], truth) for i, truth in enumerate(self.d["truth"])],
+                       reason="no_safe_discriminating_hint")
         if "analytics" in self.d:
             self.trace("bot_ghost", pid=0, knowledge=self.player_knowledge(0), incoming=sent, decisions=decisions, echo=echo, silence=silence, own=own, discard=discard,
                        discard_scores={c:retention(c) for c in pool})
@@ -1138,7 +1231,11 @@ class Game:
         tests = planned[:] or ([max(leads.values(), key=lambda cid: affinity(claim, cid))] if claim is not None else [])
         if claim is not None and hostile and not self.claim_opened(claim):
             # Only an unopened letter can safely be misrepresented.
-            candidates = [cid for cid in receipt["hand"] if cid != claim and not self.claim_opened(cid)]
+            # A credible bluff must respect the public timeline. Never reuse a card
+            # already claimed in another round or known to be somebody else's letter.
+            previously_claimed = {n["claim"] for n in knowledge["notes"] if n.get("claim") is not None}
+            candidates = [cid for cid in receipt["hand"] if cid != claim
+                          and cid not in previously_claimed and not self.claim_opened(cid)]
             if candidates and self.noise("bluff in discussion", pid) < 0.58:
                 alternative, target = max(((c, lead) for c in candidates for lead in leads.values()),
                                           key=lambda pair: affinity(*pair))
@@ -1155,9 +1252,9 @@ class Game:
                             self.noise("inquiry peer", pid, n["pid"])))
                 disputed = next((c for k, c in other["leads"].items() if k in leads and leads[k] != c), None)
                 if disputed is not None:
-                    speech += f' Вопрос игроку «{self.name(other["pid"])}»: какое открытое письмо поддерживает «{CARDS[disputed]["name"]}»? Это уточнение, не обвинение.'
+                    speech += f' Расхождение с игроком «{self.name(other["pid"])}» по карте «{CARDS[disputed]["name"]}» стоит обсудить после основных реплик.'
                 else:
-                    speech += f' Игрок «{self.name(other["pid"])}», есть ли противоречия в показаниях, которые стоит проверить? Пока оснований для обвинения нет.'
+                    speech += " Пока не вижу оснований обвинять кого-либо."
             else:
                 speech += " Пока не вижу проверяемого противоречия в показаниях; не буду обвинять наугад."
         if "analytics" in self.d:
@@ -1254,7 +1351,7 @@ class Game:
                         if delta > 0.12:
                             parts.append(f"Подсказка {names([hint])} " + ("отмечена как ложный след и помогает исключать варианты." if sign < 0 else f"лучше согласуется с {names([own])}."))
                         elif rival != own:
-                            parts.append("По открытым письмам пока не могу уверенно отличить эти версии. Какое конкретное письмо поддерживает другую версию?")
+                            parts.append("По открытым письмам пока не могу уверенно отличить эти версии.")
             elif knowledge["own_leads"]:
                 prior = knowledge["own_leads"]
                 same = any(prior.get(k) == cid for k, cid in leads.items())
@@ -1305,6 +1402,42 @@ class Game:
         notes = self.d["notes"]
         knowledge = self.player_knowledge(0)
         exchanges = []
+        # Memory belongs to the public conversation, not to an individual bot.
+        # An identical question may return only after relevant new evidence.
+        asked = set()
+        for old_number, old_exchanges in store.items():
+            old_number = int(old_number)
+            for old in old_exchanges:
+                if old.get("kind", "theory") != "theory":
+                    continue
+                key = old.get("key")
+                if key not in ("0", "1", "2"):
+                    continue
+                i = int(key)
+                changed = any(entry["round"] > old_number and any(
+                    abs(hint_signal(knowledge["board"], old["rival"], i, h) -
+                        hint_signal(knowledge["board"], old["alternative"], i, h)) > 0.12
+                    for h, sign in entry["hints"]) for entry in knowledge["letters"])
+                if not changed:
+                    asked.add((old["target"], key, old["rival"], old["alternative"]))
+        # A public contradiction discovered by the last speaker must be visible
+        # before the ballot, not only in the internal arrest score.
+        for target in ([] if self.cooperative else notes):
+            pid = target["pid"]
+            reasons = [e for e in self.public_impossible_claims(knowledge, pid)
+                       if e["round"] == number]
+            if not reasons:
+                continue
+            source = next((n for n in notes if n["pid"] != pid
+                           and not self.d["players"][n["pid"]]["local"]), None)
+            if source is None:
+                continue
+            exchanges.append(dict(kind="claim", source=source["pid"], target=pid,
+                                  key=None, rival=None, alternative=None, gap=0.0,
+                                  question=reasons[-1]["text"] + " Как объяснишь расхождение?",
+                                  answer=None if self.d["players"][pid]["local"] else
+                                  "Эти показания действительно расходятся; оба утверждения не могут быть верны.",
+                                  supported=False))
         for source in notes:
             if self.d["players"][source["pid"]]["local"] or not source["leads"]:
                 continue
@@ -1325,8 +1458,10 @@ class Game:
                 key, own, rival = max(common, key=lambda v: evidence_score(knowledge, v[1], int(v[0])) - evidence_score(knowledge, v[2], int(v[0])))
                 i = int(key)
                 gap = evidence_score(knowledge, own, i) - evidence_score(knowledge, rival, i)
-                if gap < 0.15:
+                signature = (target["pid"], key, rival, own)
+                if gap < 0.15 or signature in asked:
                     continue
+                asked.add(signature)
                 question = f'Почему «{CARDS[rival]["name"]}», а не «{CARDS[own]["name"]}»? Какое письмо поддерживает эту версию?'
                 hints = [(h, sign) for letter in knowledge["letters"] for h, sign in letter["hints"]]
                 def contrast(pair):
@@ -1340,7 +1475,7 @@ class Game:
                         answer = f'Опираюсь на письмо «{CARDS[best[0]]["name"]}», но признаю, что есть и другая версия.'
                     else:
                         answer = "У меня нет отдельного письма, которое различает эти варианты. Моя версия остаётся предварительной."
-                exchanges.append(dict(source=source["pid"], target=target["pid"], key=key, rival=rival,
+                exchanges.append(dict(kind="theory", source=source["pid"], target=target["pid"], key=key, rival=rival,
                                       alternative=own, gap=gap, question=question, answer=answer, supported=supported))
                 break
         store[str(number)] = exchanges
@@ -1354,7 +1489,7 @@ class Game:
             if number >= knowledge["round"]:
                 continue
             for exchange in exchanges:
-                if exchange["target"] != target or exchange["gap"] < 0.35 or exchange["supported"]:
+                if exchange.get("kind", "theory") != "theory" or exchange["target"] != target or exchange["gap"] < 0.35 or exchange["supported"]:
                     continue
                 later = [n for n in knowledge["notes"] if n["pid"] == target and n["round"] > number
                          and n.get("stance", 1) != 0 and exchange["key"] in n["leads"]]
@@ -1448,7 +1583,7 @@ class Game:
                 personal = [letter.get("seal"), *letter.get("extra", [])]
                 opened = [*letter.get("echo", []), *letter.get("silence", []), *personal]
                 if claim in opened and (letter["round"] != number or claim in personal):
-                    result.append(dict(round=number, text=
+                    result.append(dict(round=max(number, letter["round"]), text=
                         f'Заявил «{CARDS[claim]["name"]}» как своё письмо в раунде {number}, '
                         f'но карта открыта призраком в другом раунде или из его руки ({letter["round"]}).'))
                     break
@@ -1520,6 +1655,45 @@ class Game:
                         f'Не раз уверенно поддерживал «{CARDS[cid]["name"]}», хотя открытые письма сильнее поддерживали другой вариант. Хочу понять аргументы; это не доказательство вины.')
         return list(result.values())
 
+    def public_switch_events(self, knowledge, target):
+        """Repeated unexplained redirection after a public question, not a wrong guess."""
+        result = []
+        notes = sorted((n for n in knowledge["notes"] if n["pid"] == target
+                        and n.get("stance", 1) != 0), key=lambda n: n["round"])
+        for key in map(str, range(len(knowledge["board"]))):
+            i = int(key)
+            row = knowledge["board"][i]
+            prior = None
+            changes = []
+            questions = [int(n) for n, entries in self.d.get("exchanges", {}).items() for e in entries
+                         if e.get("kind", "theory") == "theory" and e.get("target") == target
+                         and e.get("key") == key and not e.get("supported")]
+            if not questions:
+                continue
+            first_question = min(questions)
+            for note in notes:
+                cid = note["leads"].get(key)
+                if cid not in row:
+                    continue
+                if prior is not None and prior[0] != cid and note["round"] > first_question:
+                    old, number = prior
+                    now = public_evidence_at(knowledge, note["round"])
+                    before = public_evidence_at(knowledge, number)
+                    delta = (evidence_score(now, cid, i) - evidence_score(now, old, i))
+                    prior_delta = (evidence_score(before, cid, i) - evidence_score(before, old, i))
+                    gap = max(evidence_score(now, c, i) for c in row) - evidence_score(now, cid, i)
+                    if delta <= 0.12 and delta - prior_delta <= 0.12 and gap > 0.35:
+                        changes.append((note["round"], cid))
+                    else:
+                        changes.clear()
+                prior = (cid, note["round"])
+            if len(changes) >= 2:
+                number, cid = changes[-1]
+                result.append(dict(round=number, text=
+                    f'После уточняющего вопроса неоднократно менял версию категории «{CATEGORIES[i]}» без новых подтверждений; '
+                    f'сейчас предлагает «{CARDS[cid]["name"]}». Стоит уточнить аргументы, это не доказательство вины.'))
+        return result
+
     def suspicion(self, pid, target):
         return sum(self.suspicion_factors(pid, target).values())
 
@@ -1537,6 +1711,7 @@ class Game:
             factors["social"] = 0.0
             factors["persistence"] = min(0.42, 0.24 * len(self.public_persistence_events(knowledge, target)))
             factors["challenge_followup"] = min(0.32, 0.16 * len(self.challenge_events(knowledge, target)))
+            factors["unexplained_switch"] = min(0.30, 0.18 * len(self.public_switch_events(knowledge, target)))
             factors["unsupported_shift"] = 0.0
             factors["claim_alignment"] = 0.0
             factors["verified_conflict"] = 0.0
@@ -1632,7 +1807,7 @@ class Game:
             # Revisions and agreement remain useful diagnostics, but cannot create
             # a negative suspicion balance or erase a verified contradiction.
             soft = sum(factors[k] for k in ("evidence_conflict", "persistence",
-                                            "unsupported_shift", "unbacked_churn", "pressure", "challenge_followup"))
+                                            "unsupported_shift", "unbacked_churn", "pressure", "challenge_followup", "unexplained_switch"))
             credit = -sum(min(0.0, factors[k]) for k in ("revision", "constructive_revision",
                                                         "supported_leads", "response"))
             factors["mitigation_cap"] = max(0.0, credit - 0.5 * soft)
@@ -1823,7 +1998,8 @@ class Game:
         pressure = self.public_pressure_events(knowledge, target)
         if pressure:
             return pressure[-1]["text"]
-        persistent = self.public_persistence_events(knowledge, target) + self.challenge_events(knowledge, target)
+        persistent = (self.public_persistence_events(knowledge, target) + self.challenge_events(knowledge, target)
+                      + self.public_switch_events(knowledge, target))
         if persistent:
             return persistent[-1]["text"]
         return "Предварительное подозрение; конкретных доказательств пока нет."
@@ -1882,6 +2058,9 @@ class Game:
             arguments_against.extend(self.public_persistence_events(knowledge, pid))
             arguments_against.extend(self.challenge_events(knowledge, pid))
             arguments_against.extend(self.public_contradictions(knowledge, pid))
+            arguments_against.extend(self.public_switch_events(knowledge, pid))
+            arguments_against.sort(key=lambda e: e["round"])
+            arguments_for.sort(key=lambda e: e["round"])
             people.append(dict(pid=pid, name=self.name(pid), count=len(incoming), incoming=incoming,
                 arguments_for=arguments_for[-5:], arguments_against=arguments_against[-5:],
                 outgoing=self.name(target) if target is not None else None, outgoing_round=current.get("round"),

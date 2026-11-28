@@ -47,11 +47,11 @@ def install(url, digest, entry):
                 os.replace(temporary, target)
         marker.write_text(digest)
 
-install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/e2f5b6f6484417b09c705177bac9a6fbf42ce893fdc4647cda06d31469306df7.zip', 'e2f5b6f6484417b09c705177bac9a6fbf42ce893fdc4647cda06d31469306df7', 'xonars-ghost-letters')
+install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b2f85a340c707c25802d1f4cf06939ff989e7d031c2493e961f7c8ef283a2b5f.zip', 'b2f85a340c707c25802d1f4cf06939ff989e7d031c2493e961f7c8ef283a2b5f', 'xonars-ghost-letters')
 """
   let storeInstall = "python -c ${sh(storeBootstrap)}"
 
-  meta { owl: 18; description: "Карточное расследование с тайной перепиской · ресурсы при первом запуске"; version: "3.6.0"; category: "games" ; license: "MIT" }
+  meta { owl: 18; description: "Карточное расследование с тайной перепиской · ресурсы при первом запуске"; version: "3.7.0"; category: "games" ; license: "MIT" }
   title: "Письма призрака"
   icon: appIcon
   requires { pacman: ["python"] }
@@ -1999,7 +1999,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/e2f5
                 Action { label: item.label; hot: false }
               }
             }
-            Text { text: "3.6.0 · Социальная дедукция"; color: dim; font: sans; fontSize: 11; align: center }
+            Text { text: "3.7.0 · Живое расследование"; color: dim; font: sans; fontSize: 11; align: center }
           }
         } else if setup {
           Column {

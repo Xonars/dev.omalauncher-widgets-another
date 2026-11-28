@@ -1,5 +1,5 @@
 app "Письма призрака" {
-  meta { owl: 18; description: "Карточное расследование с тайной перепиской"; version: "3.6.0"; category: "games" }
+  meta { owl: 18; description: "Карточное расследование с тайной перепиской"; version: "3.7.0"; category: "games" }
   title: "Письма призрака"
   icon: appIcon
   requires { pacman: ["python"] }
@@ -1947,7 +1947,7 @@ app "Письма призрака" {
                 Action { label: item.label; hot: false }
               }
             }
-            Text { text: "3.6.0 · Социальная дедукция"; color: dim; font: sans; fontSize: 11; align: center }
+            Text { text: "3.7.0 · Живое расследование"; color: dim; font: sans; fontSize: 11; align: center }
           }
         } else if setup {
           Column {
