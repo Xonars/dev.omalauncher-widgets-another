@@ -24,8 +24,8 @@ import uuid
 HERE = Path(__file__).resolve().parent
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "ghost-letters"
 ANALYTICS_SCHEMA = 1
-GAME_VERSION = "3.4.0"
-BOT_VERSION = "5.1.0"
+GAME_VERSION = "3.5.0"
+BOT_VERSION = "5.2.0"
 CATEGORIES = ("Мотив", "Место", "Способ")
 STANCES = ("Пока не уверен", "Предварительная версия", "Уверенная версия")
 DEFENSES = ("Я проверял гипотезу", "Я пересмотрел версию", "Я сохраняю свою версию")
@@ -521,9 +521,9 @@ class Game:
             if not self.actor:
                 self.collect_bot_mail()
         elif self.phase == "reveal":
-            order = list(range(1, len(self.d["players"])))
-            offset = (self.d["round"] - 1) % len(order)
-            self.d["speakers"] = order[offset:] + order[:offset]
+            # Use the same visible seat order every round, without the ghost.
+            self.d["speakers"] = [pid for pid in range(1, len(self.d["players"]))
+                                  if pid not in self.d["excluded"]]
             self.next_speaker()
         elif self.phase == "statement":
             self.next_speaker()
@@ -1059,6 +1059,16 @@ class Game:
         self.d["mail"] = []
         self.set_phase("reveal")
 
+    def discussion_targets(self, observer):
+        """Only participants with an already published, substantive statement.
+        Prior rounds remain usable; unopened private mail and future speakers do not.
+        """
+        spoken = {n["pid"] for n in self.player_knowledge(observer)["notes"]
+                  if n["round"] <= self.d["round"] and
+                  (n.get("claim") is not None or n.get("leads") or n.get("tests") or n.get("suspect") is not None)}
+        return [pid for pid in range(1, len(self.d["players"]))
+                if pid != observer and pid not in self.d["excluded"] and pid in spoken]
+
     def next_speaker(self):
         if not self.d["speakers"]:
             self.d["history"].extend(self.d["notes"])
@@ -1084,8 +1094,10 @@ class Game:
         suspect = None
         suspects = []
         if not self.cooperative and (knowledge["difficulty"] != "easy" or final_round or self.noise("name a suspect", pid) < 0.48):
-            suspects = [i for i in range(1, len(self.d["players"])) if i != pid and i not in self.d["excluded"]]
-            suspect = max(suspects, key=lambda target: self.suspicion(pid, target))
+            suspects = self.discussion_targets(pid)
+            grounded = [target for target in suspects
+                        if not self.public_reason(pid, target).startswith("Предварительное подозрение")]
+            suspect = max(grounded, key=lambda target: self.suspicion(pid, target), default=None)
         tests = planned[:] or ([max(leads.values(), key=lambda cid: affinity(claim, cid))] if claim is not None else [])
         if claim is not None and hostile and not self.claim_opened(claim):
             # Only an unopened letter can safely be misrepresented.
@@ -1097,15 +1109,6 @@ class Game:
                     claim, tests = alternative, [target]
         speech = self.bot_speech(knowledge, claim, tests, leads, receipt.get("check"), suspect=suspect)
         reason = self.public_reason(pid, suspect) if suspect is not None else ""
-        if suspect is not None and not hostile and knowledge["difficulty"] != "easy" and reason.startswith("Предварительное подозрение"):
-            previous = [n for n in knowledge["notes"] if n["pid"] == pid and n.get("suspect") == suspect]
-            if knowledge["role"] == "witness" and not any(n["round"] == knowledge["round"] - 1 for n in previous) and (
-                    final_round or self.noise("witness caution", pid, knowledge["round"]) < 0.60):
-                reason = "Хочу внимательнее проверить этого игрока; открытых доказательств пока нет."
-                speech += f" Какие письма и проверки игрока «{self.name(suspect)}» мы можем сопоставить? Пока не утверждаю, что он виновен."
-            else:
-                suspect, reason = None, ""
-                speech = self.bot_speech(knowledge, claim, tests, leads, receipt.get("check"), suspect=None)
         if not self.cooperative and not hostile and knowledge["difficulty"] != "easy" and suspect is None:
             # Inquiry is not an accusation. Keep the suspect field empty when evidence is insufficient.
             peers = [n for n in knowledge["notes"] if n["pid"] != pid and n["round"] == knowledge["round"]
@@ -1765,6 +1768,7 @@ class Game:
             arguments_against.extend(self.public_impossible_claims(knowledge, pid))
             arguments_against.extend(self.public_claim_disputes(knowledge, pid))
             arguments_against.extend(self.public_pressure_events(knowledge, pid))
+            arguments_against.extend(self.public_persistence_events(knowledge, pid))
             arguments_against.extend(self.public_contradictions(knowledge, pid))
             people.append(dict(pid=pid, name=self.name(pid), count=len(incoming), incoming=incoming,
                 arguments_for=arguments_for[-5:], arguments_against=arguments_against[-5:],
@@ -1924,8 +1928,8 @@ class Game:
         for note in self.d["history"]:
             position = opinions.setdefault(note["pid"], {})
             position.update(self.note_leads(note))
-            if note["suspect"] is not None:
-                position["suspect"] = note["suspect"]
+            # A later statement without suspicion withdraws the earlier accusation.
+            position["suspect"] = note["suspect"]
 
         groups = []
         for key in self.d["vote_keys"]:
@@ -1997,8 +2001,7 @@ class Game:
                 groups.append(group("seal2", "Вторая карта с руки", hand, False))
             return groups + [group("discard", "Сбросить и заменить", hand, False)]
         if phase == "note":
-            suspect = group("person", "Кого подозреваешь", self.people(
-                pid for pid in range(1, len(self.d["players"])) if pid != self.actor), False)
+            suspect = group("person", "Кого подозреваешь", self.people(self.discussion_targets(self.actor)), False)
             board_options = [card_view(cid, detail=CATEGORIES[i]) for i, row in enumerate(self.d["board"])
                              for cid in row]
             receipt = self.mail_receipt(self.actor)
@@ -2025,8 +2028,9 @@ class Game:
                 category["label"] = "Моя версия · " + category["label"]
             groups.extend(categories)
             if not self.cooperative:
-                groups += [group("stance", "Уверенность только в версии", [dict(value=i, label=label, glyph="·") for i,label in enumerate(STANCES)], False), suspect,
-                           group("reason", "Почему подозреваешь (необязательно)", [dict(value=i, label=label, glyph="·") for i,label in enumerate(ACCUSATION_REASONS)], False)]
+                groups.append(group("stance", "Уверенность только в версии", [dict(value=i, label=label, glyph="·") for i,label in enumerate(STANCES)], False))
+                if suspect["options"]:
+                    groups += [suspect, group("reason", "Почему подозреваешь (необязательно)", [dict(value=i, label=label, glyph="·") for i,label in enumerate(ACCUSATION_REASONS)], False)]
             return groups
         if phase == "ballot":
             return self.ballot_groups()
@@ -2047,6 +2051,8 @@ class Game:
         groups = self.groups()
         if phase == "note" and "lead" in picks and "test" not in picks:
             picks = dict(picks, test=picks["lead"])
+        if phase == "note" and picks.get("person") is not None and picks["person"] not in self.discussion_targets(pid):
+            raise ValueError("Этот игрок ещё не дал показаний.")
         for g in groups:
             value = picks.get(g["key"])
             if value is None and not g["required"]:
@@ -2213,11 +2219,15 @@ class Game:
         phase = self.phase
         stage = {"intro":0,"mail":0,"sort":1,"reveal":1,"note":2,"statement":2,"discussion":3}.get(phase,-1)
         letter = next((x for x in self.d["letters"] if x["round"] == self.d["round"]), None)
+        participants = [pid for pid in range(1, len(self.d["players"])) if pid not in self.d["excluded"]]
+        spoken = list(dict.fromkeys(n["pid"] for n in self.d["notes"] if n["round"] == self.d["round"] and n["pid"] in participants))
+        remaining = self.d.get("speakers", []) if phase in ("note", "statement") else []
         result = dict(stage=stage, opened=len(self.letter_cards(letter)) if letter else 0,
                       archived=letter["missing"] if letter else 0,
                       received=(len(letter["echo"])+len(letter["silence"])+letter["missing"]) if letter else None,
-                      spoken=len(self.d["players"])-1-len(self.d.get("speakers", [])) if phase in ("note","statement","discussion") else 0,
-                      speakers=len(self.d["players"])-1)
+                      spoken=len(spoken) if phase in ("note","statement","discussion") else 0,
+                      speakers=len(participants), discussion_order=spoken + [pid for pid in remaining if pid not in spoken],
+                      current_speaker=self.actor if phase == "note" else self.d.get("speaker") if phase == "statement" else None)
         if phase == "discussion":
             latest = {}
             for note in self.d["history"] + self.d["notes"]:
@@ -2522,7 +2532,8 @@ def advance_automatically(game, include_intro=True):
     """Execute only public transitions, in their original order, and stop before human input."""
     if len(game.d["local"]) != 1:
         return
-    phases = ("intro", "statement") if include_intro else ("statement",)
+    # Dynamic setup/mail transitions must never skip a participant’s visible turn.
+    phases = ("intro",) if include_intro else ()
     for _ in range(24):
         if game.actor is not None or game.phase not in phases:
             return
