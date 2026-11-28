@@ -24,8 +24,8 @@ import uuid
 HERE = Path(__file__).resolve().parent
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "ghost-letters"
 ANALYTICS_SCHEMA = 1
-GAME_VERSION = "3.3.0"
-BOT_VERSION = "5.0.0"
+GAME_VERSION = "3.4.0"
+BOT_VERSION = "5.1.0"
 CATEGORIES = ("Мотив", "Место", "Способ")
 STANCES = ("Пока не уверен", "Предварительная версия", "Уверенная версия")
 DEFENSES = ("Я проверял гипотезу", "Я пересмотрел версию", "Я сохраняю свою версию")
@@ -576,10 +576,11 @@ class Game:
                   for i, row in enumerate(rows)]
         opinions = [{} for _ in rows]
         tested = [set() for _ in rows]
+        hostile = {knowledge["killer"], *knowledge["allies"]}
         for note in sorted(knowledge["notes"], key=lambda n: n["round"]):
             for key, cid in note["leads"].items():
                 i = int(key)
-                if cid in rows[i] and note.get("stance", 1) != 0:
+                if cid in rows[i] and note.get("stance", 1) != 0 and note["pid"] not in hostile:
                     opinions[i][note["pid"]] = (cid, note["round"], 1.0)
             # A test identifies a category to clarify, never an endorsed card.
             for i, row in enumerate(rows):
@@ -643,7 +644,8 @@ class Game:
             human = context.get("human", [[] for _ in self.d["truth"]])[i]
             uncertain = any(n["card"] != truth or n["confidence"] < 1.0 or
                             n["round"] < self.d["round"] - 1 for n in human)
-            local_present = any(p["local"] for p in self.d["players"][1:])
+            local_present = any(p["local"] and p["role"] not in ("killer", "accomplice")
+                                for p in self.d["players"][1:])
             scores = context["scores"][i]
             gap = scores[truth] - max(v for c, v in scores.items() if c != truth)
             # Do not repeat an already decisive clue just because a human stayed silent.
@@ -966,6 +968,13 @@ class Game:
             for i, row in enumerate(knowledge["board"]):
                 ranked = sorted((evidence_score(knowledge, c, i) for c in row), reverse=True)
                 uncertainty.append(1.0 / (1.0 + max(0.0, ranked[0] - ranked[1])))
+            if adaptive and not hostile:
+                # Shared public priorities plus rotation; no access to other private plans.
+                ordered = sorted(range(len(CATEGORIES)), key=lambda i: (-uncertainty[i], i))
+                slot = (pid + knowledge["round"]) % len(CATEGORIES)
+                focus = ordered[slot]
+                if uncertainty[focus] < 0.55 * uncertainty[ordered[0]]:
+                    focus = ordered[0]
 
             def mail_score(card, target):
                 row = next(row for row in knowledge["board"] if target in row)
@@ -979,8 +988,9 @@ class Game:
                 if adaptive:
                     i = knowledge["board"].index(row)
                     if not hostile:
-                        score *= 0.25 + uncertainty[i]
-                        score += 0.42 * (i == focus) * uncertainty[i]
+                        score *= 0.12 + 1.35 * uncertainty[i]
+                        score += 0.85 * (i == focus) * uncertainty[i]
+                        score -= 0.65 * (max(uncertainty) - uncertainty[i])
                         score -= min(1.15, 0.45 * attempted[target])
                         score += 0.35 * max(-1.0, rankings[i][target] - max(rankings[i].values()))
                         # Negative evidence from previous unopened mail is weak, not proof.
@@ -1096,6 +1106,20 @@ class Game:
             else:
                 suspect, reason = None, ""
                 speech = self.bot_speech(knowledge, claim, tests, leads, receipt.get("check"), suspect=None)
+        if not self.cooperative and not hostile and knowledge["difficulty"] != "easy" and suspect is None:
+            # Inquiry is not an accusation. Keep the suspect field empty when evidence is insufficient.
+            peers = [n for n in knowledge["notes"] if n["pid"] != pid and n["round"] == knowledge["round"]
+                     and n["pid"] not in self.d["excluded"] and n.get("stance", 1) != 0 and n["leads"]]
+            if peers:
+                other = max(peers, key=lambda n: (sum(k in leads and leads[k] != c for k, c in n["leads"].items()),
+                            self.noise("inquiry peer", pid, n["pid"])))
+                disputed = next((c for k, c in other["leads"].items() if k in leads and leads[k] != c), None)
+                if disputed is not None:
+                    speech += f' Вопрос игроку «{self.name(other["pid"])}»: какое открытое письмо поддерживает «{CARDS[disputed]["name"]}»? Это уточнение, не обвинение.'
+                else:
+                    speech += f' Игрок «{self.name(other["pid"])}», есть ли противоречия в показаниях, которые стоит проверить? Пока оснований для обвинения нет.'
+            else:
+                speech += " Пока не вижу проверяемого противоречия в показаниях; не буду обвинять наугад."
         if "analytics" in self.d:
             self.trace("bot_discussion", pid=pid, knowledge=knowledge, rankings=rankings,
                        suspect_scores={target:self.suspicion(pid,target) for target in suspects},
@@ -1350,6 +1374,39 @@ class Game:
                         "после этого другие игроки приняли эту версию. Это повод уточнить аргументы, не доказательство обмана.")
         return list(result.values())
 
+    def public_persistence_events(self, knowledge, target):
+        """Repeated emphatic endorsements despite clear evidence are a weak inquiry lead.
+
+        A test, a single mistake, a tentative version or silence never counts.
+        This measures behavior, not guilt, and uses contemporaneous public evidence.
+        """
+        seen, result = {}, {}
+        for note in sorted(knowledge["notes"], key=lambda n: n["round"]):
+            if note["pid"] != target:
+                continue
+            if note.get("stance", 1) != 2:
+                seen.clear()
+                continue
+            visible = public_evidence_at(knowledge, note["round"])
+            for key, cid in note["leads"].items():
+                i = int(key)
+                scores = {c: evidence_score(visible, c, i) for c in visible["board"][i]}
+                if cid not in scores:
+                    continue
+                ranking = sorted(scores.values(), reverse=True)
+                if ranking[0] - ranking[1] < 0.65 or ranking[0] - scores[cid] < 0.85:
+                    continue
+                number = note["round"]
+                previous, count = seen.get((key, cid), (-1, 0))
+                count = count + 1 if previous == number - 1 else 1
+                seen[(key, cid)] = (number, count)
+                # Two rounds can reflect honest disagreement; require three consecutive
+                # emphatic endorsements under strong contemporaneous evidence.
+                if count >= 3:
+                    result[(key, cid)] = dict(round=note["round"], text=
+                        f'Не раз уверенно поддерживал «{CARDS[cid]["name"]}», хотя открытые письма сильнее поддерживали другой вариант. Хочу понять аргументы; это не доказательство вины.')
+        return list(result.values())
+
     def suspicion(self, pid, target):
         return sum(self.suspicion_factors(pid, target).values())
 
@@ -1365,7 +1422,7 @@ class Game:
             # Stable, symmetric tie-break; neither seating nor popularity is evidence.
             factors["noise"] = (self.noise("arrest tie", pid, target) - 0.5) * 0.04
             factors["social"] = 0.0
-            factors["persistence"] = 0.0
+            factors["persistence"] = min(0.42, 0.24 * len(self.public_persistence_events(knowledge, target)))
             factors["unsupported_shift"] = 0.0
             factors["claim_alignment"] = 0.0
             factors["verified_conflict"] = 0.0
@@ -1500,12 +1557,8 @@ class Game:
                 else:
                     scores = self.theories(pid, int(key), "vote")
                 votes[key] = max(choices, key=scores.get)
-                if key == "suspect" and self.d.get("difficulty", "normal") != "easy" and p["role"] not in ("killer", "accomplice", "witness"):
-                    best = max(scores.values())
-                    if best < 0.45:
-                        plausible = [t for t in choices if best - scores[t] <= 0.12]
-                        votes[key] = max(plausible, key=lambda t: scores[t] +
-                                         0.15 * self.noise("uncertain arrest", pid, t, self.d["pass_no"]))
+                # Scores already contain a small seeded tie-break. Do not override evidence
+                # with a second, larger random term when all candidates are uncertain.
                 if "analytics" in self.d:
                     self.trace("bot_vote", pid=pid, key=key, candidates=choices, scores=scores,
                                selected=votes[key], knowledge=self.player_knowledge(pid), retry=self.d["pass_no"],
@@ -1656,6 +1709,9 @@ class Game:
         pressure = self.public_pressure_events(knowledge, target)
         if pressure:
             return pressure[-1]["text"]
+        persistent = self.public_persistence_events(knowledge, target)
+        if persistent:
+            return persistent[-1]["text"]
         return "Предварительное подозрение; конкретных доказательств пока нет."
 
     def investigation_view(self):

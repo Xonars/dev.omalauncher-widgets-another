@@ -457,6 +457,10 @@ class GhostLettersRules(unittest.TestCase):
     def test_human_public_lead_is_separate_from_test(self):
         g = Game.new("classic", 6, 1, False, difficulty="normal", seed=42)
         pid = g.d["local"][0]
+        # This fixture represents a human investigator, not a saboteur.
+        if g.d["players"][pid]["role"] == "killer":
+            detective = g.role_id("detective")
+            g.d["players"][pid]["role"], g.d["players"][detective]["role"] = "detective", "killer"
         g.d["round"] = 1
         g.d["speakers"] = [pid]
         g.set_phase("note", [pid])
@@ -615,14 +619,19 @@ class GhostLettersRules(unittest.TestCase):
             persistent = g.suspicion_factors(observer, target)
             g.d["history"][-1] = note(3, correct, 2)
             revised = g.suspicion_factors(observer, target)
-        self.assertEqual(tentative["persistence"], persistent["persistence"])
+        self.assertEqual(tentative["persistence"], 0)
+        self.assertGreater(persistent["persistence"], 0)
         self.assertEqual(tentative["evidence_conflict"], persistent["evidence_conflict"])
         self.assertLess(revised["constructive_revision"], 0)
-        self.assertAlmostEqual(sum(revised.values()), sum(persistent.values()))
+        self.assertLess(sum(revised.values()), sum(persistent.values()))
 
     def test_ghost_test_does_not_erase_prior_public_version(self):
         g = Game.new("classic", 6, 1, False, difficulty="normal", seed=42)
         owner = g.d["local"][0]
+        # This fixture represents a human investigator, not a saboteur.
+        if g.d["players"][owner]["role"] == "killer":
+            detective = g.role_id("detective")
+            g.d["players"][owner]["role"], g.d["players"][detective]["role"] = "detective", "killer"
         wrong, tested = g.d["board"][0][:2]
         g.d["round"] = 3
         g.d["history"] = [
@@ -786,6 +795,10 @@ class GhostLettersRules(unittest.TestCase):
             g.d["history"].append(dict(g.d["history"][0], round=2))
             self.assertEqual(g.suspicion_factors(observer, owner)["persistence"], 0)
             self.assertTrue(g.public_reason(observer, owner).startswith("Предварительное подозрение"))
+            g.d["round"] = 3
+            g.d["history"].append(dict(g.d["history"][0], round=3))
+            self.assertGreater(g.suspicion_factors(observer, owner)["persistence"], 0)
+            self.assertIn("не доказательство вины", g.public_reason(observer, owner))
 
     def test_direct_functional_associations(self):
         self.assertEqual(mod.affinity(7, 1), 4.0)
@@ -924,6 +937,38 @@ class GhostLettersRules(unittest.TestCase):
         self.assertGreater(a("Шарф","Лёд"),a("Ракета","Лёд"))
         self.assertGreater(a("Доска","Парта"),a("Доска","Катушка"))
         self.assertGreater(a("Поезд","Ракета"),a("Компас","Ракета"))
+
+    def test_v51_ghost_ignores_hostile_endorsement_not_private_hands(self):
+        g = Game.new("classic", 6, 1, False, difficulty="normal", seed=42)
+        owner = g.d["local"][0]
+        killer = g.role_id("killer")
+        if killer != owner:
+            g.d["players"][killer]["role"], g.d["players"][owner]["role"] = "detective", "killer"
+        right, wrong = g.d["board"][0][:2]
+        g.d["round"] = 2
+        detective = g.role_id("detective")
+        g.d["history"] = [
+            dict(pid=detective, round=1, leads={"0":right}, suspect=None, claim=None, tests=[], stance=1),
+            dict(pid=owner, round=1, leads={"0":wrong}, suspect=None, claim=None, tests=[], stance=2)]
+        context = g.ghost_context()
+        self.assertEqual(context["public"][0][right], 1.0)
+        self.assertEqual(context["public"][0][wrong], 0.0)
+        self.assertEqual(context["human"][0], [])
+        g.d["players"][owner]["hand"] = [0, 1, 2]
+        self.assertEqual(context, g.ghost_context())
+
+    def test_v51_arrest_does_not_override_rank_with_second_noise(self):
+        from unittest.mock import patch
+        g = Game.new("classic", 6, 1, False, difficulty="normal", seed=42)
+        owner = g.d["local"][0]
+        observer = next(p for p in range(1,6) if p != owner and g.d["players"][p]["role"] == "detective")
+        preferred = next(p for p in range(1,6) if p != observer)
+        g.d["vote_keys"] = ["suspect"]
+        g.d["ballots"] = {str(owner): {"suspect": next(p for p in range(1,6) if p != owner)}}
+        with patch.object(g, "suspicion", side_effect=lambda p,t: 0.02 if t == preferred else 0.01), \
+                patch.object(g, "noise", side_effect=lambda purpose,*parts: float(purpose == "uncertain arrest" and parts[1] != preferred)):
+            g.finish_vote()
+        self.assertEqual(g.d["ballots"][str(observer)]["suspect"], preferred)
 
     def test_store_version_matches_engine_and_local_owl(self):
         import re
