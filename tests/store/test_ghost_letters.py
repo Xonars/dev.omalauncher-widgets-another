@@ -1048,6 +1048,19 @@ class GhostLettersRules(unittest.TestCase):
             self.assertNotIn('Собрать остальные версии', source)
             self.assertNotIn('advance_fast ${sh(token)}', source)
 
+    def test_mail_screen_guides_selection_and_preserves_board_space(self):
+        for path in (ROOT / "local/phone-widgets/ghost-letters.owl",
+                     ROOT / "apps/xonars/ghost-letters/app.owl"):
+            source = path.read_text()
+            for marker in ("Выбери карту для письма", "Сброс (необяз.)",
+                           "Сначала выбери письмо", "Отправить: ${mailCard.label}",
+                           "Что хочешь проверить? · необязательно",
+                           "Твой ход · отправь письмо", "compactMailCard"):
+                self.assertIn(marker, source)
+            self.assertIn('if phase != "mail" {\n            Row {', source)
+            self.assertIn('choices = set(choices, handAction, option.value)', source)
+            self.assertIn('if !showDesk && shownPage == "" && phase == "mail"', source)
+
     def test_start_screen_uses_shared_top_roster_and_intro(self):
         for path in (ROOT / "local/phone-widgets/ghost-letters.owl",
                      ROOT / "apps/xonars/ghost-letters/app.owl"):
