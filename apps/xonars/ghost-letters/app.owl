@@ -51,7 +51,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/31af
 """
   let storeInstall = "python -c ${sh(storeBootstrap)}"
 
-  meta { owl: 18; description: "Карточное расследование с тайной перепиской · ресурсы при первом запуске"; version: "3.2.0"; category: "games" ; license: "MIT" }
+  meta { owl: 18; description: "Карточное расследование с тайной перепиской · ресурсы при первом запуске"; version: "3.3.0"; category: "games" ; license: "MIT" }
   title: "Письма призрака"
   icon: appIcon
   requires { pacman: ["python"] }
@@ -1978,7 +1978,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/31af
                 Action { label: item.label; hot: false }
               }
             }
-            Text { text: "3.2.0 · Интеллект расследования"; color: dim; font: sans; fontSize: 11; align: center }
+            Text { text: "3.3.0 · Социальная дедукция"; color: dim; font: sans; fontSize: 11; align: center }
           }
         } else if setup {
           Column {

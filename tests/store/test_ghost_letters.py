@@ -268,11 +268,12 @@ class GhostLettersRules(unittest.TestCase):
         with patch.object(mod, "evidence_score", side_effect=score):
             persistent = g.suspicion_factors(pid, target)
             revised = g.suspicion_factors(pid, other)
-        self.assertGreater(persistent["persistence"], 0)
-        self.assertGreater(persistent["evidence_conflict"], revised["evidence_conflict"])
+        self.assertEqual(persistent["persistence"], 0)
+        self.assertEqual(persistent["evidence_conflict"], revised["evidence_conflict"])
         self.assertEqual(revised["evidence_conflict"], 0)
         self.assertLess(revised["revision"], 0)
-        self.assertGreater(sum(persistent.values()), sum(revised.values()))
+        self.assertAlmostEqual(sum(v for k,v in persistent.items() if k != "noise"), 0)
+        self.assertAlmostEqual(sum(v for k,v in revised.items() if k != "noise"), 0)
         self.assertLessEqual(persistent["noise"], 0.95 * 0.22)
 
     def test_social_deduction_does_not_read_private_roles_or_mail(self):
@@ -563,7 +564,7 @@ class GhostLettersRules(unittest.TestCase):
             g.d["history"].append(dict(pid=target, round=n, leads={"2": cid},
                                        suspect=None, claim=None, tests=[]))
             factor = g.suspicion_factors(pid, target)["unbacked_churn"]
-            self.assertEqual(factor, 0.12 if n == 3 else 0.0)
+            self.assertEqual(factor, 0.0)
 
     def test_investigation_is_public_and_tracks_withdrawal(self):
         g = Game.new("classic", 6, 1, False, seed=42)
@@ -614,10 +615,10 @@ class GhostLettersRules(unittest.TestCase):
             persistent = g.suspicion_factors(observer, target)
             g.d["history"][-1] = note(3, correct, 2)
             revised = g.suspicion_factors(observer, target)
-        self.assertLess(tentative["persistence"], persistent["persistence"])
-        self.assertLess(tentative["evidence_conflict"], persistent["evidence_conflict"])
+        self.assertEqual(tentative["persistence"], persistent["persistence"])
+        self.assertEqual(tentative["evidence_conflict"], persistent["evidence_conflict"])
         self.assertLess(revised["constructive_revision"], 0)
-        self.assertLess(sum(revised.values()), sum(persistent.values()))
+        self.assertAlmostEqual(sum(revised.values()), sum(persistent.values()))
 
     def test_ghost_test_does_not_erase_prior_public_version(self):
         g = Game.new("classic", 6, 1, False, difficulty="normal", seed=42)
@@ -783,8 +784,8 @@ class GhostLettersRules(unittest.TestCase):
             self.assertEqual(g.suspicion_factors(observer, owner)["evidence_conflict"], 0)
             self.assertTrue(g.public_reason(observer, owner).startswith("Предварительное подозрение"))
             g.d["history"].append(dict(g.d["history"][0], round=2))
-            self.assertGreater(g.suspicion_factors(observer, owner)["persistence"], 0)
-            self.assertIn("Повторно", g.public_reason(observer, owner))
+            self.assertEqual(g.suspicion_factors(observer, owner)["persistence"], 0)
+            self.assertTrue(g.public_reason(observer, owner).startswith("Предварительное подозрение"))
 
     def test_direct_functional_associations(self):
         self.assertEqual(mod.affinity(7, 1), 4.0)
@@ -879,6 +880,50 @@ class GhostLettersRules(unittest.TestCase):
             g.d["history"][-1]["stance"] = 2
             g.d["history"][0]["stance"] = 0
             self.assertEqual(g.public_pressure_events(g.player_knowledge(3), 1), [])
+
+    def test_v5_last_two_cases_honest_versions_are_neutral(self):
+        # Public human statements and letters from the classic and witness cases.
+        for mode, total, board, letters, notes in (
+            ("classic", 6, [[23,96,103,101],[83,29,44,51],[116,38,58,130]],
+             [(0,[84],None),(1,[82],88),(2,[10],None),(3,[73],None),(4,[],None)],
+             [(1,{"1":83},64,[58],2),(2,{"1":83,"2":116},70,[23],1),
+              (3,{"0":101,"1":83,"2":116},114,[130],2),(4,{"0":101,"1":83,"2":116},97,[96],2)]),
+            ("witness", 7, [[61,15,88,0],[54,108,64,124],[115,71,122,28]],
+             [(0,[32],None),(1,[31],87),(2,[],None),(3,[83],None),(4,[],74)],
+             [(1,{"0":15,"2":28},82,[0],1),(2,{"0":15,"2":28},41,[54],1),
+              (3,{},121,[122],0),(4,{},35,[124],0)])):
+            g = Game.new(mode, total, 1, False, difficulty="normal", seed=42)
+            target = g.d["local"][0]
+            observer = next(p for p in range(1,total) if p != target and g.d["players"][p]["role"] == "detective")
+            g.d["board"], g.d["round"] = board, 4
+            g.d["letters"] = [dict(round=n,echo=e,seal=s,silence=[],extra=[]) for n,e,s in letters]
+            g.d["history"] = [dict(pid=target,round=n,leads=l,claim=c,tests=t,stance=st,suspect=None)
+                              for n,l,c,t,st in notes]
+            factors = g.suspicion_factors(observer,target)
+            for key in ("persistence","evidence_conflict","unsupported_shift","unbacked_churn","impossible_claim"):
+                self.assertEqual(factors[key],0,(mode,key))
+            self.assertTrue(g.public_reason(observer,target).startswith("Предварительное подозрение"))
+
+    def test_v5_impossible_public_mail_and_valid_echo(self):
+        g = Game.new("classic",6,1,False,seed=42)
+        observer = g.role_id("detective")
+        target = next(p for p in range(1,6) if p != observer)
+        g.d["round"] = 2
+        c = g.d["deck"][-1]
+        g.d["history"] = [dict(pid=target,round=1,leads={},claim=c,tests=[],suspect=None)]
+        g.d["letters"] = [dict(round=1,echo=[c],seal=None,silence=[],extra=[])]
+        self.assertEqual(g.suspicion_factors(observer,target)["impossible_claim"],0)
+        g.d["letters"][0]["round"] = 2
+        self.assertGreater(g.suspicion_factors(observer,target)["impossible_claim"],1)
+        g.d["letters"][0].update(round=1,echo=[],seal=c)
+        self.assertGreater(g.suspicion_factors(observer,target)["impossible_claim"],1)
+
+    def test_v5_semantic_priority(self):
+        names = {c["name"]:c["id"] for c in mod.CARDS}
+        a = lambda x,y:mod.affinity(names[x],names[y])
+        self.assertGreater(a("Шарф","Лёд"),a("Ракета","Лёд"))
+        self.assertGreater(a("Доска","Парта"),a("Доска","Катушка"))
+        self.assertGreater(a("Поезд","Ракета"),a("Компас","Ракета"))
 
     def test_store_version_matches_engine_and_local_owl(self):
         import re
