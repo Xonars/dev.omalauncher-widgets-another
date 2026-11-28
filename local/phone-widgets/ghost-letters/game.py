@@ -970,7 +970,7 @@ class Game:
                                     or (context is not None and context["remaining"] <= 1)):
             discard = None
         if stalled:
-            self.trace("ghost_stall", round=self.d["round"], discard=discard,
+            self.trace("ghost_stall", discard=discard,
                        gaps=[row_gap(context["scores"][i], truth) for i, truth in enumerate(self.d["truth"])],
                        reason="no_safe_discriminating_hint")
         if "analytics" in self.d:
@@ -1252,9 +1252,9 @@ class Game:
                             self.noise("inquiry peer", pid, n["pid"])))
                 disputed = next((c for k, c in other["leads"].items() if k in leads and leads[k] != c), None)
                 if disputed is not None:
-                    speech += f' Вопрос игроку «{self.name(other["pid"])}»: какое открытое письмо поддерживает «{CARDS[disputed]["name"]}»? Это уточнение, не обвинение.'
+                    speech += f' Расхождение с игроком «{self.name(other["pid"])}» по карте «{CARDS[disputed]["name"]}» стоит обсудить после основных реплик.'
                 else:
-                    speech += f' Игрок «{self.name(other["pid"])}», есть ли противоречия в показаниях, которые стоит проверить? Пока оснований для обвинения нет.'
+                    speech += " Пока не вижу оснований обвинять кого-либо."
             else:
                 speech += " Пока не вижу проверяемого противоречия в показаниях; не буду обвинять наугад."
         if "analytics" in self.d:
@@ -1351,7 +1351,7 @@ class Game:
                         if delta > 0.12:
                             parts.append(f"Подсказка {names([hint])} " + ("отмечена как ложный след и помогает исключать варианты." if sign < 0 else f"лучше согласуется с {names([own])}."))
                         elif rival != own:
-                            parts.append("По открытым письмам пока не могу уверенно отличить эти версии. Какое конкретное письмо поддерживает другую версию?")
+                            parts.append("По открытым письмам пока не могу уверенно отличить эти версии.")
             elif knowledge["own_leads"]:
                 prior = knowledge["own_leads"]
                 same = any(prior.get(k) == cid for k, cid in leads.items())
@@ -1422,7 +1422,7 @@ class Game:
                     asked.add((old["target"], key, old["rival"], old["alternative"]))
         # A public contradiction discovered by the last speaker must be visible
         # before the ballot, not only in the internal arrest score.
-        for target in notes:
+        for target in ([] if self.cooperative else notes):
             pid = target["pid"]
             reasons = [e for e in self.public_impossible_claims(knowledge, pid)
                        if e["round"] == number]
@@ -1665,11 +1665,17 @@ class Game:
             row = knowledge["board"][i]
             prior = None
             changes = []
+            questions = [int(n) for n, entries in self.d.get("exchanges", {}).items() for e in entries
+                         if e.get("kind", "theory") == "theory" and e.get("target") == target
+                         and e.get("key") == key and not e.get("supported")]
+            if not questions:
+                continue
+            first_question = min(questions)
             for note in notes:
                 cid = note["leads"].get(key)
                 if cid not in row:
                     continue
-                if prior is not None and prior[0] != cid:
+                if prior is not None and prior[0] != cid and note["round"] > first_question:
                     old, number = prior
                     now = public_evidence_at(knowledge, note["round"])
                     before = public_evidence_at(knowledge, number)
@@ -1681,11 +1687,7 @@ class Game:
                     else:
                         changes.clear()
                 prior = (cid, note["round"])
-            challenged = any(e.get("kind", "theory") == "theory" and e.get("target") == target
-                             and e.get("key") == key and not e.get("supported")
-                             and int(n) < changes[-1][0]
-                             for n, entries in self.d.get("exchanges", {}).items() for e in entries) if changes else False
-            if len(changes) >= 2 and challenged:
+            if len(changes) >= 2:
                 number, cid = changes[-1]
                 result.append(dict(round=number, text=
                     f'После уточняющего вопроса неоднократно менял версию категории «{CATEGORIES[i]}» без новых подтверждений; '
