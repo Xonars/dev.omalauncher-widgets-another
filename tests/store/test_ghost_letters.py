@@ -970,6 +970,84 @@ class GhostLettersRules(unittest.TestCase):
             g.finish_vote()
         self.assertEqual(g.d["ballots"][str(observer)]["suspect"], preferred)
 
+    def test_v52_discussion_follows_fixed_seats_and_never_skips(self):
+        for difficulty in ("easy", "normal", "hard"):
+            g = Game.new("classic", 7, 1, False, difficulty=difficulty, seed=42)
+            g.d["truth"] = [row[0] for row in g.d["board"]]
+            g.d["local"] = []
+            for p in g.d["players"]:
+                p["local"] = None
+            for number in (1, 2):
+                g.d["round"] = number
+                g.d["notes"] = []
+                g.set_phase("reveal")
+                g.advance()
+                for pid in range(1, 7):
+                    self.assertEqual(g.phase, "statement")
+                    self.assertEqual(g.d["speaker"], pid)
+                    self.assertEqual(g.flow_view()["current_speaker"], pid)
+                    self.assertEqual(g.flow_view()["discussion_order"], list(range(1,7)))
+                    self.assertEqual(g.flow_view()["spoken"], pid)
+                    accused = g.d["notes"][-1]["suspect"]
+                    if number == 1 and accused is not None:
+                        self.assertLess(accused, pid)
+                    g.advance()
+                self.assertEqual(g.phase, "discussion")
+                self.assertEqual(g.flow_view()["spoken"], 6)
+
+    def test_v52_unsaid_and_empty_statements_are_not_accusation_targets(self):
+        g = Game.new("classic", 6, 1, False, seed=42)
+        owner = g.d["local"][0]
+        first, waiting = [p for p in range(1,6) if p != owner][:2]
+        g.d["round"] = 1
+        g.d["speakers"] = [owner, waiting]
+        g.set_phase("note", [owner])
+        self.assertEqual(g.discussion_targets(owner), [])
+        self.assertFalse(any(s["key"] == "person" for s in g.groups()))
+        with self.assertRaises(ValueError):
+            g.submit({"person": waiting})
+        note = dict(pid=first, round=1, leads={}, suspect=None, claim=None, tests=[], stance=0)
+        g.d["notes"] = [note]
+        self.assertEqual(g.discussion_targets(owner), [])
+        note["tests"] = [g.d["board"][0][0]]
+        self.assertEqual(g.discussion_targets(owner), [first])
+        self.assertEqual([o["value"] for s in g.groups() if s["key"] == "person" for o in s["options"]], [first])
+        g.d["history"] = [note]
+        g.d["notes"] = []
+        g.d["round"] = 2
+        self.assertEqual(g.discussion_targets(owner), [first])
+
+    def test_v52_dynamic_mode_preserves_public_statement(self):
+        g = Game.new("classic", 6, 1, False, seed=42)
+        g.set_phase("statement")
+        before = g.d.copy()
+        mod.advance_automatically(g)
+        self.assertEqual(g.d, before)
+        mod.advance_automatically(g, include_intro=False)
+        self.assertEqual(g.d, before)
+
+    def test_v52_arrest_uses_only_top_roster_and_withdrawn_suspicions(self):
+        g = Game.new("classic", 6, 1, False, seed=42)
+        owner = g.d["local"][0]
+        source, target = [p for p in range(1,6) if p != owner][:2]
+        g.d["round"] = 2
+        g.d["history"] = [
+            dict(pid=source, round=1, leads={}, suspect=target, claim=None, tests=[]),
+            dict(pid=source, round=2, leads={}, suspect=None, claim=None, tests=[])]
+        g.start_vote(["suspect"])
+        options = g.ballot_groups()[0]["options"]
+        self.assertNotIn(owner, [o["value"] for o in options])
+        self.assertNotIn(0, [o["value"] for o in options])
+        self.assertEqual(next(o for o in options if o["value"] == target)["supporters"], [])
+        for path in (ROOT / "local/phone-widgets/ghost-letters.owl",
+                     ROOT / "apps/xonars/ghost-letters/app.owl"):
+            source = path.read_text()
+            self.assertIn('choices = set(choices, "suspect", player.value)', source)
+            self.assertIn('activeBallot.options ?? []).any(o => o.value == player.value)', source)
+            self.assertIn('ballot ? [] :', source)
+            self.assertNotIn('Собрать остальные версии', source)
+            self.assertNotIn('advance_fast ${sh(token)}', source)
+
     def test_store_version_matches_engine_and_local_owl(self):
         import re
         local = (SOURCE.parent / "ghost-letters.owl").read_text()
