@@ -793,6 +793,10 @@ class GhostLettersRules(unittest.TestCase):
             self.assertEqual(g.suspicion_factors(observer, owner)["evidence_conflict"], 0)
             self.assertTrue(g.public_reason(observer, owner).startswith("Предварительное подозрение"))
             g.d["history"].append(dict(g.d["history"][0], round=2))
+            self.assertEqual(g.suspicion_factors(observer, owner)["persistence"], 0)
+            self.assertTrue(g.public_reason(observer, owner).startswith("Предварительное подозрение"))
+            g.d["round"] = 3
+            g.d["history"].append(dict(g.d["history"][0], round=3))
             self.assertGreater(g.suspicion_factors(observer, owner)["persistence"], 0)
             self.assertIn("не доказательство вины", g.public_reason(observer, owner))
 
