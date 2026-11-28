@@ -47,11 +47,11 @@ def install(url, digest, entry):
                 os.replace(temporary, target)
         marker.write_text(digest)
 
-install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b56c9346af9325a0fc6f898d0535b7cbfb57f8b1a0fff49bcb29d5acb7f5c162.zip', 'b56c9346af9325a0fc6f898d0535b7cbfb57f8b1a0fff49bcb29d5acb7f5c162', 'xonars-ghost-letters')
+install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/e2f5b6f6484417b09c705177bac9a6fbf42ce893fdc4647cda06d31469306df7.zip', 'e2f5b6f6484417b09c705177bac9a6fbf42ce893fdc4647cda06d31469306df7', 'xonars-ghost-letters')
 """
   let storeInstall = "python -c ${sh(storeBootstrap)}"
 
-  meta { owl: 18; description: "Карточное расследование с тайной перепиской · ресурсы при первом запуске"; version: "3.5.0"; category: "games" ; license: "MIT" }
+  meta { owl: 18; description: "Карточное расследование с тайной перепиской · ресурсы при первом запуске"; version: "3.6.0"; category: "games" ; license: "MIT" }
   title: "Письма призрака"
   icon: appIcon
   requires { pacman: ["python"] }
@@ -1999,7 +1999,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b56c
                 Action { label: item.label; hot: false }
               }
             }
-            Text { text: "3.5.0 · Социальная дедукция"; color: dim; font: sans; fontSize: 11; align: center }
+            Text { text: "3.6.0 · Социальная дедукция"; color: dim; font: sans; fontSize: 11; align: center }
           }
         } else if setup {
           Column {
@@ -2180,8 +2180,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b56c
                   LiveStatement { player: sheet.speaker; opinion: sheet.statement; progress: "${sheet.flow.spoken} / ${sheet.flow.speakers}" }
                 }
                 if sheet.phase == "reveal" {
-                  RuleLabel { heading: "✉ ПРИЗРАК ОТВЕТИЛ" }
-                  Copy { body: "Изучи новое письмо, затем начинай обсуждение." }
+                  SceneTitle { heading: "Ход Призрака"; description: "Изучи открытые письма, затем начинай обсуждение." }
                 }
                 if !showDesk && len(sheet.board ?? []) > 0 && sheet.phase != "result" && sheet.phase != "role" {
                   if sheet.phase != "board" { LettersPanel { letters: sheet.letters } }
@@ -2211,7 +2210,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b56c
                       }
                     }
                   }
-                } else if phase != "board" && phase != "mail" && phase != "note" && phase != "statement" {
+                } else if phase != "board" && phase != "mail" && phase != "note" && phase != "statement" && phase != "reveal" {
                   SceneTitle { heading: ballot ? "Обвинительное заключение" : (sheet.phase == "discussion" ? "Версии за столом" : sheet.title); description: ballot || sheet.phase == "discussion" ? "" : sheet.brief }
                 }
                 if privateTurn && sheet.phase != "role" && (sheet.phase != "mail" && sheet.phase != "note" || len(sheet.actor.knowledge ?? []) > 0 || len(sheet.actor.recheck ?? []) > 0) {
@@ -2305,7 +2304,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b56c
                   RoundSummary { flow: sheet.flow; roster: sheet.roster }
                   InvestigationNotice { data: sheet.investigation }
                   if sheet.investigation.can_respond {
-                    CategoryLabel { label: "Ответить на обвинения"; tint: ash }
+                    CategoryLabel { label: "Ответить на вопросы и обвинения"; tint: ash }
                     for response in sheet.investigation.responses key response.value {
                       Box {
                         fill: width
@@ -2320,6 +2319,17 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b56c
                     }
                     Copy { body: "Ответ публичный. Боты учитывают его вместе с твоими действиями." }
                   } else if sheet.investigation.response != null { Copy { body: "Твой публичный ответ: ${sheet.investigation.response}" } }
+                  if len(sheet.exchanges ?? []) > 0 {
+                    CategoryLabel { label: "Вопросы и ответы" }
+                    for exchange in sheet.exchanges {
+                      Column {
+                        gap: 4; padding: 8; radius: 8; background: panel; border: 1; borderColor: rule
+                        Text { text: "${exchange.source} → ${exchange.target}"; color: gold; fontSize: 13; fontWeight: 700 }
+                        Copy { body: exchange.question }
+                        Copy { body: exchange.answer }
+                      }
+                    }
+                  }
                   CategoryLabel { label: "Реплики участников" }
                   Grid {
                     columns: showDesk && layoutWidth >= 1200 ? 2 : 1
@@ -2329,6 +2339,16 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/b56c
                     }
                   }
                   if len(sheet.notes) == 0 { Copy { body: "Никто не предложил версию." } }
+                }
+                if len(sheet.conclusions ?? []) > 0 {
+                  CategoryLabel { label: "Аргументы перед арестом" }
+                  for conclusion in sheet.conclusions {
+                    Column {
+                      gap: 3; padding: 7; radius: 8; background: panel
+                      Text { text: conclusion.player; color: gold; fontSize: 13; fontWeight: 700 }
+                      Copy { body: conclusion.text }
+                    }
+                  }
                 }
                 if ballot {
                   if activeBallot.key == "suspect" {

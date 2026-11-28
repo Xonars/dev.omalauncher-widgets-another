@@ -24,8 +24,8 @@ import uuid
 HERE = Path(__file__).resolve().parent
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "ghost-letters"
 ANALYTICS_SCHEMA = 1
-GAME_VERSION = "3.5.0"
-BOT_VERSION = "5.2.0"
+GAME_VERSION = "3.6.0"
+BOT_VERSION = "6.0.0"
 CATEGORIES = ("Мотив", "Место", "Способ")
 STANCES = ("Пока не уверен", "Предварительная версия", "Уверенная версия")
 DEFENSES = ("Я проверял гипотезу", "Я пересмотрел версию", "Я сохраняю свою версию")
@@ -291,13 +291,14 @@ def belief_scores(knowledge, category, purpose, noise):
 class Game:
     def __init__(self, data):
         self.d = data
+        self.d.setdefault("turn_order", list(range(1, len(data["players"]))))
 
     def enable_analytics(self, partial=False):
         if "analytics" not in self.d:
             self.d["analytics"] = dict(schema=ANALYTICS_SCHEMA, version=GAME_VERSION,
                 bot_version=BOT_VERSION, started_at=None if partial else int(time.time()),
                 partial=partial, events=[])
-            self.trace("capture_start", partial=partial, seed=self.d["seed"],
+            self.trace("capture_start", partial=partial, seed=self.d["seed"], turn_order=self.d["turn_order"],
                        mode=self.d["mode"], difficulty=self.d.get("difficulty", "normal"),
                        board=self.d["board"], players=[dict(pid=i, role=p["role"], local=p["local"],
                        profile=self.bot_profile(i) if i and not p["local"] else None)
@@ -360,7 +361,10 @@ class Game:
                         break
             board.append(row)
         rounds = 5 if total <= 4 else 4 if total <= 7 else 3 if total <= 10 else 2
+        turn_order = list(range(1, total))
+        random.Random(repr((seed, "table order"))).shuffle(turn_order)
         return cls(dict(
+            turn_order=turn_order, exchanges={},
             id=uuid.uuid4().hex, rev=0, seed=seed, mode=mode, phase="role", queue=local[:],
             players=players, local=local, board=board, deck=deck, discard=[], truth=[],
             schema=5, marked=marked, difficulty=difficulty, sequential=True, exposed_role=None, winners=[], notebooks={},
@@ -498,10 +502,8 @@ class Game:
         self.d["round"] += 1
         self.d["mail"] = []
         self.d["notes"] = []
-        local = [pid for pid in self.d["local"] if pid != 0]
-        offset = (self.d["round"] - 1) % len(local) if local else 0
         self.set_phase("intro")
-        self.d["writers"] = local[offset:] + local[:offset]
+        self.d["writers"] = [pid for pid in self.d["turn_order"] if pid not in self.d["excluded"]]
         self.d["first_sender"] = None
 
     def advance(self):
@@ -517,12 +519,12 @@ class Game:
                                    for i, row in enumerate(self.d["board"])]
                 self.move_to_opening()
         elif self.phase == "intro":
-            self.set_phase("mail", self.d["writers"])
-            if not self.actor:
-                self.collect_bot_mail()
+            self.set_phase("mail", [pid for pid in self.d["turn_order"]
+                                    if pid in self.d["local"] and pid not in self.d["excluded"]])
+            self.collect_bot_mail()
         elif self.phase == "reveal":
             # Use the same visible seat order every round, without the ghost.
-            self.d["speakers"] = [pid for pid in range(1, len(self.d["players"]))
+            self.d["speakers"] = [pid for pid in self.d["turn_order"]
                                   if pid not in self.d["excluded"]]
             self.next_speaker()
         elif self.phase == "statement":
@@ -825,6 +827,35 @@ class Game:
             own.append(best)
             add_positive(best)
             pool.remove(best)
+        # A complementary clue may distinguish the actual public rival even
+        # when the aggregate standalone gain is conservative. Never undo a
+        # previously established correct row just to avoid an empty round.
+        if context is not None and not echo and silence is None and not own:
+            def complementary(cid):
+                gains = []
+                for i, truth in enumerate(self.d["truth"]):
+                    scores = context["scores"][i]
+                    signals = {c: hint_signal(self.d["board"], c, i, cid) for c in scores}
+                    projected = {c: scores[c] + signals[c] for c in scores}
+                    before, after = row_gap(scores, truth), row_gap(projected, truth)
+                    if (before >= 0.25 and after < 0) or after < before - 0.24:
+                        return -1.0
+                    rivals = [c for c in scores if c != truth and context["public"][i][c] > 0]
+                    if before < 0.75 and rivals:
+                        contrast = min(signals[truth] - signals[c] for c in rivals)
+                        if contrast > 0.18 and after >= before:
+                            gains.append(contrast + 0.4 * (after - before))
+                return max(gains, default=-1.0)
+            candidates = [(c, "echo") for c in sent] + [(c, "own") for c in hand]
+            if candidates:
+                card, origin = max(candidates, key=lambda x: complementary(x[0]))
+                score = complementary(card)
+                if score >= 0.30:
+                    (echo if origin == "echo" else own).append(card)
+                    add_positive(card)
+                    if origin == "own" and card in pool:
+                        pool.remove(card)
+                    self.trace("ghost_complement", card=card, origin=origin, score=score)
         def retention(cid):
             if context is None:
                 return gain(cid)
@@ -916,9 +947,13 @@ class Game:
         self.refill(pid)
 
     def collect_bot_mail(self):
-        for pid, p in enumerate(self.d["players"]):
-            if pid == 0 or p["local"]:
+        receipts = self.d.setdefault("mail_log", {}).setdefault(str(self.d["round"]), {})
+        for pid in self.d["turn_order"]:
+            if pid in self.d["excluded"] or str(pid) in receipts:
                 continue
+            p = self.d["players"][pid]
+            if p["local"]:
+                return
             knowledge = self.player_knowledge(pid)
             profile = PROFILES[knowledge["profile"]]
             hostile = knowledge["role"] in ("killer", "accomplice")
@@ -971,7 +1006,7 @@ class Game:
             if adaptive and not hostile:
                 # Shared public priorities plus rotation; no access to other private plans.
                 ordered = sorted(range(len(CATEGORIES)), key=lambda i: (-uncertainty[i], i))
-                slot = (pid + knowledge["round"]) % len(CATEGORIES)
+                slot = (self.d["turn_order"].index(pid) + knowledge["round"]) % len(CATEGORIES)
                 focus = ordered[slot]
                 if uncertainty[focus] < 0.55 * uncertainty[ordered[0]]:
                     focus = ordered[0]
@@ -989,7 +1024,8 @@ class Game:
                     i = knowledge["board"].index(row)
                     if not hostile:
                         score *= 0.12 + 1.35 * uncertainty[i]
-                        score += 0.85 * (i == focus) * uncertainty[i]
+                        score += 1.55 * (i == focus) * uncertainty[i]
+                        score -= 0.30 * (i != focus) * uncertainty[i]
                         score -= 0.65 * (max(uncertainty) - uncertainty[i])
                         score -= min(1.15, 0.45 * attempted[target])
                         score += 0.35 * max(-1.0, rankings[i][target] - max(rankings[i].values()))
@@ -1072,6 +1108,7 @@ class Game:
     def next_speaker(self):
         if not self.d["speakers"]:
             self.d["history"].extend(self.d["notes"])
+            self.round_exchanges()
             self.set_phase("discussion")
             return
         pid = self.d["speakers"][0]
@@ -1259,13 +1296,86 @@ class Game:
         else:
             self.set_phase("statement")
 
+    def round_exchanges(self):
+        """Bounded public follow-ups; no secret roles or private mail used."""
+        number = self.d["round"]
+        store = self.d.setdefault("exchanges", {})
+        if str(number) in store:
+            return
+        notes = self.d["notes"]
+        knowledge = self.player_knowledge(0)
+        exchanges = []
+        for source in notes:
+            if self.d["players"][source["pid"]]["local"] or not source["leads"]:
+                continue
+            # The follow-up happens after all primary speeches, so even the
+            # last speaker may be questioned. No future testimony is used.
+            def disagreement(target):
+                return max((evidence_score(knowledge, c, int(k)) -
+                            evidence_score(knowledge, target["leads"][k], int(k))
+                            for k, c in source["leads"].items()
+                            if k in target["leads"] and target["leads"][k] != c), default=-1.0)
+            targets = sorted((n for n in notes if n["pid"] != source["pid"] and n.get("stance", 1) != 0),
+                             key=disagreement, reverse=True)
+            for target in targets:
+                common = [(k, c, target["leads"][k]) for k, c in source["leads"].items()
+                          if k in target["leads"] and target["leads"][k] != c]
+                if not common:
+                    continue
+                key, own, rival = max(common, key=lambda v: evidence_score(knowledge, v[1], int(v[0])) - evidence_score(knowledge, v[2], int(v[0])))
+                i = int(key)
+                gap = evidence_score(knowledge, own, i) - evidence_score(knowledge, rival, i)
+                if gap < 0.15:
+                    continue
+                question = f'Почему «{CARDS[rival]["name"]}», а не «{CARDS[own]["name"]}»? Какое письмо поддерживает эту версию?'
+                hints = [(h, sign) for letter in knowledge["letters"] for h, sign in letter["hints"]]
+                def contrast(pair):
+                    h, sign = pair
+                    return sign * (hint_signal(knowledge["board"], rival, i, h) - hint_signal(knowledge["board"], own, i, h))
+                best = max(hints, key=contrast, default=None)
+                supported = bool(best and contrast(best) > 0.12)
+                answer = None
+                if not self.d["players"][target["pid"]]["local"]:
+                    if supported:
+                        answer = f'Опираюсь на письмо «{CARDS[best[0]]["name"]}», но признаю, что есть и другая версия.'
+                    else:
+                        answer = "У меня нет отдельного письма, которое различает эти варианты. Моя версия остаётся предварительной."
+                exchanges.append(dict(source=source["pid"], target=target["pid"], key=key, rival=rival,
+                                      alternative=own, gap=gap, question=question, answer=answer, supported=supported))
+                break
+        store[str(number)] = exchanges
+        self.trace("round_exchanges", exchanges=exchanges)
+
+    def challenge_events(self, knowledge, target):
+        # An unresolved, repeated disputed endorsement is a weak inquiry lead.
+        events = {}
+        for number, exchanges in self.d.get("exchanges", {}).items():
+            number = int(number)
+            if number >= knowledge["round"]:
+                continue
+            for exchange in exchanges:
+                if exchange["target"] != target or exchange["gap"] < 0.35 or exchange["supported"]:
+                    continue
+                later = [n for n in knowledge["notes"] if n["pid"] == target and n["round"] > number
+                         and n.get("stance", 1) != 0 and exchange["key"] in n["leads"]]
+                if not later or later[-1]["leads"][exchange["key"]] != exchange["rival"]:
+                    continue
+                note = later[-1]
+                visible = public_evidence_at(knowledge, note["round"])
+                i = int(exchange["key"])
+                scores = {c: evidence_score(visible, c, i) for c in visible["board"][i]}
+                if max(scores.values()) - scores[exchange["rival"]] < 0.35:
+                    continue
+                events[(number, exchange["key"])] = dict(round=note["round"], text=f'После вопроса в раунде {number} сохранил спорную версию «{CARDS[exchange["rival"]]["name"]}», хотя письма сильнее поддерживают другой вариант. Это повод уточнить, не доказательство вины.')
+        return list(events.values())
+
     def start_vote(self, keys, retry=False):
         self.trace("vote_start", keys=keys, retry=retry)
         self.d["pass_no"] = int(retry)
         self.d["vote_keys"] = keys
         self.d["ballots"] = {}
-        self.set_phase("ballot", [pid for pid in self.d["local"]
-                                  if pid and pid not in self.d["excluded"]])
+        self.set_phase("ballot", [pid for pid in self.d["turn_order"]
+                                  if pid in self.d["local"] and pid not in self.d["excluded"]])
         if self.actor is None:
             self.finish_vote()
 
@@ -1274,7 +1384,7 @@ class Game:
             ids = [pid for pid in range(1, len(self.d["players"])) if pid not in self.d["excluded"]]
         else:
             ids = self.d["board"][int(key)]
-        if self.d["pass_no"] and not self.d.get("sequential"):
+        if self.d["pass_no"]:
             leaders = self.d["leaders"][key]
             ids = [cid for cid in ids if cid in leaders]
         return ids
@@ -1426,6 +1536,7 @@ class Game:
             factors["noise"] = (self.noise("arrest tie", pid, target) - 0.5) * 0.04
             factors["social"] = 0.0
             factors["persistence"] = min(0.42, 0.24 * len(self.public_persistence_events(knowledge, target)))
+            factors["challenge_followup"] = min(0.32, 0.16 * len(self.challenge_events(knowledge, target)))
             factors["unsupported_shift"] = 0.0
             factors["claim_alignment"] = 0.0
             factors["verified_conflict"] = 0.0
@@ -1521,7 +1632,7 @@ class Game:
             # Revisions and agreement remain useful diagnostics, but cannot create
             # a negative suspicion balance or erase a verified contradiction.
             soft = sum(factors[k] for k in ("evidence_conflict", "persistence",
-                                            "unsupported_shift", "unbacked_churn", "pressure"))
+                                            "unsupported_shift", "unbacked_churn", "pressure", "challenge_followup"))
             credit = -sum(min(0.0, factors[k]) for k in ("revision", "constructive_revision",
                                                         "supported_leads", "response"))
             factors["mitigation_cap"] = max(0.0, credit - 0.5 * soft)
@@ -1712,7 +1823,7 @@ class Game:
         pressure = self.public_pressure_events(knowledge, target)
         if pressure:
             return pressure[-1]["text"]
-        persistent = self.public_persistence_events(knowledge, target)
+        persistent = self.public_persistence_events(knowledge, target) + self.challenge_events(knowledge, target)
         if persistent:
             return persistent[-1]["text"]
         return "Предварительное подозрение; конкретных доказательств пока нет."
@@ -1769,6 +1880,7 @@ class Game:
             arguments_against.extend(self.public_claim_disputes(knowledge, pid))
             arguments_against.extend(self.public_pressure_events(knowledge, pid))
             arguments_against.extend(self.public_persistence_events(knowledge, pid))
+            arguments_against.extend(self.challenge_events(knowledge, pid))
             arguments_against.extend(self.public_contradictions(knowledge, pid))
             people.append(dict(pid=pid, name=self.name(pid), count=len(incoming), incoming=incoming,
                 arguments_for=arguments_for[-5:], arguments_against=arguments_against[-5:],
@@ -1794,7 +1906,7 @@ class Game:
                 changes.append(dict(pid=pid, text=text + (" " + n["reason"] if new is not None and n.get("reason") else "")))
         return dict(people=people, me=me, changes=changes, response=DEFENSES[response] if response in range(len(DEFENSES)) else None,
                     can_respond=self.phase == "discussion" and len(self.d["local"]) == 1 and me is not None and
-                        any(x["round"] == self.d["round"] for x in me["incoming"]) and response is None,
+                        (any(x["round"] == self.d["round"] for x in me["incoming"]) or any(e["target"] == owner for e in self.d.get("exchanges", {}).get(str(self.d["round"]), []))) and response is None,
                     responses=[dict(value=i, label=label) for i,label in enumerate(DEFENSES)],
                     new_accusations=sum(1 for p in people for x in p["incoming"] if x["round"] == self.d["round"]))
 
@@ -1807,6 +1919,9 @@ class Game:
         observers = [p for p in range(1, len(self.d["players"])) if p != pid and not self.d["players"][p]["local"]]
         before = {p: self.suspicion_factors(p, pid) for p in observers} if "analytics" in self.d else {}
         self.d.setdefault("defenses", {}).setdefault(str(self.d["round"]), {})[str(pid)] = choice
+        for e in self.d.get("exchanges", {}).get(str(self.d["round"]), []):
+            if e["target"] == pid:
+                e["answer"] = DEFENSES[choice]
         after = {p: self.suspicion_factors(p, pid) for p in observers} if "analytics" in self.d else {}
         self.trace("public_defense", pid=pid, choice=choice, before=before, after=after)
 
@@ -2095,8 +2210,7 @@ class Game:
                           for n in self.last_round_claims(pid) if n["pid"] == picks.get("check")), None)
             self.post(pid, cid, discard, check, second, planned=[] if intent is None else [intent])
             self.d["queue"].pop(0)
-            if self.actor is None:
-                self.collect_bot_mail()
+            self.collect_bot_mail()
         elif phase == "sort":
             echo, silence = picks.get("echo"), picks.get("silence")
             if echo is not None and echo == silence:
@@ -2219,7 +2333,7 @@ class Game:
         phase = self.phase
         stage = {"intro":0,"mail":0,"sort":1,"reveal":1,"note":2,"statement":2,"discussion":3}.get(phase,-1)
         letter = next((x for x in self.d["letters"] if x["round"] == self.d["round"]), None)
-        participants = [pid for pid in range(1, len(self.d["players"])) if pid not in self.d["excluded"]]
+        participants = [pid for pid in self.d["turn_order"] if pid not in self.d["excluded"]]
         spoken = list(dict.fromkeys(n["pid"] for n in self.d["notes"] if n["round"] == self.d["round"] and n["pid"] in participants))
         remaining = self.d.get("speakers", []) if phase in ("note", "statement") else []
         result = dict(stage=stage, opened=len(self.letter_cards(letter)) if letter else 0,
@@ -2227,7 +2341,8 @@ class Game:
                       received=(len(letter["echo"])+len(letter["silence"])+letter["missing"]) if letter else None,
                       spoken=len(spoken) if phase in ("note","statement","discussion") else 0,
                       speakers=len(participants), discussion_order=spoken + [pid for pid in remaining if pid not in spoken],
-                      current_speaker=self.actor if phase == "note" else self.d.get("speaker") if phase == "statement" else None)
+                      current_speaker=self.actor if phase == "note" else self.d.get("speaker") if phase == "statement" else None,
+                      turn_order=participants)
         if phase == "discussion":
             latest = {}
             for note in self.d["history"] + self.d["notes"]:
@@ -2267,7 +2382,7 @@ class Game:
             action = "К итогам обсуждения"
         if phase == "ballot" and self.d["pass_no"]:
             title = "Повторное голосование"
-            brief = "При повторной ничьей решение не принято." if self.d.get("sequential") else "Голосование среди лидеров. При повторной ничьей категория останется без ответа."
+            brief = "Голосование только среди лидеров. При повторной ничьей решение не принято."
         if phase == "arrest":
             brief = f'{self.name(self.d["excluded"][-1])} — сообщник. Он выбывает из голосования за повторный арест.'
         if phase == "counter":
@@ -2287,7 +2402,7 @@ class Game:
                        personality=PROFILE_NAMES[self.bot_profile(i)] if phase == "result" and i and p["local"] is None else "",
                        won=(i in self.d["winners"]) if phase == "result" and "winners" in self.d else None,
                        suspicions=suspicions[i] if i else None)
-                  for i, p in enumerate(self.d["players"])]
+                  for i in [0] + self.d["turn_order"] for p in [self.d["players"][i]]]
         letters = [dict(round=entry["round"], missing=entry["missing"], cards=self.letter_cards(entry))
                    for entry in reversed(self.d["letters"])]
         board = self.board_view() if phase != "role" else []
@@ -2295,7 +2410,23 @@ class Game:
         notes = self.notes_view() if phase in ("note", "statement", "discussion", "ballot", "appeal", "result") else []
         speaker = self.name(self.d["speaker"]) if phase == "statement" else None
         statement = notes[-1] if speaker and notes and notes[-1]["player"] == speaker else None
+        exchanges = [dict(source=self.name(e["source"]), target=self.name(e["target"]), question=e["question"],
+                          answer=e["answer"] or "Ожидается публичный ответ игрока.")
+                     for e in self.d.get("exchanges", {}).get(str(self.d["round"]), [])]
+        conclusions = []
+        if phase in ("ballot", "appeal") and "suspect" in self.d.get("vote_keys", []):
+            candidates = self.d.get("leaders", {}).get("suspect", []) if phase == "appeal" else self.candidates("suspect")
+            for pid in self.d["turn_order"]:
+                if self.d["players"][pid]["local"] or pid in self.d["excluded"]:
+                    continue
+                choices = [c for c in candidates if c != pid]
+                target = max(choices, key=lambda c: self.suspicion(pid,c), default=None)
+                reason = self.public_reason(pid, target) if target is not None else ""
+                text = ("Доказательств для уверенного обвинения пока нет." if not reason or reason.startswith("Предварительное подозрение")
+                        else f"{self.name(target)}: {reason}")
+                conclusions.append(dict(player=self.name(pid), text=text))
         return dict(id=self.d["id"], rev=self.d["rev"], phase=phase, title=title, brief=brief,
+                    exchanges=exchanges, conclusions=conclusions,
                     action=action, mode=MODES[self.d["mode"]], round=self.d["round"],
                     rounds=self.d["rounds"], marked=self.marked, cooperative=self.cooperative,
                     flow=self.flow_view(), local_count=len(self.d["local"]), difficulty=self.d.get("difficulty", "normal"), actor=actor, groups=self.groups(), board=board,
@@ -2347,7 +2478,7 @@ SCREENS = {
     "statement": ("Версия игрока", "", "Следующий участник"),
     "discussion": ("Итоги обсуждения", "Все участники высказались. Сопоставьте их версии с письмами Призрака.", "Следующий раунд"),
     "ballot": ("Бюллетень", "", "Опустить бюллетень"),
-    "appeal": ("Голоса разделились", "Переголосуйте по спорным категориям.", "Переголосовать"),
+    "appeal": ("Голоса разделились", "Сравните аргументы и переголосуйте только по спорным вариантам.", "Переголосовать"),
     "arrest": ("Задержан сообщник", "", "Голосовать повторно за арест"),
     "counter": ("Последний ход убийцы", "", "Назвать игрока"),
     "result": ("Дело закрыто", "", ""),
@@ -2506,7 +2637,7 @@ def public_view(game):
         view["success"] = detectives
         view["personal_results"] = [dict(name=game.name(pid), role=ROLES[game.d["players"][pid]["role"]][0],
                                          won=pid in game.d["winners"]) for pid in game.d["local"]]
-        view["brief"] = ("Дело раскрыто." if detectives else
+        view["brief"] = (("Дело раскрыто." if game.cooperative else "Дело раскрыто. " + ("Убийца установлен." if game.d["arrested"] == game.role_id("killer") else "Убийца не установлен.")) if detectives else
                          "Дело раскрыто, но убийца вычислил особую роль." if game.d["solved"]
                          else "Стол не собрал достаточно верных ответов.")
     return view

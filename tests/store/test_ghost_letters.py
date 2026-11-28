@@ -982,18 +982,96 @@ class GhostLettersRules(unittest.TestCase):
                 g.d["notes"] = []
                 g.set_phase("reveal")
                 g.advance()
-                for pid in range(1, 7):
+                order = g.d["turn_order"]
+                for position, pid in enumerate(order, 1):
                     self.assertEqual(g.phase, "statement")
                     self.assertEqual(g.d["speaker"], pid)
                     self.assertEqual(g.flow_view()["current_speaker"], pid)
-                    self.assertEqual(g.flow_view()["discussion_order"], list(range(1,7)))
-                    self.assertEqual(g.flow_view()["spoken"], pid)
+                    self.assertEqual(g.flow_view()["discussion_order"], order)
+                    self.assertEqual(g.flow_view()["spoken"], position)
                     accused = g.d["notes"][-1]["suspect"]
                     if number == 1 and accused is not None:
-                        self.assertLess(accused, pid)
+                        self.assertIn(accused, order[:position-1])
                     g.advance()
                 self.assertEqual(g.phase, "discussion")
                 self.assertEqual(g.flow_view()["spoken"], 6)
+
+    def test_v6_order_is_seeded_and_persistent(self):
+        orders = set()
+        for seed in range(20):
+            g = Game.new("classic", 6, 1, False, seed=seed)
+            order = g.d["turn_order"][:]
+            orders.add(tuple(order))
+            self.assertEqual(sorted(order), list(range(1,6)))
+            self.assertEqual([p["value"] for p in g.view()["roster"]], [0] + order)
+            self.assertEqual(Game(json.loads(json.dumps(g.d))).d["turn_order"], order)
+            for _ in range(2):
+                g.start_round()
+                self.assertEqual(g.d["writers"], order)
+        self.assertGreater(len(orders), 1)
+
+    def test_v6_public_followup_is_weak_and_requires_repeated_endorsement(self):
+        from unittest.mock import patch
+        g = Game.new("classic", 6, 1, False, seed=42)
+        observer = g.role_id("detective")
+        target = next(p for p in g.d["turn_order"] if p != observer)
+        right, wrong = g.d["board"][0][:2]
+        g.d["round"] = 2
+        g.d["exchanges"] = {"1": [dict(source=observer, target=target, key="0", rival=wrong,
+                                      alternative=right, gap=0.8, supported=False)]}
+        note = dict(pid=target, round=2, leads={"0": wrong}, suspect=None, claim=None, tests=[], stance=1)
+        g.d["notes"] = [note]
+        with patch.object(mod, "evidence_score", side_effect=lambda k,c,i: float(c == right)):
+            self.assertGreater(g.suspicion_factors(observer, target)["challenge_followup"], 0)
+            note["stance"] = 0
+            self.assertEqual(g.suspicion_factors(observer, target)["challenge_followup"], 0)
+            note["stance"] = 1
+            note["leads"] = {"0": right}
+            self.assertEqual(g.suspicion_factors(observer, target)["challenge_followup"], 0)
+
+    def test_v6_mail_uses_same_order_before_and_after_human(self):
+        g = Game.new("classic", 6, 1, False, seed=42)
+        owner = g.d["local"][0]
+        order = [p for p in g.d["turn_order"] if p != owner]
+        order.insert(2, owner)
+        g.d["turn_order"] = order
+        g.d["truth"] = [r[0] for r in g.d["board"]]
+        for p in range(6):
+            g.refill(p)
+        g.enable_analytics()
+        g.start_round()
+        g.advance()
+        self.assertEqual(g.actor, owner)
+        self.assertEqual([e["pid"] for e in g.d["analytics"]["events"] if e["kind"] == "mail"], order[:2])
+        g.submit({"send": g.d["players"][owner]["hand"][0]})
+        self.assertEqual([e["pid"] for e in g.d["analytics"]["events"] if e["kind"] == "mail"], order)
+        self.assertEqual(g.phase, "reveal")
+
+    def test_v6_followup_can_question_last_speaker(self):
+        from unittest.mock import patch
+        g = Game.new("classic", 6, 1, False, seed=42)
+        source = next(p for p in g.d["turn_order"] if p not in g.d["local"])
+        target = next(p for p in g.d["turn_order"] if p != source)
+        right, wrong = g.d["board"][0][:2]
+        g.d["round"] = 1
+        g.d["notes"] = [dict(pid=p, round=1, leads={"0": c}, suspect=None, claim=None, tests=[], stance=1)
+                        for p,c in [(source,right),(target,wrong)]]
+        with patch.object(mod, "evidence_score", side_effect=lambda k,c,i: float(c == right)):
+            g.round_exchanges()
+        self.assertTrue(any(e["target"] == target for e in g.d["exchanges"]["1"]))
+
+    def test_v6_retry_only_tied_candidates(self):
+        g = Game.new("classic", 6, 1, False, seed=42)
+        g.d["leaders"] = {"suspect": [2, 4]}
+        g.d["pass_no"] = 1
+        self.assertEqual(g.candidates("suspect"), [2, 4])
+
+    def test_v6_reveal_heading_above_table(self):
+        for path in (ROOT / "local/phone-widgets/ghost-letters.owl", ROOT / "apps/xonars/ghost-letters/app.owl"):
+            source = path.read_text()
+            start = source.index('SceneTitle { heading: "Ход Призрака"')
+            self.assertLess(start, source.index('Table { rows: sheet.board; interactive: true }', start))
+            self.assertIn('phase != "statement" && phase != "reveal"', source)
 
     def test_v52_unsaid_and_empty_statements_are_not_accusation_targets(self):
         g = Game.new("classic", 6, 1, False, seed=42)
