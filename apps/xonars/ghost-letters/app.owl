@@ -2173,8 +2173,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/31af
                   Table { rows: sheet.board; interactive: true }
                 }
                 if sheet.phase == "note" { ReplyEditor { groups: sheet.groups } }
-                if sheet.phase == "statement" {
-                } else if sheet.phase == "role" {
+                if sheet.phase == "role" {
                   RoleCard { actor: sheet.actor }
                 } else if sheet.phase == "result" {
                   Column {
