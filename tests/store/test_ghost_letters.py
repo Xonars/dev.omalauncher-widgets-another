@@ -1029,6 +1029,37 @@ class GhostLettersRules(unittest.TestCase):
             note["leads"] = {"0": right}
             self.assertEqual(g.suspicion_factors(observer, target)["challenge_followup"], 0)
 
+    def test_v6_mail_uses_same_order_before_and_after_human(self):
+        g = Game.new("classic", 6, 1, False, seed=42)
+        owner = g.d["local"][0]
+        order = [p for p in g.d["turn_order"] if p != owner]
+        order.insert(2, owner)
+        g.d["turn_order"] = order
+        g.d["truth"] = [r[0] for r in g.d["board"]]
+        for p in range(6):
+            g.refill(p)
+        g.enable_analytics()
+        g.start_round()
+        g.advance()
+        self.assertEqual(g.actor, owner)
+        self.assertEqual([e["pid"] for e in g.d["analytics"]["events"] if e["kind"] == "mail"], order[:2])
+        g.submit({"send": g.d["players"][owner]["hand"][0]})
+        self.assertEqual([e["pid"] for e in g.d["analytics"]["events"] if e["kind"] == "mail"], order)
+        self.assertEqual(g.phase, "reveal")
+
+    def test_v6_followup_can_question_last_speaker(self):
+        from unittest.mock import patch
+        g = Game.new("classic", 6, 1, False, seed=42)
+        source = next(p for p in g.d["turn_order"] if p not in g.d["local"])
+        target = next(p for p in g.d["turn_order"] if p != source)
+        right, wrong = g.d["board"][0][:2]
+        g.d["round"] = 1
+        g.d["notes"] = [dict(pid=p, round=1, leads={"0": c}, suspect=None, claim=None, tests=[], stance=1)
+                        for p,c in [(source,right),(target,wrong)]]
+        with patch.object(mod, "evidence_score", side_effect=lambda k,c,i: float(c == right)):
+            g.round_exchanges()
+        self.assertTrue(any(e["target"] == target for e in g.d["exchanges"]["1"]))
+
     def test_v6_retry_only_tied_candidates(self):
         g = Game.new("classic", 6, 1, False, seed=42)
         g.d["leaders"] = {"suspect": [2, 4]}

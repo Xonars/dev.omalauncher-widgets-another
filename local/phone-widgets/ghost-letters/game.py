@@ -298,7 +298,7 @@ class Game:
             self.d["analytics"] = dict(schema=ANALYTICS_SCHEMA, version=GAME_VERSION,
                 bot_version=BOT_VERSION, started_at=None if partial else int(time.time()),
                 partial=partial, events=[])
-            self.trace("capture_start", partial=partial, seed=self.d["seed"],
+            self.trace("capture_start", partial=partial, seed=self.d["seed"], turn_order=self.d["turn_order"],
                        mode=self.d["mode"], difficulty=self.d.get("difficulty", "normal"),
                        board=self.d["board"], players=[dict(pid=i, role=p["role"], local=p["local"],
                        profile=self.bot_profile(i) if i and not p["local"] else None)
@@ -1305,12 +1305,19 @@ class Game:
         notes = self.d["notes"]
         knowledge = self.player_knowledge(0)
         exchanges = []
-        for idx, source in enumerate(notes):
-            if self.d["players"][source["pid"]]["local"] or source.get("stance", 1) == 0:
+        for source in notes:
+            if self.d["players"][source["pid"]]["local"] or not source["leads"]:
                 continue
-            for target in notes[:idx]:
-                if target.get("stance", 1) == 0:
-                    continue
+            # The follow-up happens after all primary speeches, so even the
+            # last speaker may be questioned. No future testimony is used.
+            def disagreement(target):
+                return max((evidence_score(knowledge, c, int(k)) -
+                            evidence_score(knowledge, target["leads"][k], int(k))
+                            for k, c in source["leads"].items()
+                            if k in target["leads"] and target["leads"][k] != c), default=-1.0)
+            targets = sorted((n for n in notes if n["pid"] != source["pid"] and n.get("stance", 1) != 0),
+                             key=disagreement, reverse=True)
+            for target in targets:
                 common = [(k, c, target["leads"][k]) for k, c in source["leads"].items()
                           if k in target["leads"] and target["leads"][k] != c]
                 if not common:
@@ -1367,8 +1374,8 @@ class Game:
         self.d["pass_no"] = int(retry)
         self.d["vote_keys"] = keys
         self.d["ballots"] = {}
-        self.set_phase("ballot", [pid for pid in self.d["local"]
-                                  if pid and pid not in self.d["excluded"]])
+        self.set_phase("ballot", [pid for pid in self.d["turn_order"]
+                                  if pid in self.d["local"] and pid not in self.d["excluded"]])
         if self.actor is None:
             self.finish_vote()
 
