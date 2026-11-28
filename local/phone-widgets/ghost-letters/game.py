@@ -1760,9 +1760,16 @@ class Game:
                 if ranked[0] - ranked[1] < 0.45 or ranked[0] - scores[cid] < 0.65:
                     continue
                 signature = (key,cid)
-                if signature in seen and seen[signature] < note["round"]:
+                earlier = seen.get(signature, [])
+                challenged = any(
+                    int(number) < note["round"] and e.get("kind", "theory") == "theory"
+                    and e.get("target") == target and e.get("key") == key
+                    and e.get("rival") == cid and e.get("gap", 0) >= 0.35
+                    and not e.get("supported", False) and e.get("answer") is not None
+                    for number, entries in self.d.get("exchanges", {}).items() for e in entries)
+                if len(earlier) >= 2 and challenged:
                     events.append(dict(round=note["round"], text=f'Повторно уверенно поддержал «{CARDS[cid]["name"]}», хотя открытые письма сильнее указывают на другую карту. Это повод для проверки, не доказательство вины.'))
-                seen[signature] = note["round"]
+                seen.setdefault(signature, []).append(note["round"])
         return events
 
     def suspicion(self, pid, target):
