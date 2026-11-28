@@ -1048,6 +1048,35 @@ class GhostLettersRules(unittest.TestCase):
             self.assertNotIn('Собрать остальные версии', source)
             self.assertNotIn('advance_fast ${sh(token)}', source)
 
+    def test_mail_screen_guides_selection_and_preserves_board_space(self):
+        for path in (ROOT / "local/phone-widgets/ghost-letters.owl",
+                     ROOT / "apps/xonars/ghost-letters/app.owl"):
+            source = path.read_text()
+            for marker in ("Выбери карту для письма", "Сброс (необяз.)",
+                           "Сначала выбери письмо", "Отправить: ${mailCard.label}",
+                           "Что хочешь проверить? · необязательно",
+                           "Твой ход · отправь письмо", "compactMailCard"):
+                self.assertIn(marker, source)
+            self.assertIn('if phase != "mail" {\n            Row {', source)
+            self.assertIn('choices = set(choices, handAction, option.value)', source)
+            self.assertIn('if !showDesk && shownPage == "" && phase == "mail"', source)
+
+    def test_start_screen_uses_shared_top_roster_and_intro(self):
+        for path in (ROOT / "local/phone-widgets/ghost-letters.owl",
+                     ROOT / "apps/xonars/ghost-letters/app.owl"):
+            source = path.read_text()
+            heading = 'SceneTitle { heading: game.title; description: game.brief }'
+            self.assertEqual(source.count(heading), 1)
+            self.assertLess(source.index(heading), source.index('Table { rows: game.board; interactive:'))
+            self.assertLess(source.index(heading), source.index('TablePlayers { players: game.roster }'))
+            self.assertIn('game.round > 0 || phase == "board" || phase == "truth" || phase == "opening"', source)
+            self.assertEqual(source.count('TablePlayers { players: game.roster }'), 1)
+            self.assertEqual(source.count('Roster { players: sheet.roster }'), 1)
+            self.assertIn('if sheet.phase == "result" {\n                  Roster', source)
+            self.assertIn('if sheet.phase != "board" { LettersPanel { letters: sheet.letters } }', source)
+            self.assertIn('else if phase != "board" && phase != "mail" && phase != "note" && phase != "statement"', source)
+            self.assertIn('else if game.round > 0 && person != null', source)
+
     def test_store_version_matches_engine_and_local_owl(self):
         import re
         local = (SOURCE.parent / "ghost-letters.owl").read_text()

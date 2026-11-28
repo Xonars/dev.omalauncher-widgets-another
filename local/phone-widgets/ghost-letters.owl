@@ -297,6 +297,7 @@ app "Письма призрака" {
   }
 
   component PlayingCard(entry, tint = #d7ad74, personal = null, marked = false, voting = false, mini = false, boardColumn = false) {
+    let compactMailCard = boardColumn && phase == "mail" && !showDesk && shownPage == ""
     let tone = entry.correct ? moss : (entry.voted ? ash : get(markColors, entry.mark, tint))
     let personalTone = personal == "likely" ? moss : (personal == "unlikely" ? ash : tone)
     let detail = entry.mark ?? entry.detail ?? (entry.correct ? "Истинная улика" : (entry.voted ? "Выбор стола" : ""))
@@ -306,9 +307,9 @@ app "Письма призрака" {
         fill: width; gap: 3; padding: 4; radius: 7; border: 1
         borderColor: marked ? tone : (entry.correct || entry.voted || markText != "" ? personalTone : alpha(tone, 0.38))
         background: mix(panel, tone, marked ? 0.28 : 0.075)
-        Image { src: entry.artwork; fill: width; height: boardColumn ? (layoutWidth >= 400 ? 45 : 38) : (mini ? 72 : (showDesk ? 85 : 100)); radius: 4; fit: contain; label: entry.label; offset: [0, marked ? -2 : 0]; animate offset: 180ms }
+        Image { src: entry.artwork; fill: width; height: boardColumn ? (compactMailCard ? (layoutWidth >= 400 ? 36 : 34) : (layoutWidth >= 400 ? 45 : 38)) : (mini ? 72 : (showDesk ? 85 : 100)); radius: 4; fit: contain; label: entry.label; offset: [0, marked ? -2 : 0]; animate offset: 180ms }
         Box {
-          height: boardColumn ? 25 : (mini ? 30 : 34); fill: width; align: center
+          height: boardColumn ? (compactMailCard ? 20 : 25) : (mini ? 30 : 34); fill: width; align: center
           Text { text: boardColumn ? (marked ? "✓ " : "") + (markText != "" ? (personal == "likely" ? "• " : "× ") : "") + entry.label : entry.label; font: sans; fontSize: boardColumn ? 11 : (mini ? 11 : 13); fontWeight: 700; align: center; maxLines: 2; color: boardColumn && markText != "" ? personalTone : parchment }
         }
         if (!boardColumn && marked) || detail != "" {
@@ -378,7 +379,7 @@ app "Письма призрака" {
       if interactive && phase == "mail" {
         Row {
           align: center; gap: 5
-          Text { text: intentCard == null ? "Улика для письма · необязательно" : "Личный замысел: ${intentCard.label}"; color: gold; font: sans; fontSize: 11; weight: 1; maxLines: 2 }
+          Text { text: intentCard == null ? "Что хочешь проверить? · необязательно" : "Проверяю: ${intentCard.label} · личная отметка"; color: gold; font: sans; fontSize: 11; weight: 1; maxLines: 2 }
           if intentCard != null { Box { padding: 5; onTap: intentCard = null; Text { text: "×"; color: gold; fontSize: 16 } } }
         }
       }
@@ -481,7 +482,7 @@ app "Письма призрака" {
   // Public letters arrive newest first from game.py; preserve their order.
   component LettersPanel(letters) {
     Column {
-      fill: width; gap: 5; padding: 6; radius: 9; border: 1; borderColor: rule
+      fill: width; gap: 3; padding: 5; radius: 9; border: 1; borderColor: rule
       background: mix(panel, gold, 0.055)
       Row {
         fill: width; height: 32; gap: 5; align: center
@@ -565,6 +566,7 @@ app "Письма призрака" {
 
   component TurnAction() {
     let ready = (ballot ? (!missing || ballotReady) : !missing) && !conflicting && queued != token && !fastDiscussion
+    let mailCard = (game.detective_hand ?? []).find(c => c.value == choices.send)
     Box {
       fill: width
       onTap: {
@@ -587,7 +589,7 @@ app "Письма призрака" {
                (ballot && missing ? (ballotReady ? "Далее · ${first(pendingBallot).label}" : "Выбери вариант") :
                (ballot && !missing ? (ballotConfirm ? "Подтвердить голос" : "Проверить голос") :
                (phase == "opening" && choices.seal == null ? "Пропустить первое письмо" :
-               (phase == "note" && !game.groups.any(g => get(choices, g.key, null) != null) ? "Без версии" : game.action))))
+               (phase == "mail" && missing ? "Сначала выбери письмо" : (phase == "mail" && mailCard != null && !game.groups.any(g => g.key == "send2") ? "Отправить: ${mailCard.label}" : (phase == "note" && !game.groups.any(g => get(choices, g.key, null) != null) ? "Без версии" : game.action))))))
         allowed: ready
       }
     }
@@ -655,7 +657,7 @@ app "Письма призрака" {
       background: mix(panel, gold, 0.055)
       Row {
         align: center; gap: 5; onTap: { if !editable { detectiveHandOpen = !detectiveHandOpen } }
-        Text { text: "Твоя рука · ${len(hand)}"; color: gold; font: sans; fontSize: 14; fontWeight: 700; weight: 1 }
+        Text { text: editable ? (handAction == "discard" ? "Выбери карту для сброса" : (handAction == "send2" ? "Выбери второе письмо" : (choices.send == null ? "Выбери карту для письма" : "Письмо готово к отправке"))) : "Твоя рука · ${len(hand)}"; color: gold; font: sans; fontSize: 13; fontWeight: 700; weight: 1 }
         if !editable { Text { text: detectiveHandOpen ? "⌃" : "⌄"; color: gold; fontSize: 16 } }
       }
       if editable || detectiveHandOpen {
@@ -669,8 +671,8 @@ app "Письма призрака" {
                 borderColor: handAction == slot.key ? gold : rule
                 background: handAction == slot.key ? plum : shell
                 onTap: { if queued != token { handAction = slot.key } }
-                Text { text: slot.key == "send" ? "Письмо" : (slot.key == "send2" ? "Второе" : "Сброс"); color: slot.key == "discard" ? ash : gold; font: sans; fontSize: 11; align: center }
-                if selected != null { Text { text: selected.label; color: parchment; font: sans; fontSize: 10; align: center; maxLines: 2 } }
+                Text { text: slot.key == "send" ? "✉ Письмо" : (slot.key == "send2" ? "✉ Второе" : "× Сброс (необяз.)"); color: slot.key == "discard" ? ash : gold; font: sans; fontSize: 11; align: center; maxLines: 2 }
+                if selected != null { Text { text: "✓ ${selected.label}"; color: parchment; font: sans; fontSize: 10; align: center; maxLines: 2 } }
               }
             }
           }
@@ -702,12 +704,12 @@ app "Письма призрака" {
               if illustrated && option.artwork != null { Image { src: option.artwork; fill: width; height: 43; radius: 3; fit: contain; label: option.label } }
               else { Text { text: option.glyph; color: tone; fontSize: 18; align: center } }
               Text { text: option.label; color: parchment; font: sans; fontSize: 10; align: center; maxLines: 2 }
-              if sent || discarded { Text { text: discarded ? "Сброс" : "Письмо"; color: tone; font: sans; fontSize: 10; align: center } }
+              if sent || discarded { Text { text: discarded ? "× Сброс" : "✓ Письмо"; color: tone; font: sans; fontSize: 10; align: center } }
             }
           }
         }
         if editable {
-          if intentCard != null { Text { text: "Проверяешь: ${intentCard.label} · только тебе"; color: dim; font: sans; fontSize: 11 } }
+          if intentCard != null { Text { text: "Проверяю: ${intentCard.label} · только ты видишь"; color: dim; font: sans; fontSize: 11; maxLines: 1 } }
           TurnAction {}
         }
       }
@@ -934,7 +936,7 @@ app "Письма призрака" {
                 choices = set(choices, "suspect", player.value)
                 ballotConfirm = false
               }
-            } else if person != null && queued == "" && !fastDiscussion {
+            } else if game.round > 0 && person != null && queued == "" && !fastDiscussion {
               investigationPerson = person.pid; investigationRound = null; notebookTab = "people"; reviewRound = null
               if canNotebook {
                 notebookMarks = game.notebook.marks ?? {}
@@ -946,9 +948,9 @@ app "Письма призрака" {
               evidence = "notebook"
             }
           }
-          Text { text: sub(player.name, 0, 1); color: selected ? ash : (arrestVote && !eligible ? dim : gold); font: serif; fontSize: 19; align: center }
+          Text { text: sub(player.name, 0, 1); color: selected ? ash : (arrestVote && !eligible ? dim : gold); font: serif; fontSize: phase == "mail" && !showDesk ? 15 : 19; align: center }
           Text { text: player.name; color: parchment; font: sans; fontSize: 10; align: center; maxLines: 1 }
-          Text { text: arrestVote ? (selected ? "Выбран" : (eligible ? "Выбрать" : "—")) : (player.value == 0 ? "Призрак" : (discussion ? (speaking ? (phase == "note" ? "Твой ход" : "Говорит") : (spoken ? "Сказал ✓" : "Ждёт")) : (me ? "Ты" : "·"))); color: selected ? ash : (speaking || eligible ? gold : dim); font: sans; fontSize: 10; align: center; maxLines: 1 }
+          Text { text: arrestVote ? (selected ? "Выбран" : (eligible ? "Выбрать" : "—")) : (game.round == 0 ? (me ? "Ты" : player.seat) : (player.value == 0 ? "✉" : (discussion ? (speaking ? (phase == "note" ? "Твой ход" : "Говорит") : (spoken ? "Сказал ✓" : "Ждёт")) : (me ? "Ты" : "·")))); color: selected ? ash : (speaking || eligible ? gold : dim); font: sans; fontSize: 10; align: center; maxLines: 1 }
           if player.suspicions > 0 { Text { text: "↑ ${player.suspicions}"; color: ash; font: sans; fontSize: 10; align: center } }
         }
       }
@@ -1108,7 +1110,13 @@ app "Письма призрака" {
     Column {
       weight: 1
       gap: 4
-      RuleLabel { heading: "РАУНД ${current} ИЗ ${total}" }
+      if phase == "mail" {
+        Row {
+          align: center; gap: 4
+          Text { text: "Раунд ${current}/${total}"; color: gold; font: sans; fontSize: 12; fontWeight: 700; weight: 1 }
+          Text { text: "Твой ход · отправь письмо"; color: parchment; font: sans; fontSize: 11; maxLines: 1 }
+        }
+      } else { RuleLabel { heading: "РАУНД ${current} ИЗ ${total}" } }
       Row {
         fill: width; gap: 4
         for step in range(total) {
@@ -1684,6 +1692,11 @@ app "Письма призрака" {
       }
     }
 
+    // Introduce the case above the table on every screen size.
+    if phase == "board" && !homeOpen && !setupOpen && !loading && !failed && !covered && previewCard == null && overlay == "" && shownPage == "" {
+      SceneTitle { heading: game.title; description: game.brief }
+    }
+
     Row {
       weight: 1
       fill: width
@@ -1698,7 +1711,6 @@ app "Письма призрака" {
           background: alpha(gold, 0.035)
           radius: 10; border: 1; borderColor: rule
           Table { rows: game.board; interactive: shownPage == "" && phase != "result" }
-          if phase == "result" { Roster { players: game.roster } }
         }
       }
       Column {
@@ -2054,16 +2066,20 @@ app "Письма призрака" {
             Action { label: queued == token ? "Передаём ход…" : "Открыть мой ход"; allowed: queued != token }
           }
         } else {
-          if game.round > 0 && phase != "result" {
+          if (game.round > 0 || phase == "board" || phase == "truth" || phase == "opening") && phase != "result" {
+            if game.round > 0 {
             Row {
               align: center
               RoundTracker { current: game.round; total: game.rounds }
             }
             if (game.flow.stage ?? -1) >= 0 { StageTracker { stage: game.flow.stage } }
+            if phase != "mail" {
             Row {
               align: center; gap: 5
               Text { text: phase == "statement" ? "Говорит · ${game.speaker}" : (phase == "note" ? "Твоя очередь · реплика" : phaseLabel); color: dim; font: sans; fontSize: 11; weight: 1; maxLines: 1 }
               Text { text: "${len(game.roster)} за столом"; color: gold; font: sans; fontSize: 11 }
+            }
+            }
             }
             if shownPage == "" {
               if ballot && activeBallot.key == "suspect" {
@@ -2094,9 +2110,8 @@ app "Письма призрака" {
               } else if shownPage == "letters" {
                 Post { letters: sheet.letters }
               } else if shownPage == "board" {
-                if !showDesk { LettersPanel { letters: sheet.letters } }
+                if !showDesk && sheet.phase != "board" { LettersPanel { letters: sheet.letters } }
                 Table { rows: sheet.board }
-                Roster { players: sheet.roster }
                 if sheet.phase == "ballot" && len(sheet.notes) > 0 {
                   RuleLabel { heading: "ВЕРСИИ" }
                   for opinion in sheet.notes key opinion.player { Opinion { player: opinion.player; opinion: opinion } }
@@ -2117,7 +2132,7 @@ app "Письма призрака" {
                   Copy { body: "Изучи новое письмо, затем начинай обсуждение." }
                 }
                 if !showDesk && len(sheet.board ?? []) > 0 && sheet.phase != "result" && sheet.phase != "role" {
-                  LettersPanel { letters: sheet.letters }
+                  if sheet.phase != "board" { LettersPanel { letters: sheet.letters } }
                   Table { rows: sheet.board; interactive: true }
                 }
                 if sheet.phase == "note" { ReplyEditor { groups: sheet.groups } }
@@ -2144,7 +2159,7 @@ app "Письма призрака" {
                       }
                     }
                   }
-                } else if phase != "mail" && phase != "note" && phase != "statement" {
+                } else if phase != "board" && phase != "mail" && phase != "note" && phase != "statement" {
                   SceneTitle { heading: ballot ? "Обвинительное заключение" : (sheet.phase == "discussion" ? "Версии за столом" : sheet.title); description: ballot || sheet.phase == "discussion" ? "" : sheet.brief }
                 }
                 if privateTurn && sheet.phase != "role" && (sheet.phase != "mail" && sheet.phase != "note" || len(sheet.actor.knowledge ?? []) > 0 || len(sheet.actor.recheck ?? []) > 0) {
@@ -2400,7 +2415,7 @@ app "Письма призрака" {
                     Box { fill: width; onTap: ballotConfirm = false; Action { label: "Изменить выбор"; hot: false } }
                   }
                 }
-                if sheet.phase == "board" || sheet.phase == "result" {
+                if sheet.phase == "result" {
                   Roster { players: sheet.roster }
                 }
                 if len(sheet.tallies) > 0 {
