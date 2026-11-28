@@ -986,7 +986,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/31af
                 choices = set(choices, "suspect", player.value)
                 ballotConfirm = false
               }
-            } else if person != null && queued == "" && !fastDiscussion {
+            } else if game.round > 0 && person != null && queued == "" && !fastDiscussion {
               investigationPerson = person.pid; investigationRound = null; notebookTab = "people"; reviewRound = null
               if canNotebook {
                 notebookMarks = game.notebook.marks ?? {}
@@ -1000,7 +1000,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/31af
           }
           Text { text: sub(player.name, 0, 1); color: selected ? ash : (arrestVote && !eligible ? dim : gold); font: serif; fontSize: 19; align: center }
           Text { text: player.name; color: parchment; font: sans; fontSize: 10; align: center; maxLines: 1 }
-          Text { text: arrestVote ? (selected ? "Выбран" : (eligible ? "Выбрать" : "—")) : (player.value == 0 ? "Призрак" : (discussion ? (speaking ? (phase == "note" ? "Твой ход" : "Говорит") : (spoken ? "Сказал ✓" : "Ждёт")) : (me ? "Ты" : "·"))); color: selected ? ash : (speaking || eligible ? gold : dim); font: sans; fontSize: 10; align: center; maxLines: 1 }
+          Text { text: arrestVote ? (selected ? "Выбран" : (eligible ? "Выбрать" : "—")) : (game.round == 0 ? (me ? "Ты" : player.seat) : (player.value == 0 ? "Призрак" : (discussion ? (speaking ? (phase == "note" ? "Твой ход" : "Говорит") : (spoken ? "Сказал ✓" : "Ждёт")) : (me ? "Ты" : "·")))); color: selected ? ash : (speaking || eligible ? gold : dim); font: sans; fontSize: 10; align: center; maxLines: 1 }
           if player.suspicions > 0 { Text { text: "↑ ${player.suspicions}"; color: ash; font: sans; fontSize: 10; align: center } }
         }
       }
@@ -1736,6 +1736,11 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/31af
       }
     }
 
+    // Introduce the case above the table on every screen size.
+    if phase == "board" && !homeOpen && !setupOpen && !loading && !failed && !covered && previewCard == null && overlay == "" && shownPage == "" {
+      SceneTitle { heading: game.title; description: game.brief }
+    }
+
     Row {
       weight: 1
       fill: width
@@ -1750,7 +1755,6 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/31af
           background: alpha(gold, 0.035)
           radius: 10; border: 1; borderColor: rule
           Table { rows: game.board; interactive: shownPage == "" && phase != "result" }
-          if phase == "result" { Roster { players: game.roster } }
         }
       }
       Column {
@@ -2106,7 +2110,8 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/31af
             Action { label: queued == token ? "Передаём ход…" : "Открыть мой ход"; allowed: queued != token }
           }
         } else {
-          if game.round > 0 && phase != "result" {
+          if (game.round > 0 || phase == "board" || phase == "truth" || phase == "opening") && phase != "result" {
+            if game.round > 0 {
             Row {
               align: center
               RoundTracker { current: game.round; total: game.rounds }
@@ -2116,6 +2121,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/31af
               align: center; gap: 5
               Text { text: phase == "statement" ? "Говорит · ${game.speaker}" : (phase == "note" ? "Твоя очередь · реплика" : phaseLabel); color: dim; font: sans; fontSize: 11; weight: 1; maxLines: 1 }
               Text { text: "${len(game.roster)} за столом"; color: gold; font: sans; fontSize: 11 }
+            }
             }
             if shownPage == "" {
               if ballot && activeBallot.key == "suspect" {
@@ -2146,9 +2152,8 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/31af
               } else if shownPage == "letters" {
                 Post { letters: sheet.letters }
               } else if shownPage == "board" {
-                if !showDesk { LettersPanel { letters: sheet.letters } }
+                if !showDesk && sheet.phase != "board" { LettersPanel { letters: sheet.letters } }
                 Table { rows: sheet.board }
-                Roster { players: sheet.roster }
                 if sheet.phase == "ballot" && len(sheet.notes) > 0 {
                   RuleLabel { heading: "ВЕРСИИ" }
                   for opinion in sheet.notes key opinion.player { Opinion { player: opinion.player; opinion: opinion } }
@@ -2169,7 +2174,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/31af
                   Copy { body: "Изучи новое письмо, затем начинай обсуждение." }
                 }
                 if !showDesk && len(sheet.board ?? []) > 0 && sheet.phase != "result" && sheet.phase != "role" {
-                  LettersPanel { letters: sheet.letters }
+                  if sheet.phase != "board" { LettersPanel { letters: sheet.letters } }
                   Table { rows: sheet.board; interactive: true }
                 }
                 if sheet.phase == "note" { ReplyEditor { groups: sheet.groups } }
@@ -2196,7 +2201,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/31af
                       }
                     }
                   }
-                } else if phase != "mail" && phase != "note" && phase != "statement" {
+                } else if phase != "board" && phase != "mail" && phase != "note" && phase != "statement" {
                   SceneTitle { heading: ballot ? "Обвинительное заключение" : (sheet.phase == "discussion" ? "Версии за столом" : sheet.title); description: ballot || sheet.phase == "discussion" ? "" : sheet.brief }
                 }
                 if privateTurn && sheet.phase != "role" && (sheet.phase != "mail" && sheet.phase != "note" || len(sheet.actor.knowledge ?? []) > 0 || len(sheet.actor.recheck ?? []) > 0) {
@@ -2452,7 +2457,7 @@ install('https://xonars.github.io/dev.omalauncher-widgets-another/resources/31af
                     Box { fill: width; onTap: ballotConfirm = false; Action { label: "Изменить выбор"; hot: false } }
                   }
                 }
-                if sheet.phase == "board" || sheet.phase == "result" {
+                if sheet.phase == "result" {
                   Roster { players: sheet.roster }
                 }
                 if len(sheet.tallies) > 0 {
