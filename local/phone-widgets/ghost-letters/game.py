@@ -304,6 +304,9 @@ def public_opinions(knowledge, category):
         if (cid in knowledge["board"][category] and note["pid"] != knowledge["pid"]
                 and note.get("stance", 1) != 0):
             opinions[note["pid"]] = cid
+    for revision in knowledge.get("chat_revisions", []):
+        if revision["category"] == category and revision["pid"] != knowledge["pid"]:
+            opinions[revision["pid"]] = revision["card"]
     return opinions
 
 
@@ -1050,7 +1053,14 @@ class Game:
         for note in notes:
             if note["pid"] == pid:
                 own_leads.update(note["leads"])
-        return dict(pid=pid, role=role, truth=truth, killer=killer, allies=allies,
+        revisions = [dict(pid=m["pid"], round=m["round"], **m["revision"])
+                     for m in self.d.get("chat", []) if "revision" in m]
+        latest = {(n["pid"], int(k)): n["round"] for n in sorted(notes,key=lambda n:n["round"]) for k in n["leads"]}
+        revisions = [r for r in revisions if r["round"] >= latest.get((r["pid"],r["category"]),0)]
+        for revision in revisions:
+            if revision["pid"] == pid:
+                own_leads[str(revision["category"])] = revision["card"]
+        return dict(pid=pid, role=role, truth=truth, killer=killer, allies=allies, chat_revisions=revisions,
                     profile=self.bot_profile(pid), difficulty=self.d.get("difficulty", "normal"),
                     round=self.d["round"], rounds=self.d["rounds"], board=[row[:] for row in self.d["board"]],
                     letters=letters, notes=notes, own_mail=own_mail, own_leads=own_leads,
@@ -2171,7 +2181,7 @@ class Game:
         for m in self.d.get("chat", []):
             messages.append(dict(round=m["round"], player=self.name(m["pid"]),
                                  target=self.name(m["target"]) if m["target"] is not None else "Все",
-                                 text=m["chat_text"], own=m["pid"] == owner))
+                                 text=m.get("chat_text", "Сообщение скрыто в экспорте."), own=m["pid"] == owner))
         messages.sort(key=lambda m:m["round"])
         return dict(messages=messages, enabled=owner is not None,
                     remaining=max(0, 6 - sum(m["round"] == self.d["round"] and m["pid"] == owner for m in self.d.get("chat", []))),
@@ -2192,9 +2202,12 @@ class Game:
         if not self.chat_view()["remaining"]:
             raise ValueError("Лимит реплик в этом раунде.")
         messages = self.d.setdefault("chat",[])
-        def append(source, recipient, body):
-            messages.append(dict(round=self.d["round"],pid=source,target=recipient,chat_text=body))
-            self.trace("chat_message", pid=source, target=recipient, chat_text=body)
+        def append(source, recipient, body, revision=None):
+            item = dict(round=self.d["round"],pid=source,target=recipient,chat_text=body)
+            if revision is not None:
+                item["revision"] = revision
+            messages.append(item)
+            self.trace("chat_message", pid=source, target=recipient, chat_text=body, revision=revision)
         append(pid,target,text.strip())
         # The local engine understands exact public card names, not arbitrary
         # natural-language reasoning. Unknown text is preserved without inventing facts.
@@ -2216,7 +2229,8 @@ class Game:
                     append(bot,pid,"Пока у меня нет определённой версии. Назови карту со стола, которую хочешь обсудить.")
                     continue
             i = next(i for i,row in enumerate(knowledge["board"]) if card in row)
-            rival = own.get(str(i), max(self.theories(bot,i,"chat"),key=self.theories(bot,i,"chat").get))
+            ranking = self.theories(bot,i,"chat")
+            rival = knowledge["own_leads"].get(str(i), max(ranking,key=ranking.get))
             scores = {c:evidence_score(knowledge,c,i) for c in knowledge["board"][i]}
             # Cite only genuinely published letters and the bot's public position.
             hints = [(h,sign) for letter in knowledge["letters"] for h,sign in letter["hints"]]
@@ -2225,15 +2239,19 @@ class Game:
                 answer = f'К карте «{CARDS[card]["name"]}» относится открытое письмо «{CARDS[best[0]]["name"]}».'
             else:
                 answer = f'Для карты «{CARDS[card]["name"]}» пока не вижу отдельного убедительного письма.'
+            revision = None
             if rival != card:
                 answer += f' Моя версия — «{CARDS[rival]["name"]}».'
                 if scores[card] > scores[rival]+0.35:
                     answer += " Но публичные письма сильнее поддерживают твой вариант; его стоит проверить."
+                    if mentioned and card == max(scores,key=scores.get) and knowledge["role"] not in ("killer","accomplice"):
+                        revision = dict(category=i,card=card)
+                        answer += " Пересматриваю свою версию."
             else:
                 answer += " Это совпадает с моей текущей версией."
             if not mentioned:
                 answer = "Уточни, какую карту или показание ты имеешь в виду. " + answer
-            append(bot,pid,answer)
+            append(bot,pid,answer,revision)
 
     def defend(self, payload):
         board = self.investigation_view()
