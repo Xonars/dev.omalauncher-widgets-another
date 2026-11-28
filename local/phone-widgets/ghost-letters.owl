@@ -1,5 +1,5 @@
 app "Письма призрака" {
-  meta { owl: 18; description: "Карточное расследование с тайной перепиской"; version: "3.7.0"; category: "games" }
+  meta { owl: 18; description: "Карточное расследование с тайной перепиской"; version: "3.8.0"; category: "games" }
   title: "Письма призрака"
   icon: appIcon
   requires { pacman: ["python"] }
@@ -51,6 +51,8 @@ app "Письма призрака" {
   state lettersPanelOpen = false
   state detectiveHandOpen = true
   state boardPanelOpen = true
+  state chatText = ""
+  state chatTarget = null
   state replySection = ""
   state replyMode = "letter"
   state choices = {}
@@ -78,7 +80,7 @@ app "Письма призрака" {
   let privateTurn = game.actor != null
   let solo = game.local_count == 1
   // Always enter the morning mail automatically, but do not skip public speeches in normal play.
-  let autoStep = solo && (dynamicFlow || phase == "role" || phase == "board" || phase == "truth" || phase == "opening" || phase == "intro" || phase == "discussion")
+  let autoStep = solo && phase != "discussion" && (dynamicFlow || phase == "role" || phase == "board" || phase == "truth" || phase == "opening" || phase == "intro" || phase == "discussion")
   let covered = privateTurn && !solo && revealed != token
   let canNotebook = game.notebook != null && !covered
   let notebookPayload = toJson({marks: notebookMarks, suspects: notebookSuspects, text: notebookText})
@@ -143,6 +145,7 @@ app "Письма призрака" {
       detectiveHandOpen = phase == "mail"
       boardPanelOpen = true
       lettersPanelOpen = false
+      if phase != "discussion" { chatText = ""; chatTarget = null }
       replySection = ""
       replyMode = "letter"
       handAction = "send"
@@ -1947,7 +1950,7 @@ app "Письма призрака" {
                 Action { label: item.label; hot: false }
               }
             }
-            Text { text: "3.7.0 · Живое расследование"; color: dim; font: sans; fontSize: 11; align: center }
+            Text { text: "3.8.0 · Диалог детективов"; color: dim; font: sans; fontSize: 11; align: center }
           }
         } else if setup {
           Column {
@@ -2267,7 +2270,7 @@ app "Письма призрака" {
                     }
                     Copy { body: "Ответ публичный. Боты учитывают его вместе с твоими действиями." }
                   } else if sheet.investigation.response != null { Copy { body: "Твой публичный ответ: ${sheet.investigation.response}" } }
-                  if len(sheet.exchanges ?? []) > 0 {
+                  if sheet.chat == null && len(sheet.exchanges ?? []) > 0 {
                     CategoryLabel { label: "Вопросы и ответы" }
                     for exchange in sheet.exchanges {
                       Column {
@@ -2275,6 +2278,49 @@ app "Письма призрака" {
                         Text { text: "${exchange.source} → ${exchange.target}"; color: gold; fontSize: 13; fontWeight: 700 }
                         Copy { body: exchange.question }
                         Copy { body: exchange.answer }
+                      }
+                    }
+                  }
+                  if sheet.chat != null {
+                    CategoryLabel { label: "Чат детективов"; tint: gold }
+                    Copy { body: "Публичная переписка. Все участники, включая скрытого убийцу, видят сообщения. Основные реплики уже завершены." }
+                    for message in sheet.chat.messages {
+                      Column {
+                        gap: 4; padding: 8; radius: 8; background: message.own ? plum : panel; border: 1; borderColor: rule
+                        Text { text: "Р${message.round} · ${message.player} → ${message.target}"; color: gold; font: sans; fontSize: 12; fontWeight: 700 }
+                        Copy { body: message.text }
+                      }
+                    }
+                    if sheet.chat.enabled {
+                      Copy { body: "Кому: выбери собеседника или обратись ко всем. Назови карту точно как на столе. Осталось реплик: ${sheet.chat.remaining}." }
+                      Box {
+                        fill: width; padding: 8; radius: 6; background: chatTarget == null ? plum : panel
+                        onTap: chatTarget = null
+                        Text { text: "Всем"; color: parchment; font: sans; fontSize: 13 }
+                      }
+                      Grid {
+                        columns: 2; gap: 6
+                        for person in sheet.chat.targets key person.value {
+                          Box {
+                            padding: 8; radius: 6; background: chatTarget == person.value ? plum : panel
+                            onTap: chatTarget = person.value
+                            Text { text: person.name; color: parchment; font: sans; fontSize: 13 }
+                          }
+                        }
+                      }
+                      if sheet.chat.remaining > 0 {
+                        Input { text: chatText; lines: 3; fontSize: 14; placeholder: "Почему ты выбрал эту карту?"; onChange: chatText = sub(value, 0, 400) }
+                        Box {
+                          fill: width
+                          onTap: {
+                            if queued == "" && chatText != "" {
+                              queued = token; problem = ""; receipt = ""
+                              receipt = run("${script} chat ${sh(token)} ${sh(toJson({text: chatText, target: chatTarget}))}")
+                              chatText = ""
+                            }
+                          }
+                          Action { label: "Отправить сообщение"; hot: true; allowed: queued == "" && chatText != "" }
+                        }
                       }
                     }
                   }
