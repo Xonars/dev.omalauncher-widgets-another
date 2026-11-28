@@ -1380,9 +1380,12 @@ class Game:
         A test, a single mistake, a tentative version or silence never counts.
         This measures behavior, not guilt, and uses contemporaneous public evidence.
         """
-        seen, result = Counter(), {}
+        seen, result = {}, {}
         for note in sorted(knowledge["notes"], key=lambda n: n["round"]):
-            if note["pid"] != target or note.get("stance", 1) != 2:
+            if note["pid"] != target:
+                continue
+            if note.get("stance", 1) != 2:
+                seen.clear()
                 continue
             visible = public_evidence_at(knowledge, note["round"])
             for key, cid in note["leads"].items():
@@ -1393,8 +1396,13 @@ class Game:
                 ranking = sorted(scores.values(), reverse=True)
                 if ranking[0] - ranking[1] < 0.65 or ranking[0] - scores[cid] < 0.85:
                     continue
-                seen[(key, cid)] += 1
-                if seen[(key, cid)] >= 2:
+                number = note["round"]
+                previous, count = seen.get((key, cid), (-1, 0))
+                count = count + 1 if previous == number - 1 else 1
+                seen[(key, cid)] = (number, count)
+                # Two rounds can reflect honest disagreement; require three consecutive
+                # emphatic endorsements under strong contemporaneous evidence.
+                if count >= 3:
                     result[(key, cid)] = dict(round=note["round"], text=
                         f'Не раз уверенно поддерживал «{CARDS[cid]["name"]}», хотя открытые письма сильнее поддерживали другой вариант. Хочу понять аргументы; это не доказательство вины.')
         return list(result.values())
